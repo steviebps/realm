@@ -10,16 +10,20 @@ import (
 	rein "github.com/steviebps/rein/pkg"
 )
 
-// helloCmd represents the hello command
+var c rein.Chamber = rein.Chamber{Toggles: []rein.Toggle{}, Children: []rein.Chamber{}}
+
+// printCmd represents the print command
 var printCmd = &cobra.Command{
 	Use:   "print",
 	Short: "Print all Chambers",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		// Open our jsonFile
-		jsonFile, err := os.Open("sample.json")
+		file, _ := cmd.Flags().GetString("file")
+		pretty, _ := cmd.Flags().GetBool("pretty")
+
+		jsonFile, err := os.Open(file)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal("Could not open configuration file...")
 		}
 		defer jsonFile.Close()
 
@@ -28,30 +32,17 @@ var printCmd = &cobra.Command{
 			log.Fatal(err)
 		}
 
-		var c rein.Chamber
 		if err := json.Unmarshal(byteValue, &c); err != nil {
 			log.Fatal(err)
 		}
 
-		enc := json.NewEncoder(os.Stdout)
-		if pretty, err := cmd.Flags().GetBool("pretty"); pretty && err == nil {
-			enc.SetIndent("", "\t")
-		}
-
-		if err := enc.Encode(c); err != nil {
-			log.Fatal(err)
-		}
+		c.Print(os.Stdout, pretty)
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(printCmd)
 
-	// Here you will define your flags and configuration settings.
-
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// helloCmd.PersistentFlags().String("foo", "", "A help for foo")
-
+	printCmd.Flags().StringP("file", "f", "sample.json", "The file to read configuration from")
 	printCmd.Flags().BoolP("pretty", "p", false, "Prints in pretty format")
 }
