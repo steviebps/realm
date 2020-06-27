@@ -47,11 +47,13 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
+
 	home, err := homedir.Dir()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", home+"/.rein.yaml", "Rein config file")
 	rootCmd.PersistentFlags().StringVar(&chamber, "chamber", "", "The file to read chambers from")
 	viper.BindPFlag("chamber", rootCmd.PersistentFlags().Lookup("chamber"))
