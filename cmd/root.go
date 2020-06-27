@@ -18,6 +18,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -54,7 +55,9 @@ func init() {
 		os.Exit(1)
 	}
 
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", home+"/.rein.yaml", "Rein config file")
+	defaultConfigPath := filepath.Join(home, "/.rein.yaml")
+
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "Rein config file")
 	rootCmd.PersistentFlags().StringVar(&chamber, "chamber", "", "The file to read chambers from")
 	viper.BindPFlag("chamber", rootCmd.PersistentFlags().Lookup("chamber"))
 }
