@@ -23,9 +23,11 @@ import (
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
+	utils "github.com/steviebps/rein/pkg/utils"
 )
 
 var cfgFile string
+var chamber string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -45,12 +47,14 @@ func Execute() {
 
 func init() {
 	cobra.OnInitialize(initConfig)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.rein.yaml)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "$HOME/.rein.yaml", "config file")
+	rootCmd.PersistentFlags().StringVar(&chamber, "chamber", "", "The file to read chambers from")
+	viper.BindPFlag("chamber", rootCmd.PersistentFlags().Lookup("chamber"))
 }
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	if cfgFile != "" {
+	if cfgFile != "" && utils.Exists(cfgFile) {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
@@ -69,6 +73,6 @@ func initConfig() {
 	viper.AutomaticEnv() // read in environment variables that match
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+		//fmt.Println("Using rein config file:", viper.ConfigFileUsed())
 	}
 }

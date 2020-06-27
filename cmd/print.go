@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	rein "github.com/steviebps/rein/pkg"
+	utils "github.com/steviebps/rein/pkg/utils"
 )
 
 var c rein.Chamber = rein.Chamber{Toggles: []rein.Toggle{}, Children: []rein.Chamber{}}
@@ -18,22 +20,30 @@ var printCmd = &cobra.Command{
 	Short: "Print all Chambers",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		file, _ := cmd.Flags().GetString("file")
+		chamberFile := viper.GetString("chamber")
 		pretty, _ := cmd.Flags().GetBool("pretty")
 
-		jsonFile, err := os.Open(file)
+		if !utils.Exists(chamberFile) {
+			fmt.Printf("Could not find chamber file: \"%s\"\n", chamberFile)
+			os.Exit(1)
+		}
+
+		jsonFile, err := os.Open(chamberFile)
 		if err != nil {
-			log.Fatal("Could not open configuration file...")
+			fmt.Printf("Could not open chamber file: %s\n", chamberFile)
+			os.Exit(1)
 		}
 		defer jsonFile.Close()
 
 		byteValue, err := ioutil.ReadAll(jsonFile)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Printf("Error reading chamber file: %s\n", err)
+			os.Exit(1)
 		}
 
 		if err := json.Unmarshal(byteValue, &c); err != nil {
-			log.Fatal(err)
+			fmt.Printf("Error reading JSON: %s\n", err)
+			os.Exit(1)
 		}
 
 		c.Print(os.Stdout, pretty)
@@ -42,7 +52,5 @@ var printCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(printCmd)
-
-	printCmd.Flags().StringP("file", "f", "sample.json", "The file to read configuration from")
 	printCmd.Flags().BoolP("pretty", "p", false, "Prints in pretty format")
 }
