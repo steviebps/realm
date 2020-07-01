@@ -24,3 +24,20 @@ func (c *Chamber) Print(w io.Writer, pretty bool) {
 		log.Println(err)
 	}
 }
+
+func (c *Chamber) FindByName(name string) *Chamber {
+	if c.Name == name {
+		return c
+	}
+
+	if len(c.Children) > 0 {
+		for _, child := range c.Children {
+			found := child.FindByName(name)
+			if found != nil {
+				return found
+			}
+		}
+	}
+
+	return nil
+}
