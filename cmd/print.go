@@ -8,11 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	rein "github.com/steviebps/rein/pkg"
 	utils "github.com/steviebps/rein/pkg/utils"
 )
-
-var c rein.Chamber = rein.Chamber{Toggles: []rein.Toggle{}, Children: []rein.Chamber{}}
 
 // printCmd represents the print command
 var printCmd = &cobra.Command{
