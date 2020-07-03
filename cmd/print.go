@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	utils "github.com/steviebps/rein/pkg/utils"
+	utils "github.com/steviebps/rein/utils"
 )
 
 // printCmd represents the print command
