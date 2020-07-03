@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"os"
-
 	"github.com/spf13/cobra"
 )
 
@@ -13,8 +11,7 @@ var printCmd = &cobra.Command{
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
 		pretty, _ := cmd.Flags().GetBool("pretty")
-
-		c.Print(os.Stdout, pretty)
+		c.Print(cmd.OutOrStdout(), pretty)
 	},
 }
 
