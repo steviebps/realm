@@ -2,8 +2,8 @@ package rein
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
-	"log"
 )
 
 type Chamber struct {
@@ -21,7 +21,7 @@ func (c *Chamber) Print(w io.Writer, pretty bool) {
 	}
 
 	if err := enc.Encode(c); err != nil {
-		log.Println(err)
+		fmt.Printf("Encoding error: %v\n", err)
 	}
 }
 
