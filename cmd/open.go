@@ -7,6 +7,7 @@ import (
 
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	rein "github.com/steviebps/rein/pkg"
 )
 
@@ -16,7 +17,7 @@ var openCmd = &cobra.Command{
 	Short: "Open your chambers",
 	Long:  `Open your chambers for viewing or editing`,
 	Run: func(cmd *cobra.Command, args []string) {
-		openChamberOptions(&c)
+		openChamberOptions(c)
 	},
 }
 
@@ -81,7 +82,7 @@ func openNamePrompt() string {
 	return name
 }
 
-func openChildrenSelect(chamber *rein.Chamber) {
+func openChildrenSelect(chamber rein.Chamber) {
 	var options []openOption
 
 	for _, child := range chamber.Children {
@@ -89,7 +90,7 @@ func openChildrenSelect(chamber *rein.Chamber) {
 			Name:       child.Name,
 			Associated: child,
 			Action: func(c rein.Chamber) {
-				openChamberOptions(&c)
+				openChamberOptions(c)
 			},
 		}
 		options = append(options, option)
@@ -110,11 +111,11 @@ func openChildrenSelect(chamber *rein.Chamber) {
 	options[i].Run()
 }
 
-func openChamberOptions(chamber *rein.Chamber) {
+func openChamberOptions(chamber rein.Chamber) {
 	options := []openOption{
 		{
 			Name:       "Edit",
-			Associated: *chamber,
+			Associated: chamber,
 			Action:     func(rein.Chamber) {},
 		},
 	}
@@ -122,12 +123,35 @@ func openChamberOptions(chamber *rein.Chamber) {
 	if len(chamber.Children) > 0 {
 		option := openOption{
 			Name:       "Open children...",
-			Associated: *chamber,
+			Associated: chamber,
 			Action: func(rein.Chamber) {
 				openChildrenSelect(chamber)
 			}}
 		options = append(options, option)
 	}
+
+	saveExit := openOption{
+		Name:       "Save & Exit",
+		Associated: chamber,
+		Action: func(rein.Chamber) {
+			chamberFile := viper.GetString("chamber")
+			f, err := os.OpenFile(chamberFile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+
+			if err != nil {
+				fmt.Printf("Error opening file: %v\n", err)
+				os.Exit(1)
+			}
+			c.Print(f, false)
+			if err := f.Close(); err != nil {
+				fmt.Printf("Error closing file: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Save complete
+			os.Exit(0)
+		},
+	}
+	options = append(options, saveExit)
 
 	selectPrompt := promptui.Select{
 		Label:     "What next",
