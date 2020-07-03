@@ -12,8 +12,20 @@ import (
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
 	rein "github.com/steviebps/rein/pkg"
-	utils "github.com/steviebps/rein/pkg/utils"
+	utils "github.com/steviebps/rein/utils"
 )
+
+type selectAction func(rein.Chamber)
+
+type openOption struct {
+	Name       string
+	Associated rein.Chamber
+	Action     selectAction
+}
+
+func (option openOption) Run() {
+	option.Action(option.Associated)
+}
 
 var cfgFile string
 var chamber string

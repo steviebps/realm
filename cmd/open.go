@@ -10,48 +10,28 @@ import (
 	rein "github.com/steviebps/rein/pkg"
 )
 
-type selectAction func(rein.Chamber)
-
-type openOption struct {
-	Name       string
-	Associated rein.Chamber
-	Action     selectAction
-}
-
-func (option openOption) Run() {
-	option.Action(option.Associated)
-}
-
 // openCmd represents the open command
 var openCmd = &cobra.Command{
 	Use:   "open",
 	Short: "Open your chambers",
 	Long:  `Open your chambers for viewing or editing`,
 	Run: func(cmd *cobra.Command, args []string) {
-		//name, _ := cmd.Flags().GetString("name")
 		openChamberOptions(&c)
-
-		//openChildrenSelect(&c, true)
-		// found := c.FindByName(name)
-		// if found != nil && len(found.Children) > 0 {
-		// 	openChildrenSelect(found)
-		// }
-		//found.Print(os.Stdout, true)
 	},
 }
 
 var templates promptui.SelectTemplates = promptui.SelectTemplates{
 	Label:    "{{ . }}?",
-	Active:   "\U0001F579 {{ .Name | cyan }} ({{ len .Toggles | red }})",
-	Inactive: "  {{ .Name | cyan }} ({{ len .Toggles  | red }})",
-	Selected: "\U0001F579 {{ .Name | red | cyan }}",
+	Active:   "\U0001F579 {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles | red }})",
+	Inactive: "  {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles  | red }})",
+	Selected: "\U0001F579 {{ .Associated.Name | red | cyan }}",
 	Details: `
 --------- Chamber ----------
-{{ "Name:" | faint }}	{{ .Name }}
-{{ "isApp:" | faint }}	{{ .App }}
-{{ "isBuildable:" | faint }}	{{ .Buildable }}
-{{ "# of toggles:" | faint }}	{{ len .Toggles }}
-{{ "# of children:" | faint }}	{{ len .Children }}`,
+{{ "Name:" | faint }}	{{ .Associated.Name }}
+{{ "isApp:" | faint }}	{{ .Associated.App }}
+{{ "isBuildable:" | faint }}	{{ .Associated.Buildable }}
+{{ "# of toggles:" | faint }}	{{ len .Associated.Toggles }}
+{{ "# of children:" | faint }}	{{ len .Associated.Children }}`,
 }
 
 var optionsTemplates promptui.SelectTemplates = promptui.SelectTemplates{
@@ -101,17 +81,23 @@ func openNamePrompt() string {
 	return name
 }
 
-func openChildrenSelect(chamber *rein.Chamber, root bool) {
-	var chambers []rein.Chamber
-	if root {
-		chambers = []rein.Chamber{*chamber}
-	} else {
-		chambers = chamber.Children
+func openChildrenSelect(chamber *rein.Chamber) {
+	var options []openOption
+
+	for _, child := range chamber.Children {
+		option := openOption{
+			Name:       child.Name,
+			Associated: child,
+			Action: func(c rein.Chamber) {
+				openChamberOptions(&c)
+			},
+		}
+		options = append(options, option)
 	}
 
 	selectPrompt := promptui.Select{
 		Label:     "Select Chamber",
-		Items:     chambers,
+		Items:     options,
 		Templates: &templates,
 		HideHelp:  true,
 	}
@@ -121,26 +107,26 @@ func openChildrenSelect(chamber *rein.Chamber, root bool) {
 		fmt.Printf("Select failed %v\n", err)
 		os.Exit(1)
 	}
-
-	found := chamber.FindByName(chambers[i].Name)
-	if found != nil {
-		openChamberOptions(found)
-	}
+	options[i].Run()
 }
 
 func openChamberOptions(chamber *rein.Chamber) {
 	options := []openOption{
-		{Name: "Edit", Associated: *chamber, Action: func(rein.Chamber) {}},
+		{
+			Name:       "Edit",
+			Associated: *chamber,
+			Action:     func(rein.Chamber) {},
+		},
 	}
 
 	if len(chamber.Children) > 0 {
-		openChildrenOption := openOption{
+		option := openOption{
 			Name:       "Open children...",
 			Associated: *chamber,
 			Action: func(rein.Chamber) {
-				openChildrenSelect(chamber, false)
+				openChildrenSelect(chamber)
 			}}
-		options = append(options, openChildrenOption)
+		options = append(options, option)
 	}
 
 	selectPrompt := promptui.Select{
