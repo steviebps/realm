@@ -1,10 +1,8 @@
 package cmd
 
 import (
-	"fmt"
-	"os"
-
 	"github.com/spf13/cobra"
+	"github.com/steviebps/rein/utils"
 )
 
 // printCmd represents the print command
@@ -17,19 +15,9 @@ var printCmd = &cobra.Command{
 		output, _ := cmd.Flags().GetString("output")
 
 		if output != "" {
-			f, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-
-			if err != nil {
-				fmt.Printf("Error opening file: %v\n", err)
-				os.Exit(1)
-			}
-			c.Print(f, pretty)
-			if err := f.Close(); err != nil {
-				fmt.Printf("Error closing file: %v\n", err)
-				os.Exit(1)
-			}
+			utils.SaveAndExit(output, globalChamber)
 		} else {
-			c.Print(cmd.OutOrStdout(), pretty)
+			globalChamber.Print(cmd.OutOrStdout(), pretty)
 		}
 
 	},
