@@ -15,11 +15,11 @@ import (
 	utils "github.com/steviebps/rein/utils"
 )
 
-type selectAction func(rein.Chamber)
+type selectAction func(*rein.Chamber)
 
 type openOption struct {
 	Name       string
-	Associated rein.Chamber
+	Associated *rein.Chamber
 	Action     selectAction
 }
 
@@ -29,7 +29,7 @@ func (option openOption) Run() {
 
 var cfgFile string
 var chamber string
-var c = rein.Chamber{Toggles: []rein.Toggle{}, Children: []rein.Chamber{}}
+var c = rein.Chamber{Toggles: []*rein.Toggle{}, Children: []*rein.Chamber{}}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
