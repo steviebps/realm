@@ -29,7 +29,7 @@ func (option openOption) Run() {
 
 var cfgFile string
 var chamber string
-var c = rein.Chamber{Toggles: []*rein.Toggle{}, Children: []*rein.Chamber{}}
+var globalChamber = rein.Chamber{Toggles: []*rein.Toggle{}, Children: []*rein.Chamber{}}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -57,7 +57,7 @@ var rootCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		if err := json.Unmarshal(byteValue, &c); err != nil {
+		if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
 			fmt.Printf("Error reading JSON: %s\n", err)
 			os.Exit(1)
 		}
@@ -109,7 +109,7 @@ func initConfig() {
 
 	viper.AutomaticEnv() // read in environment variables that match
 	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err == nil {
-		//fmt.Println("Using rein config file:", viper.ConfigFileUsed())
+	if err := viper.ReadInConfig(); err != nil {
+		fmt.Printf("Error reading config file: %v\n", viper.ConfigFileUsed())
 	}
 }
