@@ -11,16 +11,6 @@ import (
 	rein "github.com/steviebps/rein/pkg"
 )
 
-// openCmd represents the open command
-var openCmd = &cobra.Command{
-	Use:   "open",
-	Short: "Open your chambers",
-	Long:  `Open your chambers for viewing or editing`,
-	Run: func(cmd *cobra.Command, args []string) {
-		openChamberOptions(c)
-	},
-}
-
 var templates promptui.SelectTemplates = promptui.SelectTemplates{
 	Label:    "{{ . }}?",
 	Active:   "\U0001F579 {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles | red }})",
@@ -47,6 +37,25 @@ var optionsTemplates promptui.SelectTemplates = promptui.SelectTemplates{
 {{ "isBuildable:" | faint }}	{{ .Associated.Buildable }}
 {{ "# of toggles:" | faint }}	{{ len .Associated.Toggles }}
 {{ "# of children:" | faint }}	{{ len .Associated.Children }}`,
+}
+
+// openCmd represents the open command
+var openCmd = &cobra.Command{
+	Use:   "open",
+	Short: "Open your chambers",
+	Long:  `Open your chambers for viewing or editing`,
+	Run: func(cmd *cobra.Command, args []string) {
+		name, _ := cmd.Flags().GetString("name")
+		openWith := c
+
+		if name != "" {
+			if found := c.FindByName(name); found != nil {
+				openWith = *found
+			}
+		}
+
+		openChamberOptions(openWith)
+	},
 }
 
 func init() {
@@ -89,8 +98,8 @@ func openChildrenSelect(chamber rein.Chamber) {
 		option := openOption{
 			Name:       child.Name,
 			Associated: child,
-			Action: func(c rein.Chamber) {
-				openChamberOptions(c)
+			Action: func(c *rein.Chamber) {
+				openChamberOptions(*c)
 			},
 		}
 		options = append(options, option)
@@ -115,16 +124,16 @@ func openChamberOptions(chamber rein.Chamber) {
 	options := []openOption{
 		{
 			Name:       "Edit",
-			Associated: chamber,
-			Action:     func(rein.Chamber) {},
+			Associated: &chamber,
+			Action:     func(*rein.Chamber) {},
 		},
 	}
 
 	if len(chamber.Children) > 0 {
 		option := openOption{
 			Name:       "Open children...",
-			Associated: chamber,
-			Action: func(rein.Chamber) {
+			Associated: &chamber,
+			Action: func(*rein.Chamber) {
 				openChildrenSelect(chamber)
 			}}
 		options = append(options, option)
@@ -132,8 +141,8 @@ func openChamberOptions(chamber rein.Chamber) {
 
 	saveExit := openOption{
 		Name:       "Save & Exit",
-		Associated: chamber,
-		Action: func(rein.Chamber) {
+		Associated: &chamber,
+		Action: func(*rein.Chamber) {
 			chamberFile := viper.GetString("chamber")
 			f, err := os.OpenFile(chamberFile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 
@@ -141,7 +150,7 @@ func openChamberOptions(chamber rein.Chamber) {
 				fmt.Printf("Error opening file: %v\n", err)
 				os.Exit(1)
 			}
-			c.Print(f, false)
+			c.Print(f, true)
 			if err := f.Close(); err != nil {
 				fmt.Printf("Error closing file: %v\n", err)
 				os.Exit(1)
