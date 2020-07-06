@@ -17,7 +17,6 @@ var templates promptui.SelectTemplates = promptui.SelectTemplates{
 	Label:    "{{ . }}?",
 	Active:   "\U0001F579 {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles | red }})",
 	Inactive: "  {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles  | red }})",
-	Selected: "\U0001F579 {{ .Associated.Name | red | cyan }}",
 	Details: `
 --------- Chamber ----------
 {{ "Name:" | faint }}	{{ .Associated.Name }}
@@ -31,7 +30,6 @@ var optionsTemplates promptui.SelectTemplates = promptui.SelectTemplates{
 	Label:    "{{ . }}?",
 	Active:   "\U0001F579 {{ .Name | cyan }}",
 	Inactive: "  {{ .Name | cyan }}",
-	Selected: "\U0001F579 {{ .Name | red | cyan }}",
 	Details: `
 --------- Chamber ----------
 {{ "Name:" | faint }}	{{ .Associated.Name }}
@@ -67,7 +65,7 @@ func init() {
 
 var exit openOption = openOption{
 	Name:       "Exit without saving",
-	Associated: nil,
+	Associated: &globalChamber,
 	Action: func(*rein.Chamber) {
 		os.Exit(0)
 	},
@@ -110,10 +108,11 @@ func openChildrenSelect(chamber *rein.Chamber) {
 	}
 
 	selectPrompt := promptui.Select{
-		Label:     "Select Chamber",
-		Items:     options,
-		Templates: &templates,
-		HideHelp:  true,
+		Label:        "Select Chamber",
+		Items:        options,
+		Templates:    &templates,
+		HideHelp:     true,
+		HideSelected: true,
 	}
 
 	i, _, err := selectPrompt.Run()
@@ -130,7 +129,7 @@ func openChamberOptions(chamber *rein.Chamber) {
 			Name:       "Edit",
 			Associated: chamber,
 			Action: func(asssociated *rein.Chamber) {
-				editChamberOptions(asssociated)
+				editChamberOptions(asssociated, 0)
 			},
 		},
 	}
@@ -149,10 +148,11 @@ func openChamberOptions(chamber *rein.Chamber) {
 	options = append(options, exit)
 
 	selectPrompt := promptui.Select{
-		Label:     "What shall you do",
-		Items:     options,
-		Templates: &optionsTemplates,
-		HideHelp:  true,
+		Label:        "What shall you do",
+		Items:        options,
+		Templates:    &optionsTemplates,
+		HideHelp:     true,
+		HideSelected: true,
 	}
 
 	i, _, err := selectPrompt.Run()
@@ -163,15 +163,14 @@ func openChamberOptions(chamber *rein.Chamber) {
 	options[i].Run()
 }
 
-func editChamberOptions(chamber *rein.Chamber) {
-
+func editChamberOptions(chamber *rein.Chamber, position int) {
 	options := []openOption{
 		{
 			Name:       "isApp",
 			Associated: chamber,
 			Action: func(associated *rein.Chamber) {
 				associated.App = !associated.App
-				editChamberOptions(associated)
+				editChamberOptions(associated, 0)
 			},
 		},
 		{
@@ -179,7 +178,7 @@ func editChamberOptions(chamber *rein.Chamber) {
 			Associated: chamber,
 			Action: func(associated *rein.Chamber) {
 				associated.Buildable = !associated.Buildable
-				editChamberOptions(associated)
+				editChamberOptions(associated, 1)
 			},
 		},
 	}
@@ -188,10 +187,12 @@ func editChamberOptions(chamber *rein.Chamber) {
 	options = append(options, exit)
 
 	selectPrompt := promptui.Select{
-		Label:     "What value do you want to edit",
-		Items:     options,
-		Templates: &optionsTemplates,
-		HideHelp:  true,
+		Label:        "What value do you want to edit",
+		Items:        options,
+		Templates:    &optionsTemplates,
+		HideHelp:     true,
+		HideSelected: true,
+		CursorPos:    position,
 	}
 
 	i, _, err := selectPrompt.Run()
