@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/steviebps/rein/utils"
+
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -46,11 +48,11 @@ var openCmd = &cobra.Command{
 	Long:  `Open your chambers for viewing or editing`,
 	Run: func(cmd *cobra.Command, args []string) {
 		name, _ := cmd.Flags().GetString("name")
-		openWith := c
+		openWith := &globalChamber
 
 		if name != "" {
-			if found := c.FindByName(name); found != nil {
-				openWith = *found
+			if found := globalChamber.FindByName(name); found != nil {
+				openWith = found
 			}
 		}
 
@@ -63,11 +65,28 @@ func init() {
 	openCmd.Flags().StringP("name", "n", "", "Name of the chamber")
 }
 
+var exit openOption = openOption{
+	Name:       "Exit without saving",
+	Associated: nil,
+	Action: func(*rein.Chamber) {
+		os.Exit(0)
+	},
+}
+
+var saveExit openOption = openOption{
+	Name:       "Save & Exit",
+	Associated: &globalChamber,
+	Action: func(asssociated *rein.Chamber) {
+		chamberFile := viper.GetString("chamber")
+		utils.SaveAndExit(chamberFile, *asssociated)
+	},
+}
+
 func nameValidation(name string) error {
 	if name == "" {
 		return errors.New("Invalid name!")
 	}
-	found := c.FindByName(name)
+	found := globalChamber.FindByName(name)
 
 	if found == nil {
 		return errors.New("Could not find chamber!")
@@ -76,30 +95,15 @@ func nameValidation(name string) error {
 	return nil
 }
 
-func openNamePrompt() string {
-	prompt := promptui.Prompt{
-		Label:    "Chamber name",
-		Validate: nameValidation,
-	}
-
-	name, err := prompt.Run()
-	if err != nil {
-		fmt.Printf("Prompt failed %v\n", err)
-		os.Exit(1)
-	}
-
-	return name
-}
-
-func openChildrenSelect(chamber rein.Chamber) {
+func openChildrenSelect(chamber *rein.Chamber) {
 	var options []openOption
 
 	for _, child := range chamber.Children {
 		option := openOption{
 			Name:       child.Name,
 			Associated: child,
-			Action: func(c *rein.Chamber) {
-				openChamberOptions(*c)
+			Action: func(asssociated *rein.Chamber) {
+				openChamberOptions(asssociated)
 			},
 		}
 		options = append(options, option)
@@ -120,50 +124,71 @@ func openChildrenSelect(chamber rein.Chamber) {
 	options[i].Run()
 }
 
-func openChamberOptions(chamber rein.Chamber) {
+func openChamberOptions(chamber *rein.Chamber) {
 	options := []openOption{
 		{
 			Name:       "Edit",
-			Associated: &chamber,
-			Action:     func(*rein.Chamber) {},
+			Associated: chamber,
+			Action: func(asssociated *rein.Chamber) {
+				editChamberOptions(asssociated)
+			},
 		},
 	}
 
 	if len(chamber.Children) > 0 {
 		option := openOption{
 			Name:       "Open children...",
-			Associated: &chamber,
+			Associated: chamber,
 			Action: func(*rein.Chamber) {
 				openChildrenSelect(chamber)
 			}}
 		options = append(options, option)
 	}
 
-	saveExit := openOption{
-		Name:       "Save & Exit",
-		Associated: &chamber,
-		Action: func(*rein.Chamber) {
-			chamberFile := viper.GetString("chamber")
-			f, err := os.OpenFile(chamberFile, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-
-			if err != nil {
-				fmt.Printf("Error opening file: %v\n", err)
-				os.Exit(1)
-			}
-			c.Print(f, true)
-			if err := f.Close(); err != nil {
-				fmt.Printf("Error closing file: %v\n", err)
-				os.Exit(1)
-			}
-
-			// Save complete
-			os.Exit(0)
-		},
-	}
 	options = append(options, saveExit)
+	options = append(options, exit)
 
 	selectPrompt := promptui.Select{
-		Label:     "What next",
+		Label:     "What shall you do",
+		Items:     options,
+		Templates: &optionsTemplates,
+		HideHelp:  true,
+	}
+
+	i, _, err := selectPrompt.Run()
+	if err != nil {
+		fmt.Printf("Select failed %v\n", err)
+		os.Exit(1)
+	}
+	options[i].Run()
+}
+
+func editChamberOptions(chamber *rein.Chamber) {
+
+	options := []openOption{
+		{
+			Name:       "isApp",
+			Associated: chamber,
+			Action: func(associated *rein.Chamber) {
+				associated.App = !associated.App
+				editChamberOptions(associated)
+			},
+		},
+		{
+			Name:       "isBuildable",
+			Associated: chamber,
+			Action: func(associated *rein.Chamber) {
+				associated.Buildable = !associated.Buildable
+				editChamberOptions(associated)
+			},
+		},
+	}
+
+	options = append(options, saveExit)
+	options = append(options, exit)
+
+	selectPrompt := promptui.Select{
+		Label:     "What value do you want to edit",
 		Items:     options,
 		Templates: &optionsTemplates,
 		HideHelp:  true,
