@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/steviebps/rein/templates"
 	"github.com/steviebps/rein/utils"
 
 	"github.com/manifoldco/promptui"
@@ -12,32 +13,6 @@ import (
 	"github.com/spf13/viper"
 	rein "github.com/steviebps/rein/pkg"
 )
-
-var templates promptui.SelectTemplates = promptui.SelectTemplates{
-	Label:    "{{ . }}?",
-	Active:   "\U0001F579 {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles | red }})",
-	Inactive: "  {{ .Associated.Name | cyan }} ({{ len .Associated.Toggles  | red }})",
-	Details: `
---------- Chamber ----------
-{{ "Name:" | faint }}	{{ .Associated.Name }}
-{{ "isApp:" | faint }}	{{ .Associated.App }}
-{{ "isBuildable:" | faint }}	{{ .Associated.Buildable }}
-{{ "# of toggles:" | faint }}	{{ len .Associated.Toggles }}
-{{ "# of children:" | faint }}	{{ len .Associated.Children }}`,
-}
-
-var optionsTemplates promptui.SelectTemplates = promptui.SelectTemplates{
-	Label:    "{{ . }}?",
-	Active:   "\U0001F579 {{ .Name | cyan }}",
-	Inactive: "  {{ .Name | cyan }}",
-	Details: `
---------- Chamber ----------
-{{ "Name:" | faint }}	{{ .Associated.Name }}
-{{ "isApp:" | faint }}	{{ .Associated.App }}
-{{ "isBuildable:" | faint }}	{{ .Associated.Buildable }}
-{{ "# of toggles:" | faint }}	{{ len .Associated.Toggles }}
-{{ "# of children:" | faint }}	{{ len .Associated.Children }}`,
-}
 
 // openCmd represents the open command
 var openCmd = &cobra.Command{
@@ -80,6 +55,8 @@ var saveExit openOption = openOption{
 	},
 }
 
+var exitOptions []openOption = []openOption{exit, saveExit}
+
 func nameValidation(name string) error {
 	if name == "" {
 		return errors.New("Invalid name!")
@@ -100,9 +77,7 @@ func openChildrenSelect(chamber *rein.Chamber) {
 		option := openOption{
 			Name:       child.Name,
 			Associated: child,
-			Action: func(asssociated *rein.Chamber) {
-				openChamberOptions(asssociated)
-			},
+			Action: openChamberOptions,
 		}
 		options = append(options, option)
 	}
@@ -110,7 +85,7 @@ func openChildrenSelect(chamber *rein.Chamber) {
 	selectPrompt := promptui.Select{
 		Label:        "Select Chamber",
 		Items:        options,
-		Templates:    &templates,
+		Templates:    &templates.ChamberTemplate,
 		HideHelp:     true,
 		HideSelected: true,
 	}
@@ -126,7 +101,7 @@ func openChildrenSelect(chamber *rein.Chamber) {
 func openChamberOptions(chamber *rein.Chamber) {
 	options := []openOption{
 		{
-			Name:       "Edit",
+			Name:       fmt.Sprintf("Edit \"%v\" chamber", chamber.Name),
 			Associated: chamber,
 			Action: func(asssociated *rein.Chamber) {
 				editChamberOptions(asssociated, 0)
@@ -136,21 +111,19 @@ func openChamberOptions(chamber *rein.Chamber) {
 
 	if len(chamber.Children) > 0 {
 		option := openOption{
-			Name:       "Open children...",
+			Name:       "Open child chambers",
 			Associated: chamber,
-			Action: func(*rein.Chamber) {
-				openChildrenSelect(chamber)
-			}}
+			Action:     openChildrenSelect,
+		}
 		options = append(options, option)
 	}
 
-	options = append(options, saveExit)
-	options = append(options, exit)
+	options = append(options, exitOptions...)
 
 	selectPrompt := promptui.Select{
 		Label:        "What shall you do",
 		Items:        options,
-		Templates:    &optionsTemplates,
+		Templates:    &templates.GenericWithChamberTemplate,
 		HideHelp:     true,
 		HideSelected: true,
 	}
@@ -187,9 +160,9 @@ func editChamberOptions(chamber *rein.Chamber, position int) {
 	options = append(options, exit)
 
 	selectPrompt := promptui.Select{
-		Label:        "What value do you want to edit",
+		Label:        "What value would you like to edit",
 		Items:        options,
-		Templates:    &optionsTemplates,
+		Templates:    &templates.GenericWithChamberTemplate,
 		HideHelp:     true,
 		HideSelected: true,
 		CursorPos:    position,
