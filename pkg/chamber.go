@@ -45,3 +45,22 @@ func (c *Chamber) FindByName(name string) *Chamber {
 	}
 	return nil
 }
+
+func (c *Chamber) InheritWith(inherited []*Toggle) []*Toggle {
+	built := make([]*Toggle, 0)
+	built = append(built, c.Toggles...)
+	for i := range inherited {
+		found := false
+		for j := range c.Toggles {
+			if c.Toggles[j].Name == inherited[i].Name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			built = append(built, inherited[i])
+		}
+	}
+
+	return built
+}
