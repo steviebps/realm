@@ -38,7 +38,7 @@ var globalChamber = rein.Chamber{Toggles: []*rein.Toggle{}, Children: []*rein.Ch
 var rootCmd = &cobra.Command{
 	Use:   "rein",
 	Short: "Local and remote configuration management",
-	Long:  `CLI for managing application configuration with local and remote JSON files`,
+	Long:  `CLI for managing application configuration of local and remote JSON files`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		var jsonFile io.ReadCloser
 		var err error
