@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
@@ -51,24 +50,12 @@ var saveExit openOption = openOption{
 	Associated: &globalChamber,
 	Action: func(asssociated *rein.Chamber) {
 		chamberFile := viper.GetString("chamber")
-		utils.SaveAndExit(chamberFile, *asssociated)
+		utils.WriteChamberToFile(chamberFile, *asssociated, true)
+		os.Exit(0)
 	},
 }
 
 var exitOptions []openOption = []openOption{exit, saveExit}
-
-func nameValidation(name string) error {
-	if name == "" {
-		return errors.New("Invalid name!")
-	}
-	found := globalChamber.FindByName(name)
-
-	if found == nil {
-		return errors.New("Could not find chamber!")
-	}
-
-	return nil
-}
 
 func openChildrenSelect(chamber *rein.Chamber) {
 	var options []openOption
