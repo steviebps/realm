@@ -77,7 +77,7 @@ func openChildrenSelect(chamber *rein.Chamber) {
 		option := openOption{
 			Name:       child.Name,
 			Associated: child,
-			Action: openChamberOptions,
+			Action:     openChamberOptions,
 		}
 		options = append(options, option)
 	}
