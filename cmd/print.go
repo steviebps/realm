@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 	"github.com/steviebps/rein/utils"
 )
@@ -15,11 +17,11 @@ var printCmd = &cobra.Command{
 		output, _ := cmd.Flags().GetString("output")
 
 		if output != "" {
-			utils.SaveAndExit(output, globalChamber)
+			utils.WriteChamberToFile(output, globalChamber, pretty)
 		} else {
-			globalChamber.Print(cmd.OutOrStdout(), pretty)
+			globalChamber.WriteWith(cmd.OutOrStdout(), pretty)
 		}
-
+		os.Exit(0)
 	},
 }
 
