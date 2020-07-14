@@ -3,7 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 
@@ -37,19 +40,33 @@ var rootCmd = &cobra.Command{
 	Short: "Local and remote configuration management",
 	Long:  `CLI for managing application configuration with local and remote JSON files`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		var jsonFile io.ReadCloser
+		var err error
 		chamberFile := viper.GetString("chamber")
 
-		if !utils.Exists(chamberFile) {
-			fmt.Printf("Could not find chamber file: \"%s\"\n", chamberFile)
-			os.Exit(1)
-		}
+		validURL, url := utils.IsURL(chamberFile)
+		if validURL {
+			res, err := http.Get(url.String())
 
-		jsonFile, err := os.Open(chamberFile)
-		if err != nil {
-			fmt.Printf("Could not open chamber file: %s\n", chamberFile)
-			os.Exit(1)
+			if err != nil {
+				fmt.Printf("Could not get chamber file \"%v\": %v\n", chamberFile, err)
+				log.Fatal(err)
+			}
+			jsonFile = res.Body
+			defer jsonFile.Close()
+		} else {
+			if !utils.Exists(chamberFile) {
+				fmt.Printf("Could not find chamber file: \"%s\"\n", chamberFile)
+				os.Exit(1)
+			}
+
+			jsonFile, err = os.Open(chamberFile)
+			if err != nil {
+				fmt.Printf("Could not open chamber file: %s\n", chamberFile)
+				os.Exit(1)
+			}
+			defer jsonFile.Close()
 		}
-		defer jsonFile.Close()
 
 		byteValue, err := ioutil.ReadAll(jsonFile)
 		if err != nil {
@@ -83,10 +100,7 @@ func init() {
 	}
 
 	defaultConfigPath := filepath.Join(home, "/.rein.yaml")
-
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "Rein config file")
-	rootCmd.PersistentFlags().StringVar(&chamber, "chamber", "", "The file to read chambers from")
-	viper.BindPFlag("chamber", rootCmd.PersistentFlags().Lookup("chamber"))
 }
 
 // initConfig reads in config file and ENV variables if set.
