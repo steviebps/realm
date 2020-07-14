@@ -2,10 +2,17 @@ package utils
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 
 	rein "github.com/steviebps/rein/pkg"
 )
+
+// IsURL returns whether the string is a valid url with a host and scheme
+func IsURL(str string) (bool, *url.URL) {
+	u, err := url.Parse(str)
+	return err == nil && u.Scheme != "" && u.Host != "", u
+}
 
 // FindExists returns the first file that exists
 func FindExists(names []string) string {
