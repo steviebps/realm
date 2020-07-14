@@ -22,7 +22,6 @@ to quickly create a Cobra application.`,
 
 		compile(&globalChamber)
 		globalChamber.Print(cmd.OutOrStdout(), true)
-
 	},
 }
 
