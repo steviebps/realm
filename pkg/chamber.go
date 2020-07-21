@@ -7,11 +7,11 @@ import (
 )
 
 type Chamber struct {
-	Name      string     `json:"name"`
-	Buildable bool       `json:"isBuildable"`
-	App       bool       `json:"isApp"`
-	Toggles   []*Toggle  `json:"toggles"`
-	Children  []*Chamber `json:"children"`
+	Name      string             `json:"name"`
+	Buildable bool               `json:"isBuildable"`
+	App       bool               `json:"isApp"`
+	Toggles   map[string]*Toggle `json:"toggles"`
+	Children  []*Chamber         `json:"children"`
 }
 
 func (c *Chamber) WriteWith(w io.Writer, pretty bool) {
@@ -46,21 +46,14 @@ func (c *Chamber) FindByName(name string) *Chamber {
 	return nil
 }
 
-func (c *Chamber) InheritWith(inherited []*Toggle) []*Toggle {
-	built := make([]*Toggle, 0)
-	built = append(built, c.Toggles...)
-	for i := range inherited {
-		found := false
-		for j := range c.Toggles {
-			if c.Toggles[j].Name == inherited[i].Name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			built = append(built, inherited[i])
+// InheritWith will take a map of toggles to inherit from
+// so that any toggles that do not exist in this chamber will be written to the map
+func (c *Chamber) InheritWith(inherited map[string]*Toggle) map[string]*Toggle {
+	for key := range inherited {
+		if _, ok := c.Toggles[key]; !ok {
+			c.Toggles[key] = inherited[key]
 		}
 	}
 
-	return built
+	return c.Toggles
 }
