@@ -42,9 +42,11 @@ func WriteChamberToFile(file string, c rein.Chamber, pretty bool) {
 		fmt.Printf("Error opening file: %v\n", err)
 		os.Exit(1)
 	}
+
 	bw := bufio.NewWriter(f)
 	c.WriteWith(bw, pretty)
 	bw.Flush()
+
 	if err := f.Close(); err != nil {
 		fmt.Printf("Error closing file: %v\n", err)
 		os.Exit(1)
