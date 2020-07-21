@@ -32,7 +32,7 @@ func (option openOption) Run() {
 
 var cfgFile string
 var chamber string
-var globalChamber = rein.Chamber{Toggles: []*rein.Toggle{}, Children: []*rein.Chamber{}}
+var globalChamber = rein.Chamber{Children: []*rein.Chamber{}}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
