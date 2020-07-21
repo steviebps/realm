@@ -1,0 +1,78 @@
+{
+  "name": "TOP",
+  "isBuildable": true,
+  "isApp": false,
+  "toggles": [
+    {
+      "name": "feature switch one",
+      "type": "boolean",
+      "value": false
+    },
+    {
+      "name": "feature switch xyz",
+      "type": "boolean",
+      "value": false
+    }
+  ],
+  "children": [
+    {
+      "name": "MIDDLE",
+      "isBuildable": true,
+      "isApp": false,
+      "toggles": [
+        {
+          "name": "feature switch one",
+          "type": "boolean",
+          "value": true
+        },
+        {
+          "name": "feature switch two",
+          "type": "boolean",
+          "value": false
+        }
+      ],
+      "children": [
+        {
+          "name": "BOTTOM",
+          "isBuildable": false,
+          "isApp": true,
+          "toggles": [
+            {
+              "name": "feature switch one",
+              "type": "boolean",
+              "value": false
+            }
+          ],
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "MIDDLE2",
+      "isBuildable": true,
+      "isApp": true,
+      "toggles": [
+        {
+          "name": "feature switch one",
+          "type": "boolean",
+          "value": false
+        }
+      ],
+      "children": [
+        {
+          "name": "BOTTOM2",
+          "isBuildable": true,
+          "isApp": true,
+          "toggles": [
+            {
+              "name": "feature switch one",
+              "type": "boolean",
+              "value": false
+            }
+          ],
+          "children": []
+        }
+      ]
+    }
+  ]
+}
