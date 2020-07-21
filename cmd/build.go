@@ -20,14 +20,15 @@ var buildCmd = &cobra.Command{
 }
 
 func compile(parent *rein.Chamber) {
+	if parent.Buildable || parent.App {
+		file := "./" + parent.Name + ".json"
+		utils.WriteChamberToFile(file, *parent, true)
+	}
+
 	for i := range parent.Children {
 		built := parent.Children[i].InheritWith(parent.Toggles)
 		parent.Children[i].Toggles = built
 
-		if parent.Buildable || parent.App {
-			file := "./" + parent.Name + ".json"
-			utils.WriteChamberToFile(file, *parent, true)
-		}
 		compile(parent.Children[i])
 	}
 }
