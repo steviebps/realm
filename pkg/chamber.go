@@ -14,7 +14,8 @@ type Chamber struct {
 	Children  []*Chamber         `json:"children"`
 }
 
-func (c *Chamber) WriteWith(w io.Writer, pretty bool) {
+// EncodeWith takes a writer and encodes JSON to that writer
+func (c *Chamber) EncodeWith(w io.Writer, pretty bool) {
 	enc := json.NewEncoder(w)
 	if pretty {
 		enc.SetIndent("", "  ")
