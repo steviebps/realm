@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -36,15 +37,40 @@ func Exists(name string) bool {
 }
 
 // WriteChamberToFile Saves the chamber to the file specified
-func WriteChamberToFile(file string, c rein.Chamber, pretty bool) {
-	f, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) {
+	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
 		os.Exit(1)
 	}
 
 	bw := bufio.NewWriter(f)
-	c.WriteWith(bw, pretty)
+	c.EncodeWith(bw, pretty)
+	bw.Flush()
+
+	if err := f.Close(); err != nil {
+		fmt.Printf("Error closing file: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
+	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		fmt.Printf("Error opening file: %v\n", err)
+		os.Exit(1)
+	}
+	bw := bufio.NewWriter(f)
+	enc := json.NewEncoder(bw)
+
+	if pretty {
+		enc.SetIndent("", "  ")
+	}
+
+	if err := enc.Encode(i); err != nil {
+		fmt.Printf("Encoding error: %v\n", err)
+	}
+
 	bw.Flush()
 
 	if err := f.Close(); err != nil {
