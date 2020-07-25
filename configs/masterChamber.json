@@ -1,6 +1,6 @@
 {
   "name": "TOP",
-  "isBuildable": true,
+  "isBuildable": false,
   "isApp": false,
   "toggles": {
     "feature switch one": {
@@ -12,12 +12,22 @@
       "name": "feature switch two",
       "type": "boolean",
       "value": false
+    },
+    "feature switch three": {
+      "name": "feature switch three",
+      "type": "string",
+      "value": "some value"
+    },
+    "feature switch four": {
+      "name": "fnumber switch four",
+      "type": "number",
+      "value": 10.6
     }
   },
   "children": [
     {
       "name": "MIDDLE",
-      "isBuildable": true,
+      "isBuildable": false,
       "isApp": false,
       "toggles": {
         "feature switch one": {
@@ -49,8 +59,8 @@
     },
     {
       "name": "MIDDLE2",
-      "isBuildable": true,
-      "isApp": true,
+      "isBuildable": false,
+      "isApp": false,
       "toggles": {
         "feature switch one": {
           "name": "feature switch one",
