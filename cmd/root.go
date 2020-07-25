@@ -56,13 +56,13 @@ var rootCmd = &cobra.Command{
 			defer jsonFile.Close()
 		} else {
 			if !utils.Exists(chamberFile) {
-				fmt.Printf("Could not find chamber file: \"%s\"\n", chamberFile)
+				fmt.Printf("Could not find chamber file \"%v\": %v\n", chamberFile, err)
 				os.Exit(1)
 			}
 
 			jsonFile, err = os.Open(chamberFile)
 			if err != nil {
-				fmt.Printf("Could not open chamber file: %s\n", chamberFile)
+				fmt.Printf("Could not open chamber file \"%v\": %v\n", chamberFile, err)
 				os.Exit(1)
 			}
 			defer jsonFile.Close()
@@ -70,7 +70,7 @@ var rootCmd = &cobra.Command{
 
 		byteValue, err := ioutil.ReadAll(jsonFile)
 		if err != nil {
-			fmt.Printf("Error reading chamber file: %s\n", err)
+			fmt.Printf("Error reading chamber file \"%v\": %v\n", chamberFile, err)
 			os.Exit(1)
 		}
 
