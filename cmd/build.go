@@ -22,7 +22,7 @@ var buildCmd = &cobra.Command{
 func compile(parent *rein.Chamber) {
 	if parent.Buildable || parent.App {
 		file := "./" + parent.Name + ".json"
-		utils.WriteChamberToFile(file, *parent, true)
+		utils.WriteInterfaceToFile(file, parent.Toggles, true)
 	}
 
 	for i := range parent.Children {
