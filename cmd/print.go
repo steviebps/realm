@@ -19,7 +19,7 @@ var printCmd = &cobra.Command{
 		if output != "" {
 			utils.WriteChamberToFile(output, globalChamber, pretty)
 		} else {
-			globalChamber.WriteWith(cmd.OutOrStdout(), pretty)
+			globalChamber.EncodeWith(cmd.OutOrStdout(), pretty)
 		}
 		os.Exit(0)
 	},
