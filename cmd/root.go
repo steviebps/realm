@@ -18,18 +18,6 @@ import (
 	utils "github.com/steviebps/rein/utils"
 )
 
-type selectAction func(*rein.Chamber)
-
-type openOption struct {
-	Name       string
-	Associated *rein.Chamber
-	Action     selectAction
-}
-
-func (option openOption) Run() {
-	option.Action(option.Associated)
-}
-
 var cfgFile string
 var chamber string
 var globalChamber = rein.Chamber{Toggles: map[string]*rein.Toggle{}, Children: []*rein.Chamber{}}
