@@ -3,13 +3,13 @@
   "isBuildable": false,
   "isApp": false,
   "toggles": {
+    "feature switch four": {
+      "name": "feature switch four",
+      "type": "number",
+      "value": 10.6
+    },
     "feature switch one": {
       "name": "feature switch one",
-      "type": "boolean",
-      "value": false
-    },
-    "feature switch two": {
-      "name": "feature switch two",
       "type": "boolean",
       "value": false
     },
@@ -18,16 +18,16 @@
       "type": "string",
       "value": "some value"
     },
-    "feature switch four": {
-      "name": "fnumber switch four",
-      "type": "number",
-      "value": 10.6
+    "feature switch two": {
+      "name": "feature switch two",
+      "type": "boolean",
+      "value": false
     }
   },
   "children": [
     {
       "name": "MIDDLE",
-      "isBuildable": false,
+      "isBuildable": true,
       "isApp": false,
       "toggles": {
         "feature switch one": {
