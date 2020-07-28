@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 	rein "github.com/steviebps/rein/pkg"
@@ -14,14 +15,20 @@ var buildCmd = &cobra.Command{
 	Short: "Build chambers with inherited toggles.",
 	Long:  `TODO`,
 	Run: func(cmd *cobra.Command, args []string) {
-		compile(&globalChamber)
+		outputDir, _ := cmd.Flags().GetString("outputDir")
+		compile(&globalChamber, outputDir)
 		os.Exit(0)
 	},
 }
 
-func compile(parent *rein.Chamber) {
+func compile(parent *rein.Chamber, outputDir string) {
 	if parent.Buildable || parent.App {
-		file := "./" + parent.Name + ".json"
+		prefix := "./"
+		if outputDir != "" {
+			prefix = filepath.Dir(outputDir + "/")
+		}
+
+		file := prefix + "/" + parent.Name + ".json"
 		utils.WriteInterfaceToFile(file, parent.Toggles, true)
 	}
 
@@ -29,10 +36,11 @@ func compile(parent *rein.Chamber) {
 		built := parent.Children[i].InheritWith(parent.Toggles)
 		parent.Children[i].Toggles = built
 
-		compile(parent.Children[i])
+		compile(parent.Children[i], outputDir)
 	}
 }
 
 func init() {
 	rootCmd.AddCommand(buildCmd)
+	buildCmd.Flags().StringP("outputDir", "o", "", "Sets the output directory of the built files")
 }
