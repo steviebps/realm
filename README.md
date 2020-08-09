@@ -9,4 +9,4 @@
 ```wget -O "$HOME/.rein.yaml" https://raw.githubusercontent.com/steviebps/rein/master/configs/.rein.yaml```
 
 ### a basic chamber file
-```wget -O "$HOME/.rein.yaml" https://raw.githubusercontent.com/steviebps/rein/master/configs/masterChamber.json```
+```wget -O "$HOME/masterChamber.json" https://raw.githubusercontent.com/steviebps/rein/master/configs/masterChamber.json```
