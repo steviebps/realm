@@ -1,1 +1,1 @@
-chamber: "./configs/masterChamber.json"
+chamber: "$HOME/masterChamber.json"
