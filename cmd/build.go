@@ -29,7 +29,7 @@ func compile(parent *rein.Chamber, outputDir string) {
 		}
 
 		if _, err := os.Stat(prefix); os.IsNotExist(err) {
-			os.Mkdir(prefix, os.ModeDir)
+			os.Mkdir(prefix, 0755)
 		}
 
 		file := prefix + "/" + parent.Name + ".json"
