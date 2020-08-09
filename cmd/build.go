@@ -28,6 +28,10 @@ func compile(parent *rein.Chamber, outputDir string) {
 			prefix = filepath.Dir(outputDir + "/")
 		}
 
+		if _, err := os.Stat(prefix); os.IsNotExist(err) {
+			os.Mkdir(prefix, os.ModeDir)
+		}
+
 		file := prefix + "/" + parent.Name + ".json"
 		utils.WriteInterfaceToFile(file, parent.Toggles, true)
 	}
