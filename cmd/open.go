@@ -40,7 +40,7 @@ func openChildrenSelect(chamber *rein.Chamber) {
 	var opts []options.OpenOption
 
 	for _, child := range chamber.Children {
-		option := options.NewOpen(child.Name, child, child, openChamberOptions)
+		option := options.New(child.Name, child, child, openChamberOptions)
 		opts = append(opts, option)
 	}
 
@@ -66,11 +66,11 @@ func openChamberOptions(chamber *rein.Chamber) {
 	editAction := func(asssociated *rein.Chamber) {
 		editChamberOptions(asssociated, 0)
 	}
-	edit := options.NewOpen(fmt.Sprintf("Edit \"%v\" chamber", chamber.Name), chamber, chamber, editAction)
+	edit := options.New(fmt.Sprintf("Edit \"%v\" chamber", chamber.Name), chamber, chamber, editAction)
 	opts = append(opts, edit)
 
 	if len(chamber.Children) > 0 {
-		openChildren := options.NewOpen("Open children chambers", chamber, chamber, openChildrenSelect)
+		openChildren := options.New("Open children chambers", chamber, chamber, openChildrenSelect)
 		opts = append(opts, openChildren)
 	}
 
@@ -106,15 +106,20 @@ func editChamberOptions(chamber *rein.Chamber, position int) {
 		editChamberOptions(associated, 1)
 	}
 
-	isApp := options.NewOpen("isApp", chamber, chamber, toggleApp)
-	isBuildable := options.NewOpen("isBuildable", chamber, chamber, toggleBuildable)
+	selectToggle := func(associated *rein.Chamber) {
+		selectToggleOptions(associated, 0)
+	}
+
+	isApp := options.New("isApp", chamber, chamber, toggleApp)
+	isBuildable := options.New("isBuildable", chamber, chamber, toggleBuildable)
+	editToggles := options.New("Edit toggles", chamber, chamber, selectToggle)
 	exit := options.NewExit(chamber)
 	saveAndExit := options.NewSaveAndExit(&globalChamber, chamber)
 
-	opts = append(opts, isApp, isBuildable, exit, saveAndExit)
+	opts = append(opts, isApp, isBuildable, editToggles, exit, saveAndExit)
 
 	selectPrompt := promptui.Select{
-		Label:        "What value would you like to edit",
+		Label:        "What would you like to edit",
 		Items:        opts,
 		Templates:    &templates.GenericWithChamberTemplate,
 		HideHelp:     true,
@@ -128,4 +133,39 @@ func editChamberOptions(chamber *rein.Chamber, position int) {
 		os.Exit(1)
 	}
 	opts[i].Run()
+}
+
+func selectToggleOptions(chamber *rein.Chamber, position int) {
+	var opts []options.OpenOption
+
+	editToggle := func(toggle *rein.Toggle) options.SelectAction {
+		return func(*rein.Chamber) {
+			editToggleOptions(toggle)
+		}
+	}
+
+	for _, child := range chamber.Toggles {
+		option := options.New(child.Name, chamber, chamber, editToggle(child))
+		opts = append(opts, option)
+	}
+
+	selectPrompt := promptui.Select{
+		Label:        "Which toggle would you like to change",
+		Items:        opts,
+		Templates:    &templates.GenericWithChamberTemplate,
+		HideHelp:     true,
+		HideSelected: true,
+		CursorPos:    position,
+	}
+
+	i, _, err := selectPrompt.Run()
+	if err != nil {
+		fmt.Printf("Select failed %v\n", err)
+		os.Exit(1)
+	}
+	opts[i].Run()
+}
+
+func editToggleOptions(toggle *rein.Toggle) {
+	os.Exit(0)
 }
