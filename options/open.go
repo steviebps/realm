@@ -4,16 +4,16 @@ import (
 	rein "github.com/steviebps/rein/pkg"
 )
 
-type selectAction func(*rein.Chamber)
+type SelectAction func(*rein.Chamber)
 
 type OpenOption struct {
 	Name       string
 	Associated *rein.Chamber
 	Displayed  *rein.Chamber
-	Action     selectAction
+	Action     SelectAction
 }
 
-func NewOpen(name string, associated *rein.Chamber, displayed *rein.Chamber, action selectAction) OpenOption {
+func New(name string, associated *rein.Chamber, displayed *rein.Chamber, action SelectAction) OpenOption {
 	open := OpenOption{
 		Name:       name,
 		Displayed:  displayed,
