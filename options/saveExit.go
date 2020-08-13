@@ -18,7 +18,7 @@ func NewSaveAndExit(associated *rein.Chamber, displayed *rein.Chamber) OpenOptio
 		os.Exit(0)
 	}
 
-	return NewOpen(saveAndExit, associated, displayed, action)
+	return New(saveAndExit, associated, displayed, action)
 }
 
 func NewExit(displayed *rein.Chamber) OpenOption {
@@ -26,5 +26,5 @@ func NewExit(displayed *rein.Chamber) OpenOption {
 		os.Exit(0)
 	}
 
-	return NewOpen(exit, nil, displayed, action)
+	return New(exit, nil, displayed, action)
 }
