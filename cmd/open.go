@@ -27,7 +27,8 @@ var openCmd = &cobra.Command{
 			}
 		}
 
-		openChamberOptions(openWith)
+		openChildren := options.New("Open children chambers", openWith, openWith, openChamberOptions)
+		openChildren.Run()
 	},
 }
 
@@ -61,7 +62,7 @@ func openChildrenChambers(chamber *rein.Chamber) {
 }
 
 func openChamberOptions(chamber *rein.Chamber) {
-	opts := make([]options.OpenOption, 0)
+	opts := make([]options.OpenOption, 0, 4)
 
 	editAction := func(asssociated *rein.Chamber) {
 		editChamber(asssociated, 0)
@@ -95,7 +96,7 @@ func openChamberOptions(chamber *rein.Chamber) {
 }
 
 func editChamber(chamber *rein.Chamber, position int) {
-	opts := make([]options.OpenOption, 0)
+	opts := make([]options.OpenOption, 0, 6)
 
 	toggleApp := func(associated *rein.Chamber) {
 		associated.App = !associated.App
@@ -114,10 +115,11 @@ func editChamber(chamber *rein.Chamber, position int) {
 	isApp := options.New("isApp", chamber, chamber, toggleApp)
 	isBuildable := options.New("isBuildable", chamber, chamber, toggleBuildable)
 	editToggles := options.New("Edit toggles", chamber, chamber, selectToggleOption)
+	goBack := options.New("Go back", chamber, chamber, goBackAction)
 	exit := options.NewExit(chamber)
 	saveAndExit := options.NewSaveAndExit(&globalChamber, chamber)
 
-	opts = append(opts, isApp, isBuildable, editToggles, exit, saveAndExit)
+	opts = append(opts, isApp, isBuildable, editToggles, goBack, exit, saveAndExit)
 
 	selectPrompt := promptui.Select{
 		Label:        "What would you like to edit",
@@ -137,7 +139,7 @@ func editChamber(chamber *rein.Chamber, position int) {
 }
 
 func selectToggle(chamber *rein.Chamber, position int) {
-	opts := make([]options.OpenOption, 0)
+	opts := make([]options.OpenOption, 0, 1)
 
 	editToggle := func(toggle *rein.Toggle) options.SelectAction {
 		return func(*rein.Chamber) {
@@ -169,4 +171,13 @@ func selectToggle(chamber *rein.Chamber, position int) {
 
 func editToggleOptions(toggle *rein.Toggle) {
 	os.Exit(0)
+}
+
+func goBackAction(*rein.Chamber) {
+	option, err := options.GoBack()
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	option.Run()
 }

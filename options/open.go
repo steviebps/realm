@@ -33,5 +33,6 @@ func New(name string, associated *rein.Chamber, displayed *rein.Chamber, action 
 
 // Run executes the Action with the Associated Chamber
 func (option OpenOption) Run() {
+	optionsList.PushFront(&option)
 	option.Action(option.Associated)
 }
