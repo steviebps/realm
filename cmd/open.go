@@ -36,8 +36,8 @@ func init() {
 	openCmd.Flags().StringP("name", "n", "", "Name of the chamber")
 }
 
-func openChildrenSelect(chamber *rein.Chamber) {
-	var opts []options.OpenOption
+func openChildrenChambers(chamber *rein.Chamber) {
+	opts := make([]options.OpenOption, 0)
 
 	for _, child := range chamber.Children {
 		option := options.New(child.Name, child, child, openChamberOptions)
@@ -61,16 +61,16 @@ func openChildrenSelect(chamber *rein.Chamber) {
 }
 
 func openChamberOptions(chamber *rein.Chamber) {
-	var opts []options.OpenOption
+	opts := make([]options.OpenOption, 0)
 
 	editAction := func(asssociated *rein.Chamber) {
-		editChamberOptions(asssociated, 0)
+		editChamber(asssociated, 0)
 	}
 	edit := options.New(fmt.Sprintf("Edit \"%v\" chamber", chamber.Name), chamber, chamber, editAction)
 	opts = append(opts, edit)
 
 	if len(chamber.Children) > 0 {
-		openChildren := options.New("Open children chambers", chamber, chamber, openChildrenSelect)
+		openChildren := options.New("Open children chambers", chamber, chamber, openChildrenChambers)
 		opts = append(opts, openChildren)
 	}
 
@@ -94,25 +94,26 @@ func openChamberOptions(chamber *rein.Chamber) {
 	opts[i].Run()
 }
 
-func editChamberOptions(chamber *rein.Chamber, position int) {
-	var opts []options.OpenOption
+func editChamber(chamber *rein.Chamber, position int) {
+	opts := make([]options.OpenOption, 0)
+
 	toggleApp := func(associated *rein.Chamber) {
 		associated.App = !associated.App
-		editChamberOptions(associated, 0)
+		editChamber(associated, 0)
 	}
 
 	toggleBuildable := func(associated *rein.Chamber) {
 		associated.Buildable = !associated.Buildable
-		editChamberOptions(associated, 1)
+		editChamber(associated, 1)
 	}
 
-	selectToggle := func(associated *rein.Chamber) {
-		selectToggleOptions(associated, 0)
+	selectToggleOption := func(associated *rein.Chamber) {
+		selectToggle(associated, 0)
 	}
 
 	isApp := options.New("isApp", chamber, chamber, toggleApp)
 	isBuildable := options.New("isBuildable", chamber, chamber, toggleBuildable)
-	editToggles := options.New("Edit toggles", chamber, chamber, selectToggle)
+	editToggles := options.New("Edit toggles", chamber, chamber, selectToggleOption)
 	exit := options.NewExit(chamber)
 	saveAndExit := options.NewSaveAndExit(&globalChamber, chamber)
 
@@ -135,8 +136,8 @@ func editChamberOptions(chamber *rein.Chamber, position int) {
 	opts[i].Run()
 }
 
-func selectToggleOptions(chamber *rein.Chamber, position int) {
-	var opts []options.OpenOption
+func selectToggle(chamber *rein.Chamber, position int) {
+	opts := make([]options.OpenOption, 0)
 
 	editToggle := func(toggle *rein.Toggle) options.SelectAction {
 		return func(*rein.Chamber) {
