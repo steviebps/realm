@@ -22,5 +22,8 @@ Pipe into an archive:
 ```rein build | tar zcf archive.tar.gz -T -```
 
 ### print
-Pretty prints your global chamber in stdout
+Pretty prints your global chamber to stdout:
 ```rein print -p```
+
+Print your global chamber to file:
+```rein print -o /path/to/your/file.json```
