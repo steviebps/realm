@@ -21,6 +21,7 @@
 ```rein build | tar zcf archive.tar.gz -T -```
 
 ### print
+
 #### Pretty prints your global chamber to stdout:
 ```rein print -p```
 
