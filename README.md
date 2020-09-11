@@ -15,8 +15,12 @@
 
 ## example commands
 
-### build chambers
+### build
 ```rein build -o /path/to/your/directory```
 
 Pipe into an archive: 
 ```rein build | tar zcf archive.tar.gz -T -```
+
+### print
+Pretty prints your global chamber in stdout
+```rein print -p```
