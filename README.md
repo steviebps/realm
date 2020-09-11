@@ -10,3 +10,12 @@
 
 ### a basic chamber file
 ```wget -O /your/file/location/masterChamber.json https://raw.githubusercontent.com/steviebps/rein/master/configs/masterChamber.json```
+
+
+## example commands
+
+### build chambers
+```rein build -o /path/to/your/directory```
+
+Pipe into an archive
+```rein build | tar zcf archive.tar.gz -T -```
