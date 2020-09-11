@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,7 +15,7 @@ import (
 var buildCmd = &cobra.Command{
 	Use:   "build",
 	Short: "Build chambers with inherited toggles.",
-	Long:  `TODO`,
+	Long:  `Build command will take your chamber configs and compile them with their inherited values.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		outputDir, _ := cmd.Flags().GetString("outputDir")
 		var wg sync.WaitGroup
@@ -27,19 +28,22 @@ var buildCmd = &cobra.Command{
 func compile(parent *rein.Chamber, outputDir string, wg *sync.WaitGroup) {
 	if parent.Buildable || parent.App {
 		wg.Add(1)
+
+		// defaults to current directory
 		prefix := "./"
 		if outputDir != "" {
-			prefix = filepath.Dir(outputDir + "/")
+			prefix, _ = filepath.Abs(outputDir)
 		}
 
 		if _, err := os.Stat(prefix); os.IsNotExist(err) {
 			os.Mkdir(prefix, 0700)
 		}
 
-		file := prefix + "/" + parent.Name + ".json"
+		file, _ := filepath.Abs(prefix + "/" + parent.Name + ".json")
 		go func() {
 			defer wg.Done()
 			utils.WriteInterfaceToFile(file, parent.Toggles, true)
+			fmt.Println(file)
 		}()
 	}
 
