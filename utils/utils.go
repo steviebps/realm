@@ -38,13 +38,7 @@ func Exists(name string) bool {
 
 // WriteChamberToFile Saves the chamber to the file specified
 func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) {
-	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		fmt.Printf("Error opening file: %v\n", err)
-		os.Exit(1)
-	}
-
-	bw := bufio.NewWriter(f)
+	bw, f := OpenFileWriter(fileName)
 	c.EncodeWith(bw, pretty)
 	bw.Flush()
 
@@ -54,13 +48,17 @@ func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) {
 	}
 }
 
-func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
+func OpenFileWriter(fileName string) (*bufio.Writer, *os.File) {
 	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
 		os.Exit(1)
 	}
-	bw := bufio.NewWriter(f)
+	return bufio.NewWriter(f), f
+}
+
+func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
+	bw, f := OpenFileWriter(fileName)
 	enc := json.NewEncoder(bw)
 
 	if pretty {
