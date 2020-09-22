@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 
@@ -38,27 +39,27 @@ func Exists(name string) bool {
 
 // WriteChamberToFile Saves the chamber to the file specified
 func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) {
-	bw, f := OpenFileWriter(fileName)
+	bw, file := OpenFileWriter(fileName)
 	c.EncodeWith(bw, pretty)
 	bw.Flush()
 
-	if err := f.Close(); err != nil {
+	if err := file.Close(); err != nil {
 		fmt.Printf("Error closing file: %v\n", err)
 		os.Exit(1)
 	}
 }
 
 func OpenFileWriter(fileName string) (*bufio.Writer, *os.File) {
-	f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
 		os.Exit(1)
 	}
-	return bufio.NewWriter(f), f
+	return bufio.NewWriter(file), file
 }
 
 func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
-	bw, f := OpenFileWriter(fileName)
+	bw, file := OpenFileWriter(fileName)
 	enc := json.NewEncoder(bw)
 
 	if pretty {
@@ -71,8 +72,23 @@ func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
 
 	bw.Flush()
 
-	if err := f.Close(); err != nil {
+	if err := file.Close(); err != nil {
 		fmt.Printf("Error closing file: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) {
+	bw := bufio.NewWriter(w)
+	enc := json.NewEncoder(bw)
+
+	if pretty {
+		enc.SetIndent("", "  ")
+	}
+
+	if err := enc.Encode(i); err != nil {
+		fmt.Printf("Encoding error: %v\n", err)
+	}
+
+	bw.Flush()
 }
