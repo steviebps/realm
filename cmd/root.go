@@ -87,8 +87,8 @@ func init() {
 		os.Exit(1)
 	}
 
-	defaultConfigPath := filepath.Join(home, "/.rein.yaml")
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "Rein config file")
+	defaultConfigPath := filepath.Join(home, "/.rein/config.yaml")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "Rein configuration file.")
 }
 
 // initConfig reads in config file and ENV variables if set.
