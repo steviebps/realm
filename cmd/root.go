@@ -63,7 +63,7 @@ var rootCmd = &cobra.Command{
 		}
 
 		if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
-			fmt.Printf("Error reading JSON: %s\n", err)
+			fmt.Printf("Error unmarshaling %s: %s\n", chamberFile, err)
 			os.Exit(1)
 		}
 	},

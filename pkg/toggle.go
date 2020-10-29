@@ -3,6 +3,7 @@ package rein
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 )
 
@@ -12,6 +13,7 @@ type Toggle struct {
 	Value      interface{} `json:"value"`
 }
 
+// UnmarshalJSON Custom UnmarshalJSON method for validating toggle Value to the ToggleType
 func (t *Toggle) UnmarshalJSON(b []byte) error {
 	var alias toggleAlias
 	err := json.Unmarshal(b, &alias)
@@ -20,7 +22,8 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	}
 
 	if !isValidType(alias.Value, alias.ToggleType) {
-		return errors.New("Toggle is not the right type")
+		errMsg := fmt.Sprintf("%v (%T) not of the type %s from the toggle: %s", alias.Value, alias.Value, alias.ToggleType, alias.Name)
+		return errors.New(errMsg)
 	}
 
 	*t = alias.toToggle()
