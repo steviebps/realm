@@ -18,6 +18,7 @@ import (
 	utils "github.com/steviebps/rein/utils"
 )
 
+var home string
 var cfgFile string
 var chamber string
 var globalChamber = rein.Chamber{Toggles: map[string]*rein.Toggle{}, Children: []*rein.Chamber{}}
@@ -81,7 +82,8 @@ func Execute() {
 func init() {
 	cobra.OnInitialize(initConfig)
 
-	home, err := homedir.Dir()
+	var err error
+	home, err = homedir.Dir()
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
@@ -97,12 +99,6 @@ func initConfig() {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// Find home directory.
-		home, err := homedir.Dir()
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
 
 		// Search config in home directory with name ".rein" (without extension).
 		viper.AddConfigPath(home)
