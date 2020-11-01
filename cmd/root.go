@@ -25,9 +25,10 @@ var globalChamber = rein.Chamber{Toggles: map[string]*rein.Toggle{}, Children: [
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "rein",
-	Short: "Local and remote configuration management",
-	Long:  `CLI for managing application configuration of local and remote JSON files`,
+	Use:               "rein",
+	Short:             "Local and remote configuration management",
+	Long:              `CLI for managing application configuration of local and remote JSON files`,
+	DisableAutoGenTag: true,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		var jsonFile io.ReadCloser
 		var err error
@@ -90,7 +91,7 @@ func init() {
 	}
 
 	defaultConfigPath := filepath.Join(home, "/.rein/config.yaml")
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "Rein configuration file.")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "rein configuration file")
 }
 
 // initConfig reads in config file and ENV variables if set.

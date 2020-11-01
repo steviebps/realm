@@ -18,8 +18,8 @@ var toStdout bool
 // buildCmd represents the build command
 var buildCmd = &cobra.Command{
 	Use:   "build",
-	Short: "Build chambers with inherited toggles.",
-	Long:  `Build command will take your chamber configs and compile them with their inherited values.`,
+	Short: "Build chambers with inherited toggles",
+	Long:  `Build command will take your chamber configs and compile them with their inherited values`,
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
 		outputDir, _ = cmd.Flags().GetString("output-dir")
@@ -76,7 +76,7 @@ func compile(parent *rein.Chamber, wg *sync.WaitGroup) {
 
 func init() {
 	rootCmd.AddCommand(buildCmd)
-	buildCmd.Flags().StringP("output-dir", "o", "", "Sets the output directory of the built files.")
-	buildCmd.Flags().StringP("chamber", "c", "", "Builds the selected chamber only.")
-	buildCmd.Flags().Bool("to-stdout", false, "Prints the built files to stdout. (overrides output-dir flag)")
+	buildCmd.Flags().StringP("output-dir", "o", "", "sets the output directory of the built files")
+	buildCmd.Flags().StringP("chamber", "c", "", "builds the selected chamber only")
+	buildCmd.Flags().Bool("to-stdout", false, "prints the built files to stdout (overrides output-dir flag)")
 }

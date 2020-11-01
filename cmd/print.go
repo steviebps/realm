@@ -27,6 +27,6 @@ var printCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(printCmd)
-	printCmd.Flags().BoolP("pretty", "p", false, "Prints in pretty format")
-	printCmd.Flags().StringP("output", "o", "", "Sets the output file of the printed content")
+	printCmd.Flags().BoolP("pretty", "p", false, "prints in pretty format")
+	printCmd.Flags().StringP("output", "o", "", "sets the output file of the printed content")
 }
