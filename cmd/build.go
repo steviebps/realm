@@ -46,7 +46,7 @@ var buildCmd = &cobra.Command{
 func compile(parent *rein.Chamber, wg *sync.WaitGroup) {
 	searchingByName := chamberName != ""
 	foundByName := chamberName == parent.Name
-	if (searchingByName && foundByName) || (!searchingByName && (parent.Buildable || parent.App)) {
+	if (searchingByName && foundByName) || (!searchingByName && (parent.IsBuildable || parent.IsApp)) {
 		wg.Add(1)
 
 		prefix, _ := filepath.Abs(outputDir)
