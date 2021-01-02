@@ -6,12 +6,13 @@ import (
 	"io"
 )
 
+// Chamber is a Tree Node struct that contain Toggles and children Chambers
 type Chamber struct {
-	Name      string             `json:"name"`
-	Buildable bool               `json:"isBuildable"`
-	App       bool               `json:"isApp"`
-	Toggles   map[string]*Toggle `json:"toggles"`
-	Children  []*Chamber         `json:"children"`
+	Name        string             `json:"name"`
+	IsBuildable bool               `json:"isBuildable"`
+	IsApp       bool               `json:"isApp"`
+	Toggles     map[string]*Toggle `json:"toggles"`
+	Children    []*Chamber         `json:"children"`
 }
 
 // EncodeWith takes a writer and encodes JSON to that writer
@@ -26,6 +27,8 @@ func (c *Chamber) EncodeWith(w io.Writer, pretty bool) {
 	}
 }
 
+// FindByName will return the first child or nth-grandchild with the matching name.
+// Will not include itself in the search.
 func (c *Chamber) FindByName(name string) *Chamber {
 	queue := make([]*Chamber, 0)
 	queue = append(queue, c)
