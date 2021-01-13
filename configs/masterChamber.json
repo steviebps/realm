@@ -9,7 +9,7 @@
       "value": 10.6,
       "overrides": [
         {
-          "minimumVersion": "",
+          "minimumVersion": "1",
           "maximumVersion": "",
           "value": 10.2
         }
