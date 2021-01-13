@@ -9,8 +9,9 @@ import (
 
 // Override is a Toggle value to be consumed by and restricted to a semantic version range
 type Override struct {
-	VersionRange string      `json:"range"`
-	Value        interface{} `json:"value"`
+	MinimumVersion string      `json:"minimumVersion"`
+	MaximumVersion string      `json:"maximumVersion"`
+	Value          interface{} `json:"value"`
 }
 
 // Toggle is a feature switch/toggle structure for holding
