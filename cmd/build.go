@@ -47,7 +47,6 @@ func compile(parent *rein.Chamber, wg *sync.WaitGroup) {
 	searchingByName := chamberName != ""
 	foundByName := chamberName == parent.Name
 	if (searchingByName && foundByName) || (!searchingByName && (parent.IsBuildable || parent.IsApp)) {
-		wg.Add(1)
 
 		prefix, _ := filepath.Abs(outputDir)
 
@@ -55,7 +54,9 @@ func compile(parent *rein.Chamber, wg *sync.WaitGroup) {
 			os.Mkdir(prefix, 0700)
 		}
 
-		file, _ := filepath.Abs(prefix + "/" + parent.Name + ".json")
+		file := prefix + "/" + parent.Name + ".json"
+
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			if toStdout {
