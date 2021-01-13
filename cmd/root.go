@@ -46,7 +46,7 @@ var rootCmd = &cobra.Command{
 			defer jsonFile.Close()
 		} else {
 			if !utils.Exists(chamberFile) {
-				fmt.Printf("Could not find chamber file \"%v\": %v\n", chamberFile, err)
+				fmt.Printf("Could not find chamber file \"%v\"\n", chamberFile)
 				os.Exit(1)
 			}
 
@@ -90,7 +90,7 @@ func init() {
 		os.Exit(1)
 	}
 
-	defaultConfigPath := filepath.Join(home, "/.rein/config.yaml")
+	defaultConfigPath := filepath.Join(home, "/.rein/rein.yaml")
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "rein configuration file")
 }
 
@@ -103,7 +103,7 @@ func initConfig() {
 
 		// Search config in home directory with name ".rein" (without extension).
 		viper.AddConfigPath(home)
-		viper.SetConfigName(".rein")
+		viper.SetConfigName("rein")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
