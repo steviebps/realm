@@ -7,13 +7,6 @@ import (
 	"reflect"
 )
 
-// Override is a Toggle value to be consumed by and restricted to a semantic version range
-type Override struct {
-	MinimumVersion string      `json:"minimumVersion"`
-	MaximumVersion string      `json:"maximumVersion"`
-	Value          interface{} `json:"value"`
-}
-
 // Toggle is a feature switch/toggle structure for holding
 // its name, value, type and any overrides to be parsed by the applicable rein sdk
 type Toggle struct {
