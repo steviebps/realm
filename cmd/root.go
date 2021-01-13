@@ -39,20 +39,20 @@ var rootCmd = &cobra.Command{
 			res, err := http.Get(url.String())
 
 			if err != nil {
-				fmt.Printf("Could not get chamber file \"%v\": %v\n", chamberFile, err)
+				fmt.Printf("Error trying to GET this resource \"%v\": %v\n", chamberFile, err)
 				log.Fatal(err)
 			}
 			jsonFile = res.Body
 			defer jsonFile.Close()
 		} else {
 			if !utils.Exists(chamberFile) {
-				fmt.Printf("Could not find chamber file \"%v\"\n", chamberFile)
+				fmt.Printf("Could not find file \"%v\"\n", chamberFile)
 				os.Exit(1)
 			}
 
 			jsonFile, err = os.Open(chamberFile)
 			if err != nil {
-				fmt.Printf("Could not open chamber file \"%v\": %v\n", chamberFile, err)
+				fmt.Printf("Could not open file \"%v\": %v\n", chamberFile, err)
 				os.Exit(1)
 			}
 			defer jsonFile.Close()
@@ -60,12 +60,12 @@ var rootCmd = &cobra.Command{
 
 		byteValue, err := ioutil.ReadAll(jsonFile)
 		if err != nil {
-			fmt.Printf("Error reading chamber file \"%v\": %v\n", chamberFile, err)
+			fmt.Printf("Error reading file \"%v\": %v\n", chamberFile, err)
 			os.Exit(1)
 		}
 
 		if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
-			fmt.Printf("Error unmarshaling %s: %s\n", chamberFile, err)
+			fmt.Printf("Error reading \"%v\": %v\n", chamberFile, err)
 			os.Exit(1)
 		}
 	},
