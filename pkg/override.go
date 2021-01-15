@@ -3,15 +3,18 @@ package rein
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+
+	"golang.org/x/mod/semver"
 )
 
 // Override is a Toggle value to be consumed by and restricted to a semantic version range
 type Override struct {
-	MinimumVersionStruct *Version    `json:"-"`
-	MaximumVersionStruct *Version    `json:"-"`
-	MinimumVersion       string      `json:"minimumVersion"`
-	MaximumVersion       string      `json:"maximumVersion"`
-	Value                interface{} `json:"value"`
+	// MinimumVersionStruct *Version    `json:"-"`
+	// MaximumVersionStruct *Version    `json:"-"`
+	MinimumVersion string      `json:"minimumVersion"`
+	MaximumVersion string      `json:"maximumVersion"`
+	Value          interface{} `json:"value"`
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Override
@@ -33,13 +36,14 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 		return errors.New("Override ranges cannot both be empty")
 	}
 
-	o.MinimumVersionStruct, err = NewVersion(o.MinimumVersion)
-	if err != nil {
-		return err
+	if isValidMin := semver.IsValid(o.MinimumVersion); !isValidMin {
+		errMsg := fmt.Sprintf("\"%v\" is a not a valid semantic version", o.MinimumVersion)
+		return errors.New(errMsg)
 	}
-	o.MaximumVersionStruct, err = NewVersion(o.MaximumVersion)
-	if err != nil {
-		return err
+
+	if isValidMax := semver.IsValid(o.MinimumVersion); !isValidMax {
+		errMsg := fmt.Sprintf("\"%v\" is a not a valid semantic version", o.MaximumVersion)
+		return errors.New(errMsg)
 	}
 
 	return nil
@@ -49,8 +53,8 @@ type overrideAlias Override
 
 func (o overrideAlias) toOverride() Override {
 	return Override{
-		nil,
-		nil,
+		// nil,
+		// nil,
 		o.MinimumVersion,
 		o.MaximumVersion,
 		o.Value,
