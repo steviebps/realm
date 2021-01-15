@@ -41,7 +41,7 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 		return errors.New(errMsg)
 	}
 
-	if isValidMax := semver.IsValid(o.MinimumVersion); !isValidMax {
+	if isValidMax := semver.IsValid(o.MaximumVersion); !isValidMax {
 		errMsg := fmt.Sprintf("\"%v\" is a not a valid semantic version", o.MaximumVersion)
 		return errors.New(errMsg)
 	}
