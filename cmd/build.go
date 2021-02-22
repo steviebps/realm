@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/spf13/cobra"
+	"github.com/steviebps/rein/internal/logger"
 	rein "github.com/steviebps/rein/pkg"
 	"github.com/steviebps/rein/utils"
 )
@@ -14,6 +15,8 @@ import (
 var outputDir string
 var chamberName string
 var toStdout bool
+
+var buildCmdError = logger.ErrorWithPrefix("Error running build command: ")
 
 // buildCmd represents the build command
 var buildCmd = &cobra.Command{
@@ -30,10 +33,9 @@ var buildCmd = &cobra.Command{
 		if outputDir == "" {
 			outputDir, err = os.Getwd()
 			if err != nil {
-				fmt.Println(err)
+				buildCmdError(err.Error())
 				os.Exit(1)
 			}
-
 		}
 
 		var wg sync.WaitGroup
