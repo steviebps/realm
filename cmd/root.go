@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
+	"github.com/steviebps/rein/internal/logger"
 	rein "github.com/steviebps/rein/pkg"
 	utils "github.com/steviebps/rein/utils"
 )
@@ -39,20 +39,20 @@ var rootCmd = &cobra.Command{
 			res, err := http.Get(url.String())
 
 			if err != nil {
-				fmt.Printf("Error trying to GET this resource \"%v\": %v\n", chamberFile, err)
-				log.Fatal(err)
+				logger.ErrorString(fmt.Sprintf("Error trying to GET this resource \"%v\": %v\n", chamberFile, err))
+				os.Exit(1)
 			}
 			jsonFile = res.Body
 			defer jsonFile.Close()
 		} else {
 			if !utils.Exists(chamberFile) {
-				fmt.Printf("Could not find file \"%v\"\n", chamberFile)
+				logger.ErrorString(fmt.Sprintf("Could not find file \"%v\"\n", chamberFile))
 				os.Exit(1)
 			}
 
 			jsonFile, err = os.Open(chamberFile)
 			if err != nil {
-				fmt.Printf("Could not open file \"%v\": %v\n", chamberFile, err)
+				logger.ErrorString(fmt.Sprintf("Could not open file \"%v\": %v\n", chamberFile, err))
 				os.Exit(1)
 			}
 			defer jsonFile.Close()
@@ -60,12 +60,12 @@ var rootCmd = &cobra.Command{
 
 		byteValue, err := ioutil.ReadAll(jsonFile)
 		if err != nil {
-			fmt.Printf("Error reading file \"%v\": %v\n", chamberFile, err)
+			logger.ErrorString(fmt.Sprintf("Error reading file \"%v\": %v\n", chamberFile, err))
 			os.Exit(1)
 		}
 
 		if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
-			fmt.Printf("Error reading \"%v\": %v\n", chamberFile, err)
+			logger.ErrorString(fmt.Sprintf("Error reading \"%v\": %v\n", chamberFile, err))
 			os.Exit(1)
 		}
 	},
@@ -75,7 +75,7 @@ var rootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println("Error while starting rein: ", err)
+		logger.ErrorString(fmt.Sprintf("Error while starting rein: %v", err))
 		os.Exit(1)
 	}
 }
@@ -86,7 +86,7 @@ func init() {
 	var err error
 	home, err = homedir.Dir()
 	if err != nil {
-		fmt.Println(err)
+		logger.ErrorString(err.Error())
 		os.Exit(1)
 	}
 
@@ -109,6 +109,6 @@ func initConfig() {
 	viper.AutomaticEnv() // read in environment variables that match
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
-		fmt.Printf("Error reading config file: %v\n", viper.ConfigFileUsed())
+		logger.ErrorString(fmt.Sprintf("Error reading config file: %v\n", viper.ConfigFileUsed()))
 	}
 }
