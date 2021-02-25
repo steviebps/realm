@@ -2,7 +2,6 @@ package rein
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
@@ -16,15 +15,17 @@ type Chamber struct {
 }
 
 // EncodeWith takes a writer and encodes JSON to that writer
-func (c *Chamber) EncodeWith(w io.Writer, pretty bool) {
+func (c *Chamber) EncodeWith(w io.Writer, pretty bool) error {
 	enc := json.NewEncoder(w)
 	if pretty {
 		enc.SetIndent("", "  ")
 	}
 
 	if err := enc.Encode(c); err != nil {
-		fmt.Printf("Encoding error: %v\n", err)
+		return err
 	}
+
+	return nil
 }
 
 // FindByName will return the first child or nth-grandchild with the matching name.
