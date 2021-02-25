@@ -38,15 +38,15 @@ func Exists(name string) bool {
 }
 
 // WriteChamberToFile Saves the chamber to the file specified
-func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) {
+func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) error {
 	bw, file := OpenFileWriter(fileName)
 	c.EncodeWith(bw, pretty)
 	bw.Flush()
 
 	if err := file.Close(); err != nil {
-		fmt.Printf("Error closing file: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 func OpenFileWriter(fileName string) (*bufio.Writer, *os.File) {
