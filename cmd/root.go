@@ -7,7 +7,6 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -90,8 +89,7 @@ func init() {
 		os.Exit(1)
 	}
 
-	defaultConfigPath := filepath.Join(home, "/.rein/rein.yaml")
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", defaultConfigPath, "rein configuration file")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "rein configuration file")
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -100,15 +98,17 @@ func initConfig() {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-
-		// Search config in home directory with name ".rein" (without extension).
+		viper.AddConfigPath(".")
+		viper.AddConfigPath(home + "/.rein")
 		viper.AddConfigPath(home)
 		viper.SetConfigName("rein")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
+
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
 		logger.ErrorString(fmt.Sprintf("Error reading config file: %v\n", viper.ConfigFileUsed()))
+		os.Exit(1)
 	}
 }
