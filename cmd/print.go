@@ -4,8 +4,11 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/steviebps/rein/internal/logger"
 	"github.com/steviebps/rein/utils"
 )
+
+var printCmdError = logger.ErrorWithPrefix("Error running print command: ")
 
 // printCmd represents the print command
 var printCmd = &cobra.Command{
@@ -17,10 +20,17 @@ var printCmd = &cobra.Command{
 		output, _ := cmd.Flags().GetString("output")
 
 		if output != "" {
-			utils.WriteChamberToFile(output, globalChamber, pretty)
+			if err := utils.WriteChamberToFile(output, globalChamber, pretty); err != nil {
+				printCmdError(err.Error())
+				os.Exit(1)
+			}
 		} else {
-			globalChamber.EncodeWith(cmd.OutOrStdout(), pretty)
+			if err := globalChamber.EncodeWith(cmd.OutOrStdout(), pretty); err != nil {
+				printCmdError(err.Error())
+				os.Exit(1)
+			}
 		}
+
 		os.Exit(0)
 	},
 }
