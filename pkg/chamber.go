@@ -53,12 +53,21 @@ func (c *Chamber) FindByName(name string) *Chamber {
 
 // InheritWith will take a map of toggles to inherit from
 // so that any toggles that do not exist in this chamber will be written to the map
-func (c *Chamber) InheritWith(inherited map[string]*Toggle) map[string]*Toggle {
+func (c *Chamber) InheritWith(inherited map[string]*Toggle) {
 	for key := range inherited {
 		if _, ok := c.Toggles[key]; !ok {
 			c.Toggles[key] = inherited[key]
 		}
 	}
+}
 
-	return c.Toggles
+// TraverseAndBuild will traverse all children Chambers and trickle down all Toggles with a callback
+func (c *Chamber) TraverseAndBuild(callback func(*Chamber)) {
+
+	callback(c)
+
+	for i := range c.Children {
+		c.Children[i].InheritWith(c.Toggles)
+		c.Children[i].TraverseAndBuild(callback)
+	}
 }
