@@ -38,43 +38,42 @@ var buildCmd = &cobra.Command{
 			}
 		}
 
+		outputDir, _ := filepath.Abs(outputDir)
+
+		if _, err := os.Stat(outputDir); os.IsNotExist(err) {
+			os.Mkdir(outputDir, 0700)
+		}
+
 		var wg sync.WaitGroup
-		compile(&globalChamber, &wg)
+		build(&globalChamber, &wg, outputDir)
 		wg.Wait()
 		os.Exit(0)
 	},
 }
 
-func compile(parent *rein.Chamber, wg *sync.WaitGroup) {
-	searchingByName := chamberName != ""
-	foundByName := chamberName == parent.Name
-	if (searchingByName && foundByName) || (!searchingByName && (parent.IsBuildable || parent.IsApp)) {
+func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 
-		prefix, _ := filepath.Abs(outputDir)
+	parent.TraverseAndBuild(func(c *rein.Chamber) {
 
-		if _, err := os.Stat(prefix); os.IsNotExist(err) {
-			os.Mkdir(prefix, 0700)
+		searchingByName := chamberName != ""
+		foundByName := chamberName == c.Name
+
+		if (searchingByName && foundByName) || (!searchingByName && (c.IsBuildable || c.IsApp)) {
+
+			fileName := outputDir + "/" + c.Name + ".json"
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if toStdout {
+					utils.WriteInterfaceWith(os.Stdout, c.Toggles, true)
+				} else {
+					utils.WriteInterfaceToFile(fileName, c.Toggles, true)
+					fmt.Println(fileName)
+				}
+			}()
 		}
-
-		file := prefix + "/" + parent.Name + ".json"
-
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if toStdout {
-				utils.WriteInterfaceWith(os.Stdout, parent.Toggles, true)
-			} else {
-				utils.WriteInterfaceToFile(file, parent.Toggles, true)
-				fmt.Println(file)
-			}
-		}()
-	}
-
-	for i := range parent.Children {
-		built := parent.Children[i].InheritWith(parent.Toggles)
-		parent.Children[i].Toggles = built
-		compile(parent.Children[i], wg)
-	}
+	})
 }
 
 func init() {
