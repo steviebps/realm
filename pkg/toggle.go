@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+
+	"golang.org/x/mod/semver"
 )
 
 // Toggle is a feature switch/toggle structure for holding
@@ -13,7 +15,18 @@ type Toggle struct {
 	Name       string      `json:"name"`
 	ToggleType string      `json:"type"`
 	Value      interface{} `json:"value"`
-	Overrides  []Override  `json:"overrides"`
+	Overrides  []*Override `json:"overrides"`
+}
+
+type toggleAlias Toggle
+
+func (t toggleAlias) toToggle() Toggle {
+	return Toggle{
+		t.Name,
+		t.ToggleType,
+		t.Value,
+		t.Overrides,
+	}
 }
 
 // IsValidValue determines whether or not the passed value's type matches the ToggleType
@@ -57,13 +70,24 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-type toggleAlias Toggle
+// GetValue returns the value for the given version. Will return default value if no override is present for the specified version
+func (t *Toggle) GetValue(version string) interface{} {
 
-func (t toggleAlias) toToggle() Toggle {
-	return Toggle{
-		t.Name,
-		t.ToggleType,
-		t.Value,
-		t.Overrides,
+	if override := t.GetOverride(version); override != nil {
+		return override.Value
 	}
+
+	return t.Value
+}
+
+// GetOverride returns the first override that encapsulates version passed
+func (t *Toggle) GetOverride(version string) *Override {
+
+	for _, override := range t.Overrides {
+		if semver.Compare(override.MinimumVersion, version) <= 0 && semver.Compare(override.MaximumVersion, version) >= 0 {
+			return override
+		}
+	}
+
+	return nil
 }
