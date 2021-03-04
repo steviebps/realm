@@ -18,9 +18,9 @@ type Toggle struct {
 
 // IsValidValue determines whether or not the passed value's type matches the ToggleType
 func (t Toggle) IsValidValue(value interface{}) bool {
-	typ := reflect.TypeOf(value).String()
+	typeOfValue := reflect.TypeOf(value).String()
 
-	switch typ {
+	switch typeOfValue {
 	case "bool":
 		return t.ToggleType == "boolean"
 	case "string":
