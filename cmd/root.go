@@ -65,7 +65,6 @@ func initConfig() {
 	} else {
 		viper.AddConfigPath(".")
 		viper.AddConfigPath(home + "/.rein")
-		viper.AddConfigPath(home)
 		viper.SetConfigName("rein")
 	}
 
@@ -73,7 +72,14 @@ func initConfig() {
 
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
-		logger.ErrorString(fmt.Sprintf("Error reading config file: %v\n", viper.ConfigFileUsed()))
+
+		configFileUsed := viper.ConfigFileUsed()
+		if configFileUsed == "" {
+			logger.ErrorString(err.Error())
+			os.Exit(1)
+		}
+
+		logger.ErrorString(fmt.Sprintf("Error reading config file: %v\n", configFileUsed))
 	}
 }
 
