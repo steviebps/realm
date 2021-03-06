@@ -20,9 +20,10 @@ var buildCmdError = logger.ErrorWithPrefix("Error running build command: ")
 
 // buildCmd represents the build command
 var buildCmd = &cobra.Command{
-	Use:   "build",
-	Short: "Build chambers with inherited toggles",
-	Long:  `Build command will take your chamber configs and compile them with their inherited values`,
+	Use:    "build",
+	Short:  "Build chambers with inherited toggles",
+	Long:   `Build command will take your chamber configs and compile them with their inherited values`,
+	PreRun: configPreRun,
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
 		outputDir, _ = cmd.Flags().GetString("output-dir")

@@ -12,9 +12,10 @@ var printCmdError = logger.ErrorWithPrefix("Error running print command: ")
 
 // printCmd represents the print command
 var printCmd = &cobra.Command{
-	Use:   "print",
-	Short: "Print all Chambers",
-	Long:  ``,
+	Use:    "print",
+	Short:  "Print all Chambers",
+	Long:   ``,
+	PreRun: configPreRun,
 	Run: func(cmd *cobra.Command, args []string) {
 		pretty, _ := cmd.Flags().GetBool("pretty")
 		output, _ := cmd.Flags().GetString("output")

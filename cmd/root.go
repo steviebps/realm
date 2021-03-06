@@ -28,46 +28,6 @@ var rootCmd = &cobra.Command{
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
 	DisableAutoGenTag: true,
-	PersistentPreRun: func(cmd *cobra.Command, args []string) {
-		var jsonFile io.ReadCloser
-		var err error
-		chamberFile := viper.GetString("chamber")
-
-		validURL, url := utils.IsURL(chamberFile)
-		if validURL {
-			res, err := http.Get(url.String())
-
-			if err != nil {
-				logger.ErrorString(fmt.Sprintf("Error trying to GET this resource \"%v\": %v\n", chamberFile, err))
-				os.Exit(1)
-			}
-			jsonFile = res.Body
-			defer jsonFile.Close()
-		} else {
-			if !utils.Exists(chamberFile) {
-				logger.ErrorString(fmt.Sprintf("Could not find file \"%v\"\n", chamberFile))
-				os.Exit(1)
-			}
-
-			jsonFile, err = os.Open(chamberFile)
-			if err != nil {
-				logger.ErrorString(fmt.Sprintf("Could not open file \"%v\": %v\n", chamberFile, err))
-				os.Exit(1)
-			}
-			defer jsonFile.Close()
-		}
-
-		byteValue, err := ioutil.ReadAll(jsonFile)
-		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Error reading file \"%v\": %v\n", chamberFile, err))
-			os.Exit(1)
-		}
-
-		if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
-			logger.ErrorString(fmt.Sprintf("Error reading \"%v\": %v\n", chamberFile, err))
-			os.Exit(1)
-		}
-	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -109,6 +69,47 @@ func initConfig() {
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err != nil {
 		logger.ErrorString(fmt.Sprintf("Error reading config file: %v\n", viper.ConfigFileUsed()))
+		os.Exit(1)
+	}
+}
+
+func configPreRun(cmd *cobra.Command, args []string) {
+	var jsonFile io.ReadCloser
+	var err error
+	chamberFile := viper.GetString("chamber")
+
+	validURL, url := utils.IsURL(chamberFile)
+	if validURL {
+		res, err := http.Get(url.String())
+
+		if err != nil {
+			logger.ErrorString(fmt.Sprintf("Error trying to GET this resource \"%v\": %v\n", chamberFile, err))
+			os.Exit(1)
+		}
+		jsonFile = res.Body
+		defer jsonFile.Close()
+	} else {
+		if !utils.Exists(chamberFile) {
+			logger.ErrorString(fmt.Sprintf("Could not find file \"%v\"\n", chamberFile))
+			os.Exit(1)
+		}
+
+		jsonFile, err = os.Open(chamberFile)
+		if err != nil {
+			logger.ErrorString(fmt.Sprintf("Could not open file \"%v\": %v\n", chamberFile, err))
+			os.Exit(1)
+		}
+		defer jsonFile.Close()
+	}
+
+	byteValue, err := ioutil.ReadAll(jsonFile)
+	if err != nil {
+		logger.ErrorString(fmt.Sprintf("Error reading file \"%v\": %v\n", chamberFile, err))
+		os.Exit(1)
+	}
+
+	if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
+		logger.ErrorString(fmt.Sprintf("Error reading \"%v\": %v\n", chamberFile, err))
 		os.Exit(1)
 	}
 }
