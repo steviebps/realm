@@ -22,12 +22,16 @@ var cfgFile string
 var chamber string
 var globalChamber = rein.Chamber{Toggles: map[string]*rein.Toggle{}, Children: []*rein.Chamber{}}
 
+// Version the version of rein
+var Version = "development"
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:               "rein",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
 	DisableAutoGenTag: true,
+	Version:           Version,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -49,6 +53,7 @@ func init() {
 		os.Exit(1)
 	}
 
+	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "rein configuration file")
 }
 
