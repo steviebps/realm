@@ -12,7 +12,6 @@ import (
 	"github.com/steviebps/rein/utils"
 )
 
-var outputDir string
 var chamberName string
 var toStdout bool
 
@@ -20,13 +19,15 @@ var buildCmdError = logger.ErrorWithPrefix("Error running build command: ")
 
 // buildCmd represents the build command
 var buildCmd = &cobra.Command{
-	Use:    "build",
-	Short:  "Build chambers with inherited toggles",
-	Long:   `Build command will take your chamber configs and compile them with their inherited values`,
-	PreRun: configPreRun,
+	Use:     "build",
+	Short:   "Build chambers with inherited toggles",
+	Long:    `Build command will take your chamber configs and compile them with their inherited values`,
+	Example: "rein build -o /path/to/your/directory",
+	PreRun:  configPreRun,
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
-		outputDir, _ = cmd.Flags().GetString("output-dir")
+		outputDir, _ := cmd.Flags().GetString("output-dir")
+		forceCreateDir, _ := cmd.Flags().GetBool("force")
 		chamberName, _ = cmd.Flags().GetString("chamber")
 		toStdout, _ = cmd.Flags().GetBool("to-stdout")
 
@@ -39,10 +40,16 @@ var buildCmd = &cobra.Command{
 			}
 		}
 
-		outputDir, _ := filepath.Abs(outputDir)
+		outputDir, _ = filepath.Abs(outputDir)
 
 		if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-			os.Mkdir(outputDir, 0700)
+			if forceCreateDir {
+				os.Mkdir(outputDir, 0700)
+			} else {
+				buildCmdError(fmt.Sprintf("Directory %v does not exist", outputDir))
+				logger.InfoString(fmt.Sprintf("\nTry running: \"rein build --output-dir %v --force\" to force create the directory", outputDir))
+				os.Exit(1)
+			}
 		}
 
 		var wg sync.WaitGroup
@@ -80,6 +87,7 @@ func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 func init() {
 	rootCmd.AddCommand(buildCmd)
 	buildCmd.Flags().StringP("output-dir", "o", "", "sets the output directory of the built files")
+	buildCmd.Flags().BoolP("force", "f", false, "force create directory (used with output-dir)")
 	buildCmd.Flags().StringP("chamber", "c", "", "builds the selected chamber only")
 	buildCmd.Flags().Bool("to-stdout", false, "prints the built files to stdout (overrides output-dir flag)")
 }
