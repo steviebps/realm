@@ -60,11 +60,20 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 		return errors.New(errMsg)
 	}
 
-	for i := range t.Overrides {
-		if !t.IsValidValue(t.Overrides[i].Value) {
-			errMsg := fmt.Sprintf("%v (%T) not of the type \"%s\" from the toggle override: %s", t.Overrides[i].Value, t.Overrides[i].Value, t.ToggleType, t.Name)
+	var previous *Override
+	for _, override := range t.Overrides {
+		// overrides should not overlap
+		if previous != nil && semver.Compare(previous.MaximumVersion, override.MinimumVersion) == 1 {
+			errMsg := fmt.Sprintf("An override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)
 			return errors.New(errMsg)
 		}
+
+		if !t.IsValidValue(override.Value) {
+			errMsg := fmt.Sprintf("%v (%T) not of the type \"%s\" from the toggle override: %s", override.Value, override.Value, t.ToggleType, t.Name)
+			return errors.New(errMsg)
+		}
+
+		previous = override
 	}
 
 	return nil
