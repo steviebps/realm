@@ -9,8 +9,13 @@
       "value": 10.6,
       "overrides": [
         {
-          "minimumVersion": "v1.0.5",
+          "minimumVersion": "v0.0.1",
           "maximumVersion": "v2.0.0",
+          "value": 10.2
+        },
+        {
+          "minimumVersion": "v2.0.0",
+          "maximumVersion": "v3.0.0",
           "value": 10.2
         }
       ]
