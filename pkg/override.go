@@ -10,8 +10,6 @@ import (
 
 // Override is a Toggle value to be consumed by and restricted to a semantic version range
 type Override struct {
-	// MinimumVersionStruct *Version    `json:"-"`
-	// MaximumVersionStruct *Version    `json:"-"`
 	MinimumVersion string      `json:"minimumVersion"`
 	MaximumVersion string      `json:"maximumVersion"`
 	Value          interface{} `json:"value"`
@@ -29,20 +27,19 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 
 	*o = alias.toOverride()
 
-	minEmpty := o.MinimumVersion == ""
-	maxEmpty := o.MaximumVersion == ""
-
-	if minEmpty && maxEmpty {
-		return errors.New("Override ranges cannot both be empty")
-	}
-
 	if isValidMin := semver.IsValid(o.MinimumVersion); !isValidMin {
-		errMsg := fmt.Sprintf("\"%v\" is a not a valid semantic version", o.MinimumVersion)
+		errMsg := fmt.Sprintf("\"%v\" is not a valid semantic version", o.MinimumVersion)
 		return errors.New(errMsg)
 	}
 
 	if isValidMax := semver.IsValid(o.MaximumVersion); !isValidMax {
-		errMsg := fmt.Sprintf("\"%v\" is a not a valid semantic version", o.MaximumVersion)
+		errMsg := fmt.Sprintf("\"%v\" is not a valid semantic version", o.MaximumVersion)
+		return errors.New(errMsg)
+	}
+
+	// if minimum version is greater than maximum version
+	if semver.Compare(o.MinimumVersion, o.MaximumVersion) == 1 {
+		errMsg := fmt.Sprintf("An override with the minimum version of %v is greater than its maximum version (%v)", o.MinimumVersion, o.MaximumVersion)
 		return errors.New(errMsg)
 	}
 
@@ -53,8 +50,6 @@ type overrideAlias Override
 
 func (o overrideAlias) toOverride() Override {
 	return Override{
-		// nil,
-		// nil,
 		o.MinimumVersion,
 		o.MaximumVersion,
 		o.Value,
