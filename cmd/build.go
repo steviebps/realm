@@ -66,7 +66,7 @@ func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 		searchingByName := chamberName != ""
 		foundByName := chamberName == c.Name
 
-		if (searchingByName && foundByName) || (!searchingByName && (c.IsBuildable || c.IsApp)) {
+		if foundByName || (!searchingByName && (c.IsBuildable || c.IsApp)) {
 
 			fileName := outputDir + "/" + c.Name + ".json"
 
