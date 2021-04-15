@@ -2,6 +2,7 @@ package rein
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 )
 
@@ -69,5 +70,36 @@ func (c *Chamber) TraverseAndBuild(callback func(*Chamber)) {
 	for i := range c.Children {
 		c.Children[i].InheritWith(c.Toggles)
 		c.Children[i].TraverseAndBuild(callback)
+	}
+}
+
+// UnmarshalJSON Custom UnmarshalJSON method for validating Chamber
+func (c *Chamber) UnmarshalJSON(b []byte) error {
+
+	var alias chamberAlias
+
+	err := json.Unmarshal(b, &alias)
+	if err != nil {
+		return err
+	}
+
+	*c = alias.toOverride()
+
+	if c.Name == "" {
+		return errors.New("Chambers must have a name")
+	}
+
+	return nil
+}
+
+type chamberAlias Chamber
+
+func (c chamberAlias) toOverride() Chamber {
+	return Chamber{
+		Name:        c.Name,
+		IsBuildable: c.IsBuildable,
+		IsApp:       c.IsApp,
+		Toggles:     c.Toggles,
+		Children:    c.Children,
 	}
 }
