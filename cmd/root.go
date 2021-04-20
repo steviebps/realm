@@ -93,20 +93,20 @@ func configPreRun(cmd *cobra.Command, args []string) {
 		res, err := http.Get(url.String())
 
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Error trying to GET this resource \"%v\": %v", chamberFile, err))
+			logger.ErrorString(fmt.Sprintf("Error trying to GET this resource %q: %v", chamberFile, err))
 			os.Exit(1)
 		}
 		jsonFile = res.Body
 		defer jsonFile.Close()
 	} else {
 		if !utils.Exists(chamberFile) {
-			logger.ErrorString(fmt.Sprintf("Could not find file \"%v\"", chamberFile))
+			logger.ErrorString(fmt.Sprintf("Could not find file %q", chamberFile))
 			os.Exit(1)
 		}
 
 		jsonFile, err = os.Open(chamberFile)
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Could not open file \"%v\": %v", chamberFile, err))
+			logger.ErrorString(fmt.Sprintf("Could not open file %q: %v", chamberFile, err))
 			os.Exit(1)
 		}
 		defer jsonFile.Close()
@@ -114,12 +114,12 @@ func configPreRun(cmd *cobra.Command, args []string) {
 
 	byteValue, err := ioutil.ReadAll(jsonFile)
 	if err != nil {
-		logger.ErrorString(fmt.Sprintf("Error reading file \"%v\": %v", chamberFile, err))
+		logger.ErrorString(fmt.Sprintf("Error reading file %q: %v", chamberFile, err))
 		os.Exit(1)
 	}
 
 	if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
-		logger.ErrorString(fmt.Sprintf("Error reading \"%v\": %v", chamberFile, err))
+		logger.ErrorString(fmt.Sprintf("Error reading %q: %v", chamberFile, err))
 		os.Exit(1)
 	}
 }

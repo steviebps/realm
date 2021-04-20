@@ -28,12 +28,12 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 	*o = alias.toOverride()
 
 	if isValidMin := semver.IsValid(o.MinimumVersion); !isValidMin {
-		errMsg := fmt.Sprintf("\"%v\" is not a valid semantic version", o.MinimumVersion)
+		errMsg := fmt.Sprintf("%q is not a valid semantic version", o.MinimumVersion)
 		return errors.New(errMsg)
 	}
 
 	if isValidMax := semver.IsValid(o.MaximumVersion); !isValidMax {
-		errMsg := fmt.Sprintf("\"%v\" is not a valid semantic version", o.MaximumVersion)
+		errMsg := fmt.Sprintf("%q is not a valid semantic version", o.MaximumVersion)
 		return errors.New(errMsg)
 	}
 

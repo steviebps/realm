@@ -20,7 +20,7 @@ func NewVersion(v string) (*Version, error) {
 
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) != 3 {
-		errMsg := fmt.Sprintf("Invalid semantic version.\"%v\" must contain at least 3 parts (X.X.X)", v)
+		errMsg := fmt.Sprintf("Invalid semantic version. %q must contain at least 3 parts (X.X.X)", v)
 		return nil, errors.New(errMsg)
 	}
 
