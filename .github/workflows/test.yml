@@ -1,0 +1,33 @@
+name: pull-request
+
+on: 
+  pull_request:
+
+jobs:
+  test-unix:
+
+    strategy:
+    fail-fast: false
+    matrix:
+      platform:
+      - ubuntu
+      - macOS
+      go:
+      - 1.15.x
+      - 1.16.x
+    name: '${{ matrix.platform }} | ${{ matrix.go }}'
+    runs-on: ${{ matrix.platform }}-latest
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      -
+        name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go }}
+      -
+        name: Test
+        run: go test -v ./...
