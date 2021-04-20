@@ -16,6 +16,7 @@
 
 ### build
 ```rein build -o /path/to/your/directory```
+
 with forced directory creation
 ```rein build -o /path/to/your/directory --force```
 
