@@ -30,7 +30,6 @@ func (c *Chamber) EncodeWith(w io.Writer, pretty bool) error {
 }
 
 // FindByName will return the first child or nth-grandchild with the matching name.
-// Will not include itself in the search.
 func (c *Chamber) FindByName(name string) *Chamber {
 	queue := make([]*Chamber, 0)
 	queue = append(queue, c)
