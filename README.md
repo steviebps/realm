@@ -16,6 +16,8 @@
 
 ### build
 ```rein build -o /path/to/your/directory```
+with forced directory creation
+```rein build -o /path/to/your/directory --force```
 
 #### Pipe into an archive: 
 ```rein build | tar zcf archive.tar.gz -T -```
