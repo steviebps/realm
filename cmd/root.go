@@ -84,6 +84,7 @@ func initConfig() {
 	}
 }
 
+// sets up the config for all sub-commands
 func configPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
 	var err error
