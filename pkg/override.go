@@ -27,6 +27,10 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 
 	*o = alias.toOverride()
 
+	if o.Value == nil {
+		return errors.New("Override value cannot be empty/nil")
+	}
+
 	if isValidMin := semver.IsValid(o.MinimumVersion); !isValidMin {
 		errMsg := fmt.Sprintf("%q is not a valid semantic version", o.MinimumVersion)
 		return errors.New(errMsg)
