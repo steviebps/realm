@@ -30,6 +30,7 @@ var rootCmd = &cobra.Command{
 	Use:               "rein",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
+	PersistentPreRun:  configPreRun,
 	DisableAutoGenTag: true,
 	Version:           Version,
 }
