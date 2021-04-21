@@ -80,7 +80,11 @@ func TestInheritWith(t *testing.T) {
 	// should not inherit an already existent key
 	bottom.InheritWith(middle.Toggles)
 
+	if len(middle.Toggles) != 1 {
+		t.Errorf("%q did not inherit properly from %q", middle.Name, top.Name)
+	}
+
 	if len(bottom.Toggles) != 2 {
-		t.Errorf("%q did not inherit properly from %q", bottom.Name, top.Name)
+		t.Errorf("%q did not inherit properly from %q", bottom.Name, middle.Name)
 	}
 }
