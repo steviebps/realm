@@ -30,6 +30,7 @@ var rootCmd = &cobra.Command{
 	Use:               "rein",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
+	PersistentPreRun:  configPreRun,
 	DisableAutoGenTag: true,
 	Version:           Version,
 }
@@ -83,6 +84,7 @@ func initConfig() {
 	}
 }
 
+// sets up the config for all sub-commands
 func configPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
 	var err error

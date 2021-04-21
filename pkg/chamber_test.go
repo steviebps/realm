@@ -48,7 +48,7 @@ func TestInheritWith(t *testing.T) {
 	bottom := &Chamber{
 		Name: "BOTTOM",
 		Toggles: map[string]*Toggle{
-			"toggle2": &Toggle{
+			"toggle2": {
 				Name:       "toggle1",
 				ToggleType: "boolean",
 				Value:      false,
@@ -58,7 +58,7 @@ func TestInheritWith(t *testing.T) {
 	top := &Chamber{
 		Name: "TOP",
 		Toggles: map[string]*Toggle{
-			"toggle1": &Toggle{
+			"toggle1": {
 				Name:       "toggle1",
 				ToggleType: "boolean",
 				Value:      false,
@@ -68,7 +68,7 @@ func TestInheritWith(t *testing.T) {
 	middle := &Chamber{
 		Name: "MIDDLE",
 		Toggles: map[string]*Toggle{
-			"toggle1": &Toggle{
+			"toggle1": {
 				Name:       "toggle1",
 				ToggleType: "boolean",
 				Value:      false,
@@ -80,7 +80,11 @@ func TestInheritWith(t *testing.T) {
 	// should not inherit an already existent key
 	bottom.InheritWith(middle.Toggles)
 
+	if len(middle.Toggles) != 1 {
+		t.Errorf("%q did not inherit properly from %q", middle.Name, top.Name)
+	}
+
 	if len(bottom.Toggles) != 2 {
-		t.Errorf("%q did not inherit properly from %q", bottom.Name, top.Name)
+		t.Errorf("%q did not inherit properly from %q", bottom.Name, middle.Name)
 	}
 }

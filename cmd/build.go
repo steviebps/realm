@@ -23,7 +23,6 @@ var buildCmd = &cobra.Command{
 	Short:   "Build chambers with inherited toggles",
 	Long:    `Build command will take your chamber configs and compile them with their inherited values`,
 	Example: "rein build -o /path/to/your/directory",
-	PreRun:  configPreRun,
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
 		outputDir, _ := cmd.Flags().GetString("output-dir")
