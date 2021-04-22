@@ -3,6 +3,7 @@ package rein
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -86,6 +87,10 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 
 	if c.Name == "" {
 		return errors.New("Chambers must have a name")
+	}
+
+	if c.IsApp && len(c.Children) > 0 {
+		return fmt.Errorf("%q is an app and cannot have children. Set isApp to false to allow children", c.Name)
 	}
 
 	return nil
