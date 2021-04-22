@@ -1,5 +1,5 @@
 {
-  "name": "TOP",
+  "name": "root",
   "isBuildable": false,
   "isApp": false,
   "toggles": {
@@ -41,7 +41,7 @@
   },
   "children": [
     {
-      "name": "MIDDLE",
+      "name": "middle",
       "isBuildable": true,
       "isApp": false,
       "toggles": {
@@ -60,7 +60,7 @@
       },
       "children": [
         {
-          "name": "BOTTOM",
+          "name": "app1",
           "isBuildable": false,
           "isApp": true,
           "toggles": {
@@ -76,7 +76,7 @@
       ]
     },
     {
-      "name": "MIDDLE2",
+      "name": "middle2",
       "isBuildable": false,
       "isApp": false,
       "toggles": {
@@ -89,7 +89,7 @@
       },
       "children": [
         {
-          "name": "BOTTOM2",
+          "name": "app2",
           "isBuildable": true,
           "isApp": true,
           "toggles": {
