@@ -32,19 +32,16 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 	}
 
 	if isValidMin := semver.IsValid(o.MinimumVersion); !isValidMin {
-		errMsg := fmt.Sprintf("%q is not a valid semantic version", o.MinimumVersion)
-		return errors.New(errMsg)
+		return fmt.Errorf("%q is not a valid semantic version", o.MinimumVersion)
 	}
 
 	if isValidMax := semver.IsValid(o.MaximumVersion); !isValidMax {
-		errMsg := fmt.Sprintf("%q is not a valid semantic version", o.MaximumVersion)
-		return errors.New(errMsg)
+		return fmt.Errorf("%q is not a valid semantic version", o.MaximumVersion)
 	}
 
 	// if minimum version is greater than maximum version
 	if semver.Compare(o.MinimumVersion, o.MaximumVersion) == 1 {
-		errMsg := fmt.Sprintf("An override with the minimum version of %v is greater than its maximum version (%v)", o.MinimumVersion, o.MaximumVersion)
-		return errors.New(errMsg)
+		return fmt.Errorf("An override with the minimum version of %v is greater than its maximum version (%v)", o.MinimumVersion, o.MaximumVersion)
 	}
 
 	return nil

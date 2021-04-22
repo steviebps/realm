@@ -1,7 +1,6 @@
 package rein
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -20,8 +19,7 @@ func NewVersion(v string) (*Version, error) {
 
 	parts := strings.SplitN(v, ".", 3)
 	if len(parts) != 3 {
-		errMsg := fmt.Sprintf("Invalid semantic version. %q must contain at least 3 parts (X.X.X)", v)
-		return nil, errors.New(errMsg)
+		return nil, fmt.Errorf("Invalid semantic version. %q must contain at least 3 parts (X.X.X)", v)
 	}
 
 	version := &Version{
