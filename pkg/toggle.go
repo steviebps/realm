@@ -77,9 +77,10 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 
 // GetValue returns the value for the given version. Will return default value if no override is present for the specified version
 func (t *Toggle) GetValue(version string) interface{} {
-
-	if override := t.GetOverride(version); override != nil {
-		return override.Value
+	if version != "" {
+		if override := t.GetOverride(version); override != nil {
+			return override.Value
+		}
 	}
 
 	return t.Value
