@@ -63,14 +63,30 @@ func (c *Chamber) InheritWith(inherited map[string]*Toggle) {
 }
 
 // TraverseAndBuild will traverse all children Chambers and trickle down all Toggles with a callback
-func (c *Chamber) TraverseAndBuild(callback func(*Chamber)) {
+// will stop traversing if the callback returns true
+func (c *Chamber) TraverseAndBuild(callback func(*Chamber) bool) {
 
-	callback(c)
+	// if callback returns true, stop traversing
+	// consumer was only looking to build up to this point
+	if callback(c) {
+		return
+	}
 
 	for i := range c.Children {
 		c.Children[i].InheritWith(c.Toggles)
 		c.Children[i].TraverseAndBuild(callback)
 	}
+}
+
+func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} {
+	var t *Toggle
+	var ok bool
+
+	if t, ok = c.Toggles[toggleName]; !ok {
+		return nil
+	}
+
+	return t.GetValue(version)
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Chamber

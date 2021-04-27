@@ -60,7 +60,7 @@ var buildCmd = &cobra.Command{
 
 func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 
-	parent.TraverseAndBuild(func(c *rein.Chamber) {
+	parent.TraverseAndBuild(func(c *rein.Chamber) bool {
 
 		searchingByName := chamberName != ""
 		foundByName := chamberName == c.Name
@@ -80,6 +80,7 @@ func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 				}
 			}()
 		}
+		return foundByName
 	})
 }
 
