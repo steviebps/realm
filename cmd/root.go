@@ -56,8 +56,8 @@ func init() {
 
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "rein configuration file")
-	rootCmd.PersistentFlags().StringP("version", "v", "", "runs all commands with a specified version")
-	viper.BindPFlag("version", rootCmd.PersistentFlags().Lookup("version"))
+	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
+	viper.BindPFlag("app-version", rootCmd.PersistentFlags().Lookup("app-version"))
 }
 
 // initConfig reads in config file and ENV variables if set.
