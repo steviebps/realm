@@ -16,7 +16,7 @@ var getCmdError = logger.ErrorWithPrefix("Error running get command: ")
 var getCmd = &cobra.Command{
 	Use:   "get",
 	Short: "get a value of a toggle",
-	Long:  `we'll figure this out`,
+	Long:  "retrieves and prints the value of the specified toggle within the specified chamber",
 	Run: func(cmd *cobra.Command, args []string) {
 		var value interface{}
 		version := viper.GetString("version")
@@ -43,8 +43,8 @@ var getCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(getCmd)
 
-	getCmd.Flags().StringP("toggle", "t", "", "get the specified toggle value")
-	getCmd.Flags().StringP("chamber", "c", "", "retrieves toggle from specified chamber")
+	getCmd.Flags().StringP("chamber", "c", "", "chamber to retrieve toggle from")
+	getCmd.Flags().StringP("toggle", "t", "", "toggle name to retrieve")
 
 	getCmd.MarkFlagRequired("toggle")
 	getCmd.MarkFlagRequired("chamber")
