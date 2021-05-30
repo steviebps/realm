@@ -7,8 +7,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-
-	rein "github.com/steviebps/rein/pkg"
 )
 
 // IsURL returns whether the string is a valid url with a host and scheme
@@ -37,19 +35,7 @@ func Exists(name string) bool {
 	return true
 }
 
-// WriteChamberToFile Saves the chamber to the file specified
-func WriteChamberToFile(fileName string, c rein.Chamber, pretty bool) error {
-	bw, file := OpenFileWriter(fileName)
-	c.EncodeWith(bw, pretty)
-	bw.Flush()
-
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func OpenFileWriter(fileName string) (*bufio.Writer, *os.File) {
+func openFileWriter(fileName string) (*bufio.Writer, *os.File) {
 	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		fmt.Printf("Error opening file: %v\n", err)
@@ -58,8 +44,8 @@ func OpenFileWriter(fileName string) (*bufio.Writer, *os.File) {
 	return bufio.NewWriter(file), file
 }
 
-func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
-	bw, file := OpenFileWriter(fileName)
+func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) error {
+	bw, file := openFileWriter(fileName)
 	enc := json.NewEncoder(bw)
 
 	if pretty {
@@ -67,18 +53,19 @@ func WriteInterfaceToFile(fileName string, i interface{}, pretty bool) {
 	}
 
 	if err := enc.Encode(i); err != nil {
-		fmt.Printf("Encoding error: %v\n", err)
+		return err
 	}
 
 	bw.Flush()
 
 	if err := file.Close(); err != nil {
-		fmt.Printf("Error closing file: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+
+	return nil
 }
 
-func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) {
+func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
 	bw := bufio.NewWriter(w)
 	enc := json.NewEncoder(bw)
 
@@ -87,8 +74,9 @@ func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) {
 	}
 
 	if err := enc.Encode(i); err != nil {
-		fmt.Printf("Encoding error: %v\n", err)
+		return err
 	}
 
 	bw.Flush()
+	return nil
 }

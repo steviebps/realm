@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 )
 
 // Chamber is a Tree Node struct that contain Toggles and children Chambers
@@ -16,19 +15,19 @@ type Chamber struct {
 	Children    []*Chamber         `json:"children"`
 }
 
-// EncodeWith takes a writer and encodes JSON to that writer
-func (c *Chamber) EncodeWith(w io.Writer, pretty bool) error {
-	enc := json.NewEncoder(w)
-	if pretty {
-		enc.SetIndent("", "  ")
-	}
+// // EncodeWith takes a writer and encodes JSON to that writer
+// func (c *Chamber) EncodeWith(w io.Writer, pretty bool) error {
+// 	enc := json.NewEncoder(w)
+// 	if pretty {
+// 		enc.SetIndent("", "  ")
+// 	}
 
-	if err := enc.Encode(c); err != nil {
-		return err
-	}
+// 	if err := enc.Encode(c); err != nil {
+// 		return err
+// 	}
 
-	return nil
-}
+// 	return nil
+// }
 
 // FindByName will return the first child or nth-grandchild with the matching name. BFS.
 func (c *Chamber) FindByName(name string) *Chamber {
@@ -62,8 +61,8 @@ func (c *Chamber) InheritWith(inherited map[string]*Toggle) {
 	}
 }
 
-// TraverseAndBuild will traverse all children Chambers and trickle down all Toggles with a callback
-// will stop traversing if the callback returns true
+// TraverseAndBuild will traverse all Chambers while inheriting their parent Toggles and executes a callback on each Chamber node.
+// Traversing will stop if callback returns true.
 func (c *Chamber) TraverseAndBuild(callback func(*Chamber) bool) {
 
 	// if callback returns true, stop traversing

@@ -73,9 +73,15 @@ func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 			go func() {
 				defer wg.Done()
 				if toStdout {
-					utils.WriteInterfaceWith(os.Stdout, c.Toggles, true)
+					if err := utils.WriteInterfaceWith(os.Stdout, c.Toggles, true); err != nil {
+						buildCmdError(err.Error())
+						os.Exit(1)
+					}
 				} else {
-					utils.WriteInterfaceToFile(fileName, c.Toggles, true)
+					if err := utils.WriteInterfaceToFile(fileName, c.Toggles, true); err != nil {
+						buildCmdError(err.Error())
+						os.Exit(1)
+					}
 					fmt.Println(fileName)
 				}
 			}()

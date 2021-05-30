@@ -19,12 +19,12 @@ var printCmd = &cobra.Command{
 		output, _ := cmd.Flags().GetString("output")
 
 		if output != "" {
-			if err := utils.WriteChamberToFile(output, globalChamber, pretty); err != nil {
+			if err := utils.WriteInterfaceToFile(output, globalChamber, pretty); err != nil {
 				printCmdError(err.Error())
 				os.Exit(1)
 			}
 		} else {
-			if err := globalChamber.EncodeWith(cmd.OutOrStdout(), pretty); err != nil {
+			if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), globalChamber, pretty); err != nil {
 				printCmdError(err.Error())
 				os.Exit(1)
 			}
