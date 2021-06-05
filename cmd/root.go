@@ -96,7 +96,7 @@ func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
 
 	file, err := os.Open(fileName)
 	if err != nil {
-		return nil, fmt.Errorf("Could not open file %q: %v", fileName, err)
+		return nil, fmt.Errorf("Could not open file %q: %w", fileName, err)
 	}
 
 	return file, nil
