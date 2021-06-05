@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 
@@ -87,13 +86,7 @@ func initConfig() {
 }
 
 func retrieveRemoteConfig(url string) (*http.Response, error) {
-	res, err := http.Get(url)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
+	return http.Get(url)
 }
 
 func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
@@ -133,7 +126,7 @@ func configPreRun(cmd *cobra.Command, args []string) {
 	}
 	defer jsonFile.Close()
 
-	byteValue, err := ioutil.ReadAll(jsonFile)
+	byteValue, err := io.ReadAll(jsonFile)
 	if err != nil {
 		logger.ErrorString(fmt.Sprintf("Error reading file %q: %v", chamberFile, err))
 		os.Exit(1)
