@@ -93,15 +93,14 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 
 	var alias chamberAlias
 
-	err := json.Unmarshal(b, &alias)
-	if err != nil {
+	if err := json.Unmarshal(b, &alias); err != nil {
 		return err
 	}
 
-	*c = alias.toOverride()
+	*c = alias.toChamber()
 
 	if c.Name == "" {
-		return errors.New("Chambers must have a name")
+		return errors.New("All Chambers must have a name")
 	}
 
 	if c.IsApp && len(c.Children) > 0 {
@@ -113,7 +112,7 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 
 type chamberAlias Chamber
 
-func (c chamberAlias) toOverride() Chamber {
+func (c chamberAlias) toChamber() Chamber {
 	return Chamber{
 		Name:        c.Name,
 		IsBuildable: c.IsBuildable,
