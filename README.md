@@ -1,5 +1,7 @@
 # rein
 
+[![release](https://github.com/steviebps/rein/actions/workflows/go.yml/badge.svg)](https://github.com/steviebps/rein/actions/workflows/go.yml)
+
 ```go  get -u github.com/steviebps/rein```
 
 
