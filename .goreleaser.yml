@@ -6,7 +6,7 @@ before:
 builds:
   - env:
       - CGO_ENABLED=0
-    dir: ./rein
+    main: ./rein
     goos:
       - linux
       - windows
