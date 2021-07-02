@@ -1,0 +1,23 @@
+{
+    "name": "root",
+    "isBuildable": false,
+    "isApp": false,
+    "toggles": {
+        "port": {
+            "name": "port",
+            "type": "number",
+            "value": 80,
+            "overrides": [
+                {
+                    "minimumVersion": "v0.0.1",
+                    "maximumVersion": "v2.0.0",
+                    "value": 3000
+                },
+                {
+                    "minimumVersion": "v2.0.0",
+                    "maximumVersion": "v3.0.0",
+                    "value": 3001
+                }
+            ]
+        }
+    }
