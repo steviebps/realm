@@ -8,9 +8,14 @@ import (
 	rein "github.com/steviebps/rein/pkg"
 )
 
+func handler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Executing handler:", r.RemoteAddr)
+	w.Write([]byte("OK"))
+}
+
 func main() {
-	fs := http.FileServer(http.Dir("./static"))
-	http.Handle("/", fs)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", handler)
 
 	rein.SetVersion("v1.0.0")
 
@@ -25,7 +30,7 @@ func main() {
 	port := rein.Float64Value("port", 3000)
 
 	log.Println("Listening on :", port)
-	err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), nil)
+	err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
 	if err != nil {
 		log.Fatal(err)
 	}
