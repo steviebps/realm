@@ -29,6 +29,7 @@ func newConfig() *Config {
 	return &Config{}
 }
 
+// SetVersion sets the version to use for the current config
 func SetVersion(version string) error { return config.SetVersion(version) }
 
 func (cfg *Config) SetVersion(version string) error {
@@ -40,6 +41,7 @@ func (cfg *Config) SetVersion(version string) error {
 	return nil
 }
 
+// AddConfigPath adds a file path to be look for the config when initializing
 func AddConfigPath(path string) error { return config.AddConfigPath(path) }
 
 func (cfg *Config) AddConfigPath(filePath string) error {
@@ -55,6 +57,7 @@ func (cfg *Config) AddConfigPath(filePath string) error {
 	return nil
 }
 
+// ReadInConfig attempts to read in the first valid file from all of the config files added by AddConfigPath
 func ReadInConfig() error { return config.ReadInConfig() }
 
 func (cfg *Config) ReadInConfig() error {
@@ -91,6 +94,7 @@ func (cfg *Config) ReadInConfig() error {
 	return nil
 }
 
+// BoolValue retrieves a bool by the key of the toggle and takes a default value if it does not exist
 func BoolValue(toggleKey string, defaultValue bool) bool {
 	return config.BoolValue(toggleKey, defaultValue)
 }
@@ -104,6 +108,7 @@ func (cfg *Config) BoolValue(toggleKey string, defaultValue bool) bool {
 	return cBool
 }
 
+// StringValue retrieves a string by the key of the toggle and takes a default value if it does not exist
 func StringValue(toggleKey string, defaultValue string) string {
 	return config.StringValue(toggleKey, defaultValue)
 }
