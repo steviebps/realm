@@ -19,7 +19,13 @@ var printCmd = &cobra.Command{
 		output, _ := cmd.Flags().GetString("output")
 
 		if output != "" {
-			if err := utils.WriteInterfaceToFile(output, globalChamber, pretty); err != nil {
+			file, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+			if err != nil {
+				buildCmdError(err.Error())
+				os.Exit(1)
+			}
+
+			if err := utils.WriteInterfaceWith(file, globalChamber, pretty); err != nil {
 				printCmdError(err.Error())
 				os.Exit(1)
 			}

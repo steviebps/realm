@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/spf13/cobra"
 	"github.com/steviebps/rein/internal/logger"
@@ -24,41 +23,46 @@ var buildCmd = &cobra.Command{
 	Long:    `Build command will take your chamber configs and compile them with their inherited values`,
 	Example: "rein build -o /path/to/your/directory",
 	Run: func(cmd *cobra.Command, args []string) {
-		var err error
 		outputDir, _ := cmd.Flags().GetString("output-dir")
 		forceCreateDir, _ := cmd.Flags().GetBool("force")
 		chamberName, _ = cmd.Flags().GetString("chamber")
 		toStdout, _ = cmd.Flags().GetBool("to-stdout")
 
-		// defaults to working directory
-		if outputDir == "" {
-			outputDir, err = os.Getwd()
+		var fullPath string
+
+		if !toStdout {
+			fullPath, err := getOutputDirectory(outputDir)
 			if err != nil {
 				buildCmdError(err.Error())
 				os.Exit(1)
 			}
-		}
 
-		outputDir, _ = filepath.Abs(outputDir)
-
-		if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-			if forceCreateDir {
-				os.Mkdir(outputDir, 0700)
-			} else {
-				buildCmdError(fmt.Sprintf("Directory %v does not exist", outputDir))
-				logger.InfoString(fmt.Sprintf("\nTry running: \"rein build --output-dir %v --force\" to force create the directory", outputDir))
-				os.Exit(1)
+			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				if forceCreateDir {
+					os.Mkdir(fullPath, 0700)
+				} else {
+					buildCmdError(fmt.Sprintf("Directory %v does not exist", fullPath))
+					logger.InfoString(fmt.Sprintf("\nTry running: \"rein build --output-dir %v --force\" to force create the directory", outputDir))
+					os.Exit(1)
+				}
 			}
 		}
 
-		var wg sync.WaitGroup
-		build(&globalChamber, &wg, outputDir)
-		wg.Wait()
+		build(&globalChamber, fullPath, cmd)
 		os.Exit(0)
 	},
 }
 
-func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
+func getOutputDirectory(outputDir string) (string, error) {
+	// defaults to working directory
+	if outputDir == "" {
+		return os.Getwd()
+	}
+
+	return filepath.Abs(outputDir)
+}
+
+func build(parent *rein.Chamber, fullPath string, cmd *cobra.Command) {
 
 	parent.TraverseAndBuild(func(c *rein.Chamber) bool {
 
@@ -67,24 +71,27 @@ func build(parent *rein.Chamber, wg *sync.WaitGroup, outputDir string) {
 
 		if foundByName || (!searchingByName && (c.IsBuildable || c.IsApp)) {
 
-			fileName := outputDir + "/" + c.Name + ".json"
-
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				if toStdout {
-					if err := utils.WriteInterfaceWith(os.Stdout, c.Toggles, true); err != nil {
-						buildCmdError(err.Error())
-						os.Exit(1)
-					}
-				} else {
-					if err := utils.WriteInterfaceToFile(fileName, c.Toggles, true); err != nil {
-						buildCmdError(err.Error())
-						os.Exit(1)
-					}
-					fmt.Println(fileName)
+			if toStdout {
+				if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), c.Toggles, true); err != nil {
+					buildCmdError(err.Error())
+					os.Exit(1)
 				}
-			}()
+			} else {
+				fileName := fullPath + "/" + c.Name + ".json"
+				file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+				if err != nil {
+					buildCmdError(err.Error())
+					os.Exit(1)
+				}
+
+				if err := utils.WriteInterfaceWith(file, c.Toggles, true); err != nil {
+					buildCmdError(err.Error())
+					os.Exit(1)
+				}
+
+				fmt.Println(fileName)
+			}
+
 		}
 		return foundByName
 	})
