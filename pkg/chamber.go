@@ -100,7 +100,7 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 	*c = alias.toChamber()
 
 	if c.Name == "" {
-		return errors.New("All Chambers must have a name")
+		return errors.New("all chambers must have a name")
 	}
 
 	if c.IsApp && len(c.Children) > 0 {
@@ -113,11 +113,5 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 type chamberAlias Chamber
 
 func (c chamberAlias) toChamber() Chamber {
-	return Chamber{
-		Name:        c.Name,
-		IsBuildable: c.IsBuildable,
-		IsApp:       c.IsApp,
-		Toggles:     c.Toggles,
-		Children:    c.Children,
-	}
+	return Chamber(c)
 }

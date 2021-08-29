@@ -48,7 +48,7 @@ func (cfg *Config) AddConfigPath(filePath string) error {
 	}
 
 	if path.Ext(filePath) != ".json" {
-		return fmt.Errorf("%q is not an acceptable file extension. Please use JSON.", filePath)
+		return fmt.Errorf("%q is not an acceptable file extension. Please use JSON", filePath)
 	}
 
 	cfg.configPaths = append(config.configPaths, filePath)
@@ -72,18 +72,18 @@ func (cfg *Config) ReadInConfig() error {
 	}
 
 	if rc == nil {
-		return fmt.Errorf("Error reading file %q", cfg.configFileUsed)
+		return fmt.Errorf("error reading file %q", cfg.configFileUsed)
 	}
 
 	byteValue, err := io.ReadAll(rc)
 	if err != nil {
-		wrappedErr := fmt.Errorf("Error reading file %q: %w", cfg.configFileUsed, err)
+		wrappedErr := fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
 		logger.ErrorString(wrappedErr.Error())
 		return wrappedErr
 	}
 
 	if err := json.Unmarshal(byteValue, &cfg.rootChamber); err != nil {
-		wrappedErr := fmt.Errorf("Error reading file %q: %w", cfg.configFileUsed, err)
+		wrappedErr := fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
 		logger.ErrorString(wrappedErr.Error())
 		return wrappedErr
 	}
@@ -117,6 +117,7 @@ func (cfg *Config) StringValue(toggleKey string, defaultValue string) string {
 	return cStr
 }
 
+// Float64Value retrieves a float64 by the key of the toggle and takes a default value if it does not exist
 func Float64Value(toggleKey string, defaultValue float64) float64 {
 	return config.Float64Value(toggleKey, defaultValue)
 }
@@ -137,7 +138,7 @@ func (cfg *Config) Float64Value(toggleKey string, defaultValue float64) float64 
 func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("Could not open file %q: %w", fileName, err)
+		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
 	}
 
 	return file, nil

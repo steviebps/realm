@@ -41,7 +41,7 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 
 	// if minimum version is greater than maximum version
 	if semver.Compare(o.MinimumVersion, o.MaximumVersion) == 1 {
-		return fmt.Errorf("An override with the minimum version of %v is greater than its maximum version (%v)", o.MinimumVersion, o.MaximumVersion)
+		return fmt.Errorf("an override with the minimum version of %v is greater than its maximum version (%v)", o.MinimumVersion, o.MaximumVersion)
 	}
 
 	return nil
@@ -50,9 +50,5 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 type overrideAlias Override
 
 func (o overrideAlias) toOverride() Override {
-	return Override{
-		o.MinimumVersion,
-		o.MaximumVersion,
-		o.Value,
-	}
+	return Override(o)
 }

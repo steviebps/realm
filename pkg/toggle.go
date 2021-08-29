@@ -20,12 +20,7 @@ type Toggle struct {
 type toggleAlias Toggle
 
 func (t toggleAlias) toToggle() Toggle {
-	return Toggle{
-		t.Name,
-		t.ToggleType,
-		t.Value,
-		t.Overrides,
-	}
+	return Toggle(t)
 }
 
 // IsValidValue determines whether or not the passed value's type matches the ToggleType
@@ -62,7 +57,7 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	for _, override := range t.Overrides {
 		// overrides should not overlap
 		if previous != nil && semver.Compare(previous.MaximumVersion, override.MinimumVersion) == 1 {
-			return fmt.Errorf("An override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)
+			return fmt.Errorf("an override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)
 		}
 
 		if !t.IsValidValue(override.Value) {
