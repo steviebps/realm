@@ -29,15 +29,16 @@ var buildCmd = &cobra.Command{
 		toStdout, _ = cmd.Flags().GetBool("to-stdout")
 
 		var fullPath string
+		var err error
 
 		if !toStdout {
-			fullPath, err := getOutputDirectory(outputDir)
+			fullPath, err = getOutputDirectory(outputDir)
 			if err != nil {
 				buildCmdError(err.Error())
 				os.Exit(1)
 			}
 
-			if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			if _, err = os.Stat(fullPath); os.IsNotExist(err) {
 				if forceCreateDir {
 					os.Mkdir(fullPath, 0700)
 				} else {
