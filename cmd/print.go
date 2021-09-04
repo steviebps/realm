@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -13,27 +14,26 @@ var printCmdError = logger.ErrorWithPrefix("Error running print command: ")
 // printCmd represents the print command
 var printCmd = &cobra.Command{
 	Use:   "print",
-	Short: "Print all Chambers",
+	Short: "Print all chambers",
+	Long:  "Print all chambers as they exist without inheritence",
 	Run: func(cmd *cobra.Command, args []string) {
 		pretty, _ := cmd.Flags().GetBool("pretty")
 		output, _ := cmd.Flags().GetString("output")
 
+		var w io.Writer = cmd.OutOrStdout()
+		var err error
+
 		if output != "" {
-			file, err := os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+			w, err = os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 			if err != nil {
 				buildCmdError(err.Error())
 				os.Exit(1)
 			}
+		}
 
-			if err := utils.WriteInterfaceWith(file, globalChamber, pretty); err != nil {
-				printCmdError(err.Error())
-				os.Exit(1)
-			}
-		} else {
-			if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), globalChamber, pretty); err != nil {
-				printCmdError(err.Error())
-				os.Exit(1)
-			}
+		if err = utils.WriteInterfaceWith(w, globalChamber, pretty); err != nil {
+			printCmdError(err.Error())
+			os.Exit(1)
 		}
 
 		os.Exit(0)
