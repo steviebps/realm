@@ -15,8 +15,8 @@ var getCmdError = logger.ErrorWithPrefix("Error running get command: ")
 // getCmd represents the get command
 var getCmd = &cobra.Command{
 	Use:   "get",
-	Short: "get a value of a toggle",
-	Long:  "retrieves and prints the value of the specified toggle within the specified chamber",
+	Short: "Get a value of a toggle",
+	Long:  "Retrieves and prints the value of the specified toggle within the specified chamber",
 	Run: func(cmd *cobra.Command, args []string) {
 		var value interface{}
 		version := viper.GetString("version")
