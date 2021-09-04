@@ -142,7 +142,10 @@ func (cfg *Config) Float64Value(toggleKey string, defaultValue float64) float64 
 
 func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
-	if errors.Is(err, os.ErrNotExist) {
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("could not open file %q because it does not exist", fileName)
+		}
 		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
 	}
 

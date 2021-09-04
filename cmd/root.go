@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 
 var home string
 var cfgFile string
-var chamber string
 var globalChamber = rein.Chamber{Toggles: map[string]*rein.Toggle{}, Children: []*rein.Chamber{}}
 
 // Version the version of rein
@@ -90,13 +90,12 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 }
 
 func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
-	if !utils.Exists(fileName) {
-		return nil, fmt.Errorf("Could not find file %q", fileName)
-	}
-
-	file, err := os.Open(fileName)
+	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if err != nil {
-		return nil, fmt.Errorf("Could not open file %q: %w", fileName, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("could not open file %q because it does not exist", fileName)
+		}
+		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
 	}
 
 	return file, nil
