@@ -27,6 +27,7 @@ var buildCmd = &cobra.Command{
 		forceCreateDir, _ := cmd.Flags().GetBool("force")
 		chamberName, _ = cmd.Flags().GetString("chamber")
 		toStdout, _ = cmd.Flags().GetBool("to-stdout")
+		version, _ := cmd.Flags().GetString("app-version")
 
 		var fullPath string
 		var err error
@@ -49,7 +50,7 @@ var buildCmd = &cobra.Command{
 			}
 		}
 
-		build(&globalChamber, fullPath, cmd)
+		build(&globalChamber, fullPath, version, cmd)
 		os.Exit(0)
 	},
 }
@@ -63,17 +64,29 @@ func getOutputDirectory(outputDir string) (string, error) {
 	return filepath.Abs(outputDir)
 }
 
-func build(parent *rein.Chamber, fullPath string, cmd *cobra.Command) {
+func build(parent *rein.Chamber, fullPath string, version string, cmd *cobra.Command) {
 
-	parent.TraverseAndBuild(func(c *rein.Chamber) bool {
+	parent.TraverseAndBuild(func(c rein.Chamber) bool {
 
 		searchingByName := chamberName != ""
 		foundByName := chamberName == c.Name
 
 		if foundByName || (!searchingByName && (c.IsBuildable || c.IsApp)) {
 
+			// remove children when building
+			c.Children = nil
+
+			// bake the value at the specified version into the built file
+			// this is for generating a built config without needing the app's version at runtime
+			if version != "" {
+				for _, t := range c.Toggles {
+					t.Value = t.GetValue(version)
+					t.Overrides = nil
+				}
+			}
+
 			if toStdout {
-				if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), c.Toggles, true); err != nil {
+				if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), c, true); err != nil {
 					buildCmdError(err.Error())
 					os.Exit(1)
 				}
@@ -85,7 +98,7 @@ func build(parent *rein.Chamber, fullPath string, cmd *cobra.Command) {
 					os.Exit(1)
 				}
 
-				if err := utils.WriteInterfaceWith(file, c.Toggles, true); err != nil {
+				if err := utils.WriteInterfaceWith(file, c, true); err != nil {
 					buildCmdError(err.Error())
 					os.Exit(1)
 				}
