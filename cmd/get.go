@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"github.com/steviebps/rein/internal/logger"
 	rein "github.com/steviebps/rein/pkg"
 )
@@ -19,11 +18,11 @@ var getCmd = &cobra.Command{
 	Long:  "Retrieves and prints the value of the specified toggle within the specified chamber",
 	Run: func(cmd *cobra.Command, args []string) {
 		var value interface{}
-		version := viper.GetString("version")
+		version, _ := cmd.Flags().GetString("app-version")
 		toggle, _ := cmd.Flags().GetString("toggle")
 		chamberName, _ = cmd.Flags().GetString("chamber")
 
-		globalChamber.TraverseAndBuild(func(c *rein.Chamber) bool {
+		globalChamber.TraverseAndBuild(func(c rein.Chamber) bool {
 			if c.Name == chamberName {
 				value = c.GetToggleValue(toggle, version)
 			}
