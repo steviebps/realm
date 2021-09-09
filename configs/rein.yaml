@@ -1,2 +1,1 @@
-chamber: "/your/file/location/masterChamber.json"
-version: "v1.0.0"
+chamber: "/home/steve/go/src/github.com/steviebps/rein/configs/masterChamber.json"
