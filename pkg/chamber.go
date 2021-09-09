@@ -12,7 +12,7 @@ type Chamber struct {
 	IsBuildable bool               `json:"isBuildable"`
 	IsApp       bool               `json:"isApp"`
 	Toggles     map[string]*Toggle `json:"toggles"`
-	Children    []*Chamber         `json:"children"`
+	Children    []*Chamber         `json:"children,omitempty"`
 }
 
 // // EncodeWith takes a writer and encodes JSON to that writer
@@ -63,11 +63,11 @@ func (c *Chamber) InheritWith(inherited map[string]*Toggle) {
 
 // TraverseAndBuild will traverse all Chambers while inheriting their parent Toggles and executes a callback on each Chamber node.
 // Traversing will stop if callback returns true.
-func (c *Chamber) TraverseAndBuild(callback func(*Chamber) bool) {
+func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool) {
 
 	// if callback returns true, stop traversing
 	// consumer was only looking to build up to this point
-	if callback(c) {
+	if callback(*c) {
 		return
 	}
 
