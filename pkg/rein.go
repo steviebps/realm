@@ -136,6 +136,21 @@ func (cfg *config) Float64Value(toggleKey string, defaultValue float64) float64 
 	return cFloat64
 }
 
+// Float32Value retrieves a float32 by the key of the toggle and takes a default value if it does not exist
+// if the config value overflows the type requested, defaultValue will be returned
+func Float32Value(toggleKey string, defaultValue float64) float64 {
+	return c.Float64Value(toggleKey, defaultValue)
+}
+
+func (cfg *config) Float32Value(toggleKey string, defaultValue float32) float32 {
+	cFloat32, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float32)
+	if !ok {
+		return defaultValue
+	}
+
+	return cFloat32
+}
+
 // func retrieveRemoteConfig(url string) (*http.Response, error) {
 // 	return http.Get(url)
 // }
