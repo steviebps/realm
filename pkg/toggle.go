@@ -50,7 +50,7 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	*t = alias.toToggle()
 
 	if !t.IsValidValue(t.Value) {
-		return fmt.Errorf("%v (%T) not of the type \"%s\" from the toggle: %s", t.Value, t.Value, t.ToggleType, t.Name)
+		return fmt.Errorf("%v (%T) not of the type %q from the toggle: %s", t.Value, t.Value, t.ToggleType, t.Name)
 	}
 
 	var previous *Override
@@ -61,7 +61,7 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 		}
 
 		if !t.IsValidValue(override.Value) {
-			return fmt.Errorf("%v (%T) not of the type \"%s\" from the toggle override: %s", override.Value, override.Value, t.ToggleType, t.Name)
+			return fmt.Errorf("%v (%T) not of the type %q from the toggle override: %s", override.Value, override.Value, t.ToggleType, t.Name)
 		}
 
 		previous = override
