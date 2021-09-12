@@ -9,7 +9,6 @@ import (
 )
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Executing handler:", r.RemoteAddr)
 	message := rein.StringValue("message", "DEFAULT")
 	w.Write([]byte(message))
 }
