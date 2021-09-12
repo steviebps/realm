@@ -19,6 +19,12 @@
                     "value": 3001
                 }
             ]
+        },
+        "message": {
+            "name": "message",
+            "type": "string",
+            "value": "<html><body><h1>Hello, world!</h1></body></html>",
+            "overrides": []
         }
     }
 }
