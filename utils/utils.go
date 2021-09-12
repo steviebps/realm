@@ -3,6 +3,8 @@ package utils
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -46,4 +48,27 @@ func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
 
 	bw.Flush()
 	return nil
+}
+
+func ReadInterfaceWith(r io.Reader, i interface{}) error {
+	br := bufio.NewReader(r)
+	dec := json.NewDecoder(br)
+
+	if err := dec.Decode(i); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
+	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("could not open file %q because it does not exist", fileName)
+		}
+		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
+	}
+
+	return file, nil
 }
