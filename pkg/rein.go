@@ -84,14 +84,12 @@ func (cfg *config) ReadInConfig(watch bool) error {
 	}
 
 	if watch {
-		fmt.Println("Watching file...")
 		defer cfg.Watch()
 	}
 	return cfg.ReadConfig(rc)
 }
 
 func (cfg *config) ReadConfig(r io.Reader) error {
-	fmt.Println("read started")
 	var root Chamber
 	byteValue, err := io.ReadAll(r)
 	if err != nil {
@@ -119,8 +117,6 @@ func (cfg *config) ReadConfigFileUsed() error {
 }
 
 func (cfg *config) Watch() error {
-	fmt.Println("watch started")
-
 	if cfg.configFileUsed == "" {
 		return errors.New("a config file was not successfully read so it cannot be watched")
 	}
