@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -88,18 +86,6 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 	return http.Get(url)
 }
 
-func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
-	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("could not open file %q because it does not exist", fileName)
-		}
-		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
-	}
-
-	return file, nil
-}
-
 // sets up the config for all sub-commands
 func configPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
@@ -116,7 +102,7 @@ func configPreRun(cmd *cobra.Command, args []string) {
 		}
 		jsonFile = res.Body
 	} else {
-		jsonFile, err = retrieveLocalConfig(chamberFile)
+		jsonFile, err = utils.OpenLocalConfig(chamberFile)
 		if err != nil {
 			logger.ErrorString(fmt.Sprintf("Error retrieving local config: %v", err))
 			os.Exit(1)
@@ -124,14 +110,8 @@ func configPreRun(cmd *cobra.Command, args []string) {
 	}
 	defer jsonFile.Close()
 
-	byteValue, err := io.ReadAll(jsonFile)
-	if err != nil {
+	if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
 		logger.ErrorString(fmt.Sprintf("Error reading file %q: %v", chamberFile, err))
-		os.Exit(1)
-	}
-
-	if err := json.Unmarshal(byteValue, &globalChamber); err != nil {
-		logger.ErrorString(fmt.Sprintf("Error reading %q: %v", chamberFile, err))
 		os.Exit(1)
 	}
 }
