@@ -19,6 +19,7 @@ type config struct {
 	configPaths    []string
 	defaultVersion string
 	configFileUsed string
+	isWatching     bool
 }
 
 var c *config
@@ -115,9 +116,13 @@ func (cfg *config) Watch() error {
 		return errors.New("a config file was not successfully read so it cannot be watched")
 	}
 
+	if cfg.isWatching {
+		return errors.New("config is already being watched")
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		return errors.New("could not establish file watcher")
+		return fmt.Errorf("could not establish file watcher: %w", err)
 	}
 	// TODO: establish a way to end the file watching and close the watcher
 	// defer watcher.Close()
@@ -146,6 +151,7 @@ func (cfg *config) Watch() error {
 	if err != nil {
 		return fmt.Errorf("could not establish file watcher with file: %q", cfg.configFileUsed)
 	}
+	cfg.isWatching = true
 
 	return nil
 }
