@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path"
+	"sync"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/steviebps/rein/internal/logger"
 	"golang.org/x/mod/semver"
 )
 
 type config struct {
+	mu             sync.RWMutex
 	rootChamber    Chamber
 	configPaths    []string
 	defaultVersion string
@@ -50,7 +54,7 @@ func (cfg *config) AddConfigPath(filePath string) error {
 	}
 
 	if path.Ext(filePath) != ".json" {
-		return fmt.Errorf("%q is not an acceptable file extension. Please use JSON", filePath)
+		return fmt.Errorf("%q does not have an acceptable file extension. Please use JSON", filePath)
 	}
 
 	cfg.configPaths = append(c.configPaths, filePath)
@@ -58,37 +62,100 @@ func (cfg *config) AddConfigPath(filePath string) error {
 }
 
 // ReadInConfig attempts to read in the first valid file from all of the config files added by AddConfigPath
-func ReadInConfig() error { return c.ReadInConfig() }
+func ReadInConfig(watch bool) error { return c.ReadInConfig(watch) }
 
-func (cfg *config) ReadInConfig() error {
+func (cfg *config) ReadInConfig(watch bool) error {
 	var rc io.ReadCloser
 	var err error
 
 	for _, fileName := range cfg.configPaths {
-		rc, err = retrieveLocalConfig(fileName)
+		rc, err = openLocalConfig(fileName)
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Error reading file: %v", err))
+			logger.ErrorString(fmt.Sprintf("Error opening file: %v", err))
 			continue
 		}
+		defer rc.Close()
 		cfg.configFileUsed = fileName
 		break
 	}
 
 	if rc == nil {
-		return fmt.Errorf("error reading file %q", cfg.configFileUsed)
+		return fmt.Errorf("could not open any of the config paths: %v", cfg.configPaths)
 	}
 
-	byteValue, err := io.ReadAll(rc)
+	if watch {
+		fmt.Println("Watching file...")
+		defer cfg.Watch()
+	}
+	return cfg.ReadConfig(rc)
+}
+
+func (cfg *config) ReadConfig(r io.Reader) error {
+	fmt.Println("read started")
+	var root Chamber
+	byteValue, err := io.ReadAll(r)
 	if err != nil {
-		wrappedErr := fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
-		logger.ErrorString(wrappedErr.Error())
-		return wrappedErr
+		return fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
 	}
 
-	if err := json.Unmarshal(byteValue, &cfg.rootChamber); err != nil {
-		wrappedErr := fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
-		logger.ErrorString(wrappedErr.Error())
-		return wrappedErr
+	if err := json.Unmarshal(byteValue, &root); err != nil {
+		return fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
+	}
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+	cfg.rootChamber = root
+
+	return nil
+}
+
+func (cfg *config) ReadConfigFileUsed() error {
+	rc, err := openLocalConfig(cfg.configFileUsed)
+	if err != nil {
+		return fmt.Errorf("error opening file %q: %w", cfg.configFileUsed, err)
+	}
+	defer rc.Close()
+
+	return cfg.ReadConfig(rc)
+}
+
+func (cfg *config) Watch() error {
+	fmt.Println("watch started")
+
+	if cfg.configFileUsed == "" {
+		return errors.New("a config file was not successfully read so it cannot be watched")
+	}
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return errors.New("could not establish file watcher")
+	}
+	// TODO: establish a way to end the file watching and close the watcher
+	// defer watcher.Close()
+
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("modified file:", event.Name)
+					cfg.ReadConfigFileUsed()
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			}
+		}
+	}()
+
+	watcher.Add(cfg.configFileUsed)
+	if err != nil {
+		return fmt.Errorf("could not establish file watcher with file: %q", cfg.configFileUsed)
 	}
 
 	return nil
@@ -100,6 +167,8 @@ func BoolValue(toggleKey string, defaultValue bool) bool {
 }
 
 func (cfg *config) BoolValue(toggleKey string, defaultValue bool) bool {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
 	cBool, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(bool)
 	if !ok {
 		return defaultValue
@@ -114,6 +183,8 @@ func StringValue(toggleKey string, defaultValue string) string {
 }
 
 func (cfg *config) StringValue(toggleKey string, defaultValue string) string {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
 	cStr, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(string)
 	if !ok {
 		return defaultValue
@@ -128,6 +199,8 @@ func Float64Value(toggleKey string, defaultValue float64) float64 {
 }
 
 func (cfg *config) Float64Value(toggleKey string, defaultValue float64) float64 {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
 	cFloat64, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float64)
 	if !ok {
 		return defaultValue
@@ -143,6 +216,8 @@ func Float32Value(toggleKey string, defaultValue float64) float64 {
 }
 
 func (cfg *config) Float32Value(toggleKey string, defaultValue float32) float32 {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
 	cFloat32, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float32)
 	if !ok {
 		return defaultValue
@@ -155,7 +230,7 @@ func (cfg *config) Float32Value(toggleKey string, defaultValue float32) float32 
 // 	return http.Get(url)
 // }
 
-func retrieveLocalConfig(fileName string) (io.ReadCloser, error) {
+func openLocalConfig(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
