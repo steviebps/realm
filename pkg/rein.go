@@ -1,17 +1,15 @@
 package rein
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
-	"os"
 	"path"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/steviebps/rein/internal/logger"
+	"github.com/steviebps/rein/utils"
 	"golang.org/x/mod/semver"
 )
 
@@ -26,11 +24,7 @@ type config struct {
 var c *config
 
 func init() {
-	c = newConfig()
-}
-
-func newConfig() *config {
-	return &config{}
+	c = &config{}
 }
 
 // SetVersion sets the version to use for the current config
@@ -67,15 +61,16 @@ func ReadInConfig(watch bool) error { return c.ReadInConfig(watch) }
 func (cfg *config) ReadInConfig(watch bool) error {
 	var rc io.ReadCloser
 	var err error
+	var openedFileName string
 
 	for _, fileName := range cfg.configPaths {
-		rc, err = openLocalConfig(fileName)
+		rc, err = utils.OpenLocalConfig(fileName)
 		if err != nil {
 			logger.ErrorString(fmt.Sprintf("Error opening file: %v", err))
 			continue
 		}
 		defer rc.Close()
-		cfg.configFileUsed = fileName
+		openedFileName = fileName
 		break
 	}
 
@@ -86,34 +81,33 @@ func (cfg *config) ReadInConfig(watch bool) error {
 	if watch {
 		defer cfg.Watch()
 	}
-	return cfg.ReadConfig(rc)
+
+	return cfg.ReadChamber(rc, openedFileName)
 }
 
-func (cfg *config) ReadConfig(r io.Reader) error {
+func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
 	var root Chamber
-	byteValue, err := io.ReadAll(r)
-	if err != nil {
-		return fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
+
+	if err := utils.ReadInterfaceWith(r, &root); err != nil {
+		return fmt.Errorf("error reading file %q: %w", fileName, err)
 	}
 
-	if err := json.Unmarshal(byteValue, &root); err != nil {
-		return fmt.Errorf("error reading file %q: %w", cfg.configFileUsed, err)
-	}
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
 	cfg.rootChamber = root
+	cfg.configFileUsed = fileName
 
 	return nil
 }
 
 func (cfg *config) ReadConfigFileUsed() error {
-	rc, err := openLocalConfig(cfg.configFileUsed)
+	rc, err := utils.OpenLocalConfig(cfg.configFileUsed)
 	if err != nil {
 		return fmt.Errorf("error opening file %q: %w", cfg.configFileUsed, err)
 	}
 	defer rc.Close()
 
-	return cfg.ReadConfig(rc)
+	return cfg.ReadChamber(rc, cfg.configFileUsed)
 }
 
 func (cfg *config) Watch() error {
@@ -137,14 +131,13 @@ func (cfg *config) Watch() error {
 				}
 
 				if event.Op&fsnotify.Write == fsnotify.Write {
-					log.Println("modified file:", event.Name)
 					cfg.ReadConfigFileUsed()
 				}
 			case err, ok := <-watcher.Errors:
 				if !ok {
 					return
 				}
-				log.Println("error:", err)
+				fmt.Println("error occured:", err)
 			}
 		}
 	}()
@@ -225,15 +218,3 @@ func (cfg *config) Float32Value(toggleKey string, defaultValue float32) float32 
 // func retrieveRemoteConfig(url string) (*http.Response, error) {
 // 	return http.Get(url)
 // }
-
-func openLocalConfig(fileName string) (io.ReadCloser, error) {
-	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("could not open file %q because it does not exist", fileName)
-		}
-		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
-	}
-
-	return file, nil
-}
