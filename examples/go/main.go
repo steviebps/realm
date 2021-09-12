@@ -10,7 +10,8 @@ import (
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	log.Println("Executing handler:", r.RemoteAddr)
-	w.Write([]byte("OK"))
+	message := rein.StringValue("message", "DEFAULT")
+	w.Write([]byte(message))
 }
 
 func main() {
@@ -23,7 +24,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := rein.ReadInConfig(); err != nil {
+	if err := rein.ReadInConfig(true); err != nil {
 		log.Fatal(err)
 	}
 
