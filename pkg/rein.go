@@ -145,14 +145,12 @@ func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
 }
 
 func (cfg *config) ReadConfigFile(fileName string) error {
-	cfg.mu.RLock()
 	rc, err := utils.OpenLocalConfig(fileName)
 	if err != nil {
 		return fmt.Errorf("error opening file %q: %w", fileName, err)
 	}
 	defer rc.Close()
 
-	cfg.mu.RUnlock()
 	return cfg.ReadChamber(rc, fileName)
 }
 
