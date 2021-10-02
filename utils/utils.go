@@ -54,7 +54,7 @@ func ReadInterfaceWith(r io.Reader, i interface{}) error {
 	br := bufio.NewReader(r)
 	dec := json.NewDecoder(br)
 
-	if err := dec.Decode(i); err != nil {
+	if err := dec.Decode(i); err != nil && err != io.EOF {
 		return err
 	}
 
