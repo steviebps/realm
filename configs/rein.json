@@ -4,7 +4,7 @@
         "chamber": {
             "name": "chamber",
             "type": "string",
-            "value": "/home/steve/go/src/github.com/steviebps/rein/configs/masterChamber.json"
+            "value": "/path/to/your/masterChamber.json"
         }
     }
 }
