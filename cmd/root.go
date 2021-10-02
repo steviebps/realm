@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	homedir "github.com/mitchellh/go-homedir"
-	"github.com/spf13/viper"
 	"github.com/steviebps/rein/internal/logger"
 	rein "github.com/steviebps/rein/pkg"
 	utils "github.com/steviebps/rein/utils"
@@ -60,24 +59,16 @@ func init() {
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
+		rein.SetConfigFile(cfgFile)
 	} else {
-		viper.AddConfigPath(".")
-		viper.AddConfigPath(home + "/.rein")
-		viper.SetConfigName("rein")
+		rein.AddConfigPath("./")
+		rein.AddConfigPath(home + "/.rein/")
+		rein.SetConfigName("rein.json")
 	}
 
-	viper.AutomaticEnv() // read in environment variables that match
-
 	// If a config file is found, read it in.
-	if err := viper.ReadInConfig(); err != nil {
-
-		if configFileUsed := viper.ConfigFileUsed(); configFileUsed != "" {
-			logger.ErrorString(fmt.Sprintf("Error reading config file: %v", configFileUsed))
-		} else {
-			logger.ErrorString(err.Error())
-		}
-
+	if err := rein.ReadInConfig(false); err != nil {
+		logger.ErrorString(err.Error())
 		os.Exit(1)
 	}
 }
@@ -90,7 +81,7 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 func configPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
 	var err error
-	chamberFile := viper.GetString("chamber")
+	chamberFile := rein.StringValue("chamber", "")
 
 	validURL, url := utils.IsURL(chamberFile)
 	if validURL {
