@@ -7,9 +7,6 @@
 
 ## starter configs
 
-### rein yaml for where your chambers are stored
-```echo "chamber: $HOME/.rein/masterChamber.json" > "$HOME/.rein/rein.yaml"```
-
 ### a basic chamber file
 ```wget -O $HOME/.rein/masterChamber.json https://raw.githubusercontent.com/steviebps/rein/master/configs/masterChamber.json```
 
