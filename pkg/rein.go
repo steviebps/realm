@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"path/filepath"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -13,11 +14,13 @@ import (
 )
 
 type config struct {
-	mu             sync.RWMutex
-	rootChamber    *Chamber
-	configPaths    []string
-	defaultVersion string
-	configFileUsed string
+	mu              sync.RWMutex
+	rootChamber     *Chamber
+	configPaths     []string
+	configName      string
+	defaultVersion  string
+	configFileToUse string
+	configFileUsed  string
 }
 
 var c *config
@@ -38,16 +41,46 @@ func (cfg *config) SetVersion(version string) error {
 	return nil
 }
 
+// SetConfigFile sets the config file to use when initializing
+func SetConfigFile(fileName string) error { return c.SetConfigFile(fileName) }
+
+func (cfg *config) SetConfigFile(fileName string) error {
+	if fileName == "" {
+		return errors.New("file name cannot be empty")
+	}
+
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+
+	cfg.configFileToUse = fileName
+	return nil
+}
+
+// SetConfigName sets the config name to look for when initializing
+func SetConfigName(fileName string) error { return c.SetConfigName(fileName) }
+
+func (cfg *config) SetConfigName(fileName string) error {
+	if fileName == "" {
+		return errors.New("file name cannot be empty")
+	}
+
+	if path.Ext(fileName) != ".json" {
+		return fmt.Errorf("%q does not have an acceptable file extension. please use JSON", fileName)
+	}
+
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
+
+	cfg.configName = fileName
+	return nil
+}
+
 // AddConfigPath adds a file path to be look for the config when initializing
-func AddConfigPath(path string) error { return c.AddConfigPath(path) }
+func AddConfigPath(filePath string) error { return c.AddConfigPath(filePath) }
 
 func (cfg *config) AddConfigPath(filePath string) error {
 	if filePath == "" {
 		return errors.New("file path cannot be empty")
-	}
-
-	if path.Ext(filePath) != ".json" {
-		return fmt.Errorf("%q does not have an acceptable file extension. please use JSON", filePath)
 	}
 
 	cfg.configPaths = append(c.configPaths, filePath)
@@ -58,33 +91,40 @@ func (cfg *config) AddConfigPath(filePath string) error {
 func ReadInConfig(watch bool) error { return c.ReadInConfig(watch) }
 
 func (cfg *config) ReadInConfig(watch bool) error {
-	var rc io.ReadCloser
 	var err error
-	var openedFileName string
 
-	if len(cfg.configPaths) == 0 {
-		return errors.New("could not open config because there were none specified. please add a config path")
-	}
-
-	for _, fileName := range cfg.configPaths {
-		rc, err = utils.OpenLocalConfig(fileName)
+	if cfg.configFileToUse != "" {
+		err = cfg.ReadConfigFile(cfg.configFileToUse)
 		if err != nil {
-			continue
+			return err
 		}
-		defer rc.Close()
-		openedFileName = fileName
-		break
-	}
+	} else {
+		if len(cfg.configPaths) == 0 {
+			return errors.New("could not open config because there were no paths specified. please add a config path")
+		}
 
-	if rc == nil {
-		return fmt.Errorf("could not open any of the config paths: %v", cfg.configPaths)
+		if cfg.configName == "" {
+			return errors.New("could not open config because there was no name specified specified. please set a config name")
+		}
+
+		for _, filePath := range cfg.configPaths {
+			fullPath := filepath.Join(filePath + cfg.configName)
+			err = cfg.ReadConfigFile(fullPath)
+			if err == nil {
+				break
+			}
+		}
+
+		if cfg.configFileUsed == "" {
+			return fmt.Errorf("could not open any of the config paths: %v with this name: %v", cfg.configPaths, cfg.configName)
+		}
 	}
 
 	if watch {
-		defer cfg.Watch()
+		defer cfg.Watch(cfg.configFileUsed)
 	}
 
-	return cfg.ReadChamber(rc, openedFileName)
+	return nil
 }
 
 func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
@@ -104,20 +144,20 @@ func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
 	return nil
 }
 
-func (cfg *config) ReadConfigFileUsed() error {
+func (cfg *config) ReadConfigFile(fileName string) error {
 	cfg.mu.RLock()
-	rc, err := utils.OpenLocalConfig(cfg.configFileUsed)
+	rc, err := utils.OpenLocalConfig(fileName)
 	if err != nil {
-		return fmt.Errorf("error opening file %q: %w", cfg.configFileUsed, err)
+		return fmt.Errorf("error opening file %q: %w", fileName, err)
 	}
 	defer rc.Close()
 
 	cfg.mu.RUnlock()
-	return cfg.ReadChamber(rc, cfg.configFileUsed)
+	return cfg.ReadChamber(rc, fileName)
 }
 
-func (cfg *config) Watch() {
-	if cfg.configFileUsed == "" {
+func (cfg *config) Watch(fileName string) {
+	if fileName == "" {
 		return
 	}
 
@@ -143,7 +183,7 @@ func (cfg *config) Watch() {
 
 					const writeOrCreateMask = fsnotify.Write | fsnotify.Create
 					if event.Op&writeOrCreateMask != 0 {
-						err := cfg.ReadConfigFileUsed()
+						err := cfg.ReadConfigFile(fileName)
 						if err != nil {
 							fmt.Printf("could not re-read config file: %v\n", err)
 						}
@@ -158,7 +198,7 @@ func (cfg *config) Watch() {
 			}
 		}()
 
-		watcher.Add(cfg.configFileUsed)
+		watcher.Add(fileName)
 		init <- struct{}{}
 		<-events
 		fmt.Println("done watching file")
