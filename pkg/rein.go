@@ -8,18 +8,16 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/steviebps/rein/internal/logger"
 	"github.com/steviebps/rein/utils"
 	"golang.org/x/mod/semver"
 )
 
 type config struct {
 	mu             sync.RWMutex
-	rootChamber    Chamber
+	rootChamber    *Chamber
 	configPaths    []string
 	defaultVersion string
 	configFileUsed string
-	isWatching     bool
 }
 
 var c *config
@@ -45,11 +43,11 @@ func AddConfigPath(path string) error { return c.AddConfigPath(path) }
 
 func (cfg *config) AddConfigPath(filePath string) error {
 	if filePath == "" {
-		return errors.New("config path cannot be empty")
+		return errors.New("file path cannot be empty")
 	}
 
 	if path.Ext(filePath) != ".json" {
-		return fmt.Errorf("%q does not have an acceptable file extension. Please use JSON", filePath)
+		return fmt.Errorf("%q does not have an acceptable file extension. please use JSON", filePath)
 	}
 
 	cfg.configPaths = append(c.configPaths, filePath)
@@ -64,10 +62,13 @@ func (cfg *config) ReadInConfig(watch bool) error {
 	var err error
 	var openedFileName string
 
+	if len(cfg.configPaths) == 0 {
+		return errors.New("could not open config because there were none specified. please add a config path")
+	}
+
 	for _, fileName := range cfg.configPaths {
 		rc, err = utils.OpenLocalConfig(fileName)
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Error opening file: %v", err))
 			continue
 		}
 		defer rc.Close()
@@ -87,73 +88,82 @@ func (cfg *config) ReadInConfig(watch bool) error {
 }
 
 func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
-	var root Chamber
+	cfg.mu.Lock()
+	defer cfg.mu.Unlock()
 
-	if err := utils.ReadInterfaceWith(r, &root); err != nil {
+	var root Chamber
+	var err error
+
+	if err = utils.ReadInterfaceWith(r, &root); err != nil {
 		return fmt.Errorf("error reading file %q: %w", fileName, err)
 	}
 
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
-	cfg.rootChamber = root
+	cfg.rootChamber = &root
 	cfg.configFileUsed = fileName
 
 	return nil
 }
 
 func (cfg *config) ReadConfigFileUsed() error {
+	cfg.mu.RLock()
 	rc, err := utils.OpenLocalConfig(cfg.configFileUsed)
 	if err != nil {
 		return fmt.Errorf("error opening file %q: %w", cfg.configFileUsed, err)
 	}
 	defer rc.Close()
 
+	cfg.mu.RUnlock()
 	return cfg.ReadChamber(rc, cfg.configFileUsed)
 }
 
-func (cfg *config) Watch() error {
+func (cfg *config) Watch() {
 	if cfg.configFileUsed == "" {
-		return errors.New("a config file was not successfully read so it cannot be watched")
+		return
 	}
 
-	if cfg.isWatching {
-		return errors.New("config is already being watched")
-	}
-
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		return fmt.Errorf("could not establish file watcher: %w", err)
-	}
-	// TODO: establish a way to end the file watching and close the watcher
-	// defer watcher.Close()
-
+	init := make(chan interface{})
 	go func() {
-		for {
-			select {
-			case event, ok := <-watcher.Events:
-				if !ok {
-					return
-				}
-
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					cfg.ReadConfigFileUsed()
-				}
-			case err, ok := <-watcher.Errors:
-				if !ok {
-					return
-				}
-				fmt.Println("error occured:", err)
-			}
+		watcher, err := fsnotify.NewWatcher()
+		if err != nil {
+			init <- struct{}{}
+			return
 		}
+		defer watcher.Close()
+
+		events := make(chan interface{})
+		go func() {
+
+			for {
+				select {
+				case event, ok := <-watcher.Events:
+					if !ok {
+						events <- struct{}{}
+						return
+					}
+
+					const writeOrCreateMask = fsnotify.Write | fsnotify.Create
+					if event.Op&writeOrCreateMask != 0 {
+						err := cfg.ReadConfigFileUsed()
+						if err != nil {
+							fmt.Printf("could not re-read config file: %v\n", err)
+						}
+					}
+				case err, ok := <-watcher.Errors:
+					if ok {
+						fmt.Printf("error: %v\n", err)
+					}
+					events <- struct{}{}
+					return
+				}
+			}
+		}()
+
+		watcher.Add(cfg.configFileUsed)
+		init <- struct{}{}
+		<-events
+		fmt.Println("done watching file")
 	}()
-
-	watcher.Add(cfg.configFileUsed)
-	if err != nil {
-		return fmt.Errorf("could not establish file watcher with file: %q", cfg.configFileUsed)
-	}
-	cfg.isWatching = true
-
-	return nil
+	<-init
 }
 
 // BoolValue retrieves a bool by the key of the toggle and takes a default value if it does not exist
