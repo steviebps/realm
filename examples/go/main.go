@@ -19,7 +19,11 @@ func main() {
 
 	rein.SetVersion("v1.0.0")
 
-	if err := rein.AddConfigPath("./chambers.json"); err != nil {
+	if err := rein.AddConfigPath("./"); err != nil {
+		log.Fatal(err)
+	}
+
+	if err := rein.SetConfigName("chambers.json"); err != nil {
 		log.Fatal(err)
 	}
 
