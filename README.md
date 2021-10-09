@@ -21,7 +21,7 @@ with forced directory creation
 ```realm build -o /path/to/your/directory --force```
 
 #### Pipe into an archive: 
-```realm build | tar zcf archive.tar.gz -T -```
+```realm build | tar zcf realm.tar.gz -T -```
 
 ### print
 
