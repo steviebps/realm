@@ -30,3 +30,7 @@ with forced directory creation
 
 #### Print your global chamber to file:
 ```realm print -o /path/to/your/file.json```
+
+
+## example code snippets
+https://github.com/steviebps/realm/blob/master/examples/go/main.go
