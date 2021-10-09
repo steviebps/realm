@@ -1,4 +1,4 @@
-module github.com/steviebps/rein
+module github.com/steviebps/realm
 
 go 1.14
 
