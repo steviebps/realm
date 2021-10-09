@@ -81,7 +81,7 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 func configPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
 	var err error
-	chamberFile := realm.StringValue("chamber", "")
+	chamberFile, _ := realm.StringValue("chamber", "")
 
 	validURL, url := utils.IsURL(chamberFile)
 	if validURL {
