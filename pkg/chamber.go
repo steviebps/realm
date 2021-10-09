@@ -15,20 +15,6 @@ type Chamber struct {
 	Children    []*Chamber         `json:"children,omitempty"`
 }
 
-// // EncodeWith takes a writer and encodes JSON to that writer
-// func (c *Chamber) EncodeWith(w io.Writer, pretty bool) error {
-// 	enc := json.NewEncoder(w)
-// 	if pretty {
-// 		enc.SetIndent("", "  ")
-// 	}
-
-// 	if err := enc.Encode(c); err != nil {
-// 		return err
-// 	}
-
-// 	return nil
-// }
-
 // FindByName will return the first child or nth-grandchild with the matching name. BFS.
 func (c *Chamber) FindByName(name string) *Chamber {
 	queue := make([]*Chamber, 0)
@@ -77,6 +63,8 @@ func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool) {
 	}
 }
 
+// GetToggleValue returns the toggle with the specified toggleName at the specified version.
+// Will return nil if the toggle does not exist
 func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} {
 	var t *Toggle
 	var ok bool
@@ -85,7 +73,7 @@ func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} 
 		return nil
 	}
 
-	return t.GetValue(version)
+	return t.GetValueAt(version)
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Chamber
