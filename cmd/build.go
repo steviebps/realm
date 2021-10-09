@@ -80,7 +80,7 @@ func build(parent *realm.Chamber, fullPath string, version string, cmd *cobra.Co
 			// this is for generating a built config without needing the app's version at runtime
 			if version != "" {
 				for _, t := range c.Toggles {
-					t.Value = t.GetValue(version)
+					t.Value = t.GetValueAt(version)
 					t.Overrides = nil
 				}
 			}
