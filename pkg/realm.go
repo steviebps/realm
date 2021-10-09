@@ -204,69 +204,73 @@ func (cfg *config) Watch(fileName string) {
 	<-init
 }
 
-// BoolValue retrieves a bool by the key of the toggle and takes a default value if it does not exist
-func BoolValue(toggleKey string, defaultValue bool) bool {
+// BoolValue retrieves a bool by the key of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+func BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
 	return c.BoolValue(toggleKey, defaultValue)
 }
 
-func (cfg *config) BoolValue(toggleKey string, defaultValue bool) bool {
+func (cfg *config) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 	cBool, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(bool)
 	if !ok {
-		return defaultValue
+		return defaultValue, false
 	}
 
-	return cBool
+	return cBool, true
 }
 
-// StringValue retrieves a string by the key of the toggle and takes a default value if it does not exist
-func StringValue(toggleKey string, defaultValue string) string {
+// StringValue retrieves a string by the key of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+func StringValue(toggleKey string, defaultValue string) (string, bool) {
 	return c.StringValue(toggleKey, defaultValue)
 }
 
-func (cfg *config) StringValue(toggleKey string, defaultValue string) string {
+func (cfg *config) StringValue(toggleKey string, defaultValue string) (string, bool) {
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 	cStr, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(string)
 	if !ok {
-		return defaultValue
+		return defaultValue, false
 	}
 
-	return cStr
+	return cStr, true
 }
 
-// Float64Value retrieves a float64 by the key of the toggle and takes a default value if it does not exist
-func Float64Value(toggleKey string, defaultValue float64) float64 {
+// Float64Value retrieves a float64 by the key of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+func Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
 	return c.Float64Value(toggleKey, defaultValue)
 }
 
-func (cfg *config) Float64Value(toggleKey string, defaultValue float64) float64 {
+func (cfg *config) Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 	cFloat64, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float64)
 	if !ok {
-		return defaultValue
+		return defaultValue, false
 	}
 
-	return cFloat64
+	return cFloat64, true
 }
 
-// Float32Value retrieves a float32 by the key of the toggle and takes a default value if it does not exist
+// Float32Value retrieves a float32 by the key of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
 // if the config value overflows the type requested, defaultValue will be returned
-func Float32Value(toggleKey string, defaultValue float64) float64 {
-	return c.Float64Value(toggleKey, defaultValue)
+func Float32Value(toggleKey string, defaultValue float32) (float32, bool) {
+	return c.Float32Value(toggleKey, defaultValue)
 }
 
-func (cfg *config) Float32Value(toggleKey string, defaultValue float32) float32 {
+func (cfg *config) Float32Value(toggleKey string, defaultValue float32) (float32, bool) {
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
 	cFloat32, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float32)
 	if !ok {
-		return defaultValue
+		return defaultValue, false
 	}
 
-	return cFloat32
+	return cFloat32, true
 }
 
 // func retrieveRemoteConfig(url string) (*http.Response, error) {
