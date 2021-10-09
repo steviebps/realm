@@ -11,12 +11,12 @@
                 {
                     "minimumVersion": "v0.0.1",
                     "maximumVersion": "v2.0.0",
-                    "value": 3000
+                    "value": 3001
                 },
                 {
                     "minimumVersion": "v2.0.0",
                     "maximumVersion": "v3.0.0",
-                    "value": 3001
+                    "value": 3002
                 }
             ]
         },
