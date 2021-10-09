@@ -8,14 +8,7 @@ import (
 	realm "github.com/steviebps/realm/pkg"
 )
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	message := realm.StringValue("message", "DEFAULT")
-	w.Write([]byte(message))
-}
-
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", handler)
 
 	realm.SetVersion("v1.0.0")
 
@@ -31,7 +24,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	port := realm.Float64Value("port", 3000)
+	port, _ := realm.Float64Value("port", 3000)
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		message, _ := realm.StringValue("message", "DEFAULT")
+		w.Write([]byte(message))
+	})
 
 	log.Println("Listening on :", port)
 	err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
