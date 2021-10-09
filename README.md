@@ -1,6 +1,6 @@
 # realm
 
-[![release](https://github.com/steviebps/rein/actions/workflows/go.yml/badge.svg)](https://github.com/steviebps/rein/actions/workflows/go.yml)
+[![release](https://github.com/steviebps/realm/actions/workflows/go.yml/badge.svg)](https://github.com/steviebps/realm/actions/workflows/go.yml)
 
 ```go  get -u github.com/steviebps/realm```
 
@@ -8,7 +8,7 @@
 ## starter configs
 
 ### a basic chamber file
-```wget -O $HOME/.realm/masterChamber.json https://raw.githubusercontent.com/steviebps/rein/master/configs/masterChamber.json```
+```wget -O $HOME/.realm/masterChamber.json https://raw.githubusercontent.com/steviebps/realm/master/configs/masterChamber.json```
 
 
 ## example commands
