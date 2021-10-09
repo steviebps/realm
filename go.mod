@@ -7,5 +7,5 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/spf13/cobra v1.2.1
 	golang.org/x/mod v0.5.1
-	golang.org/x/sys v0.0.0-20211001092434-39dca1131b70 // indirect
+	golang.org/x/sys v0.0.0-20211007075335-d3039528d8ac // indirect
 )
