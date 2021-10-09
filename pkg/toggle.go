@@ -1,4 +1,4 @@
-package rein
+package realm
 
 import (
 	"encoding/json"
@@ -9,7 +9,7 @@ import (
 )
 
 // Toggle is a feature switch/toggle structure for holding
-// its name, value, type and any overrides to be parsed by the applicable rein sdk
+// its name, value, type and any overrides to be parsed by the applicable realm sdk
 type Toggle struct {
 	Name       string      `json:"name"`
 	ToggleType string      `json:"type"`

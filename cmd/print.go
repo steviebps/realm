@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/steviebps/rein/internal/logger"
-	"github.com/steviebps/rein/utils"
+	"github.com/steviebps/realm/internal/logger"
+	"github.com/steviebps/realm/utils"
 )
 
 var printCmdError = logger.ErrorWithPrefix("Error running print command: ")

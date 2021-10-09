@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-	"github.com/steviebps/rein/internal/logger"
-	rein "github.com/steviebps/rein/pkg"
-	"github.com/steviebps/rein/utils"
+	"github.com/steviebps/realm/internal/logger"
+	realm "github.com/steviebps/realm/pkg"
+	"github.com/steviebps/realm/utils"
 )
 
 var chamberName string
@@ -21,7 +21,7 @@ var buildCmd = &cobra.Command{
 	Use:     "build",
 	Short:   "Build chambers with inherited toggles",
 	Long:    `Build command will take your chamber configs and compile them with their inherited values`,
-	Example: "rein build -o /path/to/your/directory",
+	Example: "realm build -o /path/to/your/directory",
 	Run: func(cmd *cobra.Command, args []string) {
 		outputDir, _ := cmd.Flags().GetString("output-dir")
 		forceCreateDir, _ := cmd.Flags().GetBool("force")
@@ -44,7 +44,7 @@ var buildCmd = &cobra.Command{
 					os.Mkdir(fullPath, 0700)
 				} else {
 					buildCmdError(fmt.Sprintf("Directory %v does not exist", fullPath))
-					logger.InfoString(fmt.Sprintf("\nTry running: \"rein build --output-dir %v --force\" to force create the directory", outputDir))
+					logger.InfoString(fmt.Sprintf("\nTry running: \"realm build --output-dir %v --force\" to force create the directory", outputDir))
 					os.Exit(1)
 				}
 			}
@@ -64,9 +64,9 @@ func getOutputDirectory(outputDir string) (string, error) {
 	return filepath.Abs(outputDir)
 }
 
-func build(parent *rein.Chamber, fullPath string, version string, cmd *cobra.Command) {
+func build(parent *realm.Chamber, fullPath string, version string, cmd *cobra.Command) {
 
-	parent.TraverseAndBuild(func(c rein.Chamber) bool {
+	parent.TraverseAndBuild(func(c realm.Chamber) bool {
 
 		searchingByName := chamberName != ""
 		foundByName := chamberName == c.Name

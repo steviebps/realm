@@ -15,7 +15,7 @@ limitations under the License.
 */
 package main
 
-import "github.com/steviebps/rein/cmd"
+import "github.com/steviebps/realm/cmd"
 
 func main() {
 	cmd.Execute()

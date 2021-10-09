@@ -3,7 +3,7 @@ package logger
 import (
 	"fmt"
 
-	"github.com/steviebps/rein/internal/colors"
+	"github.com/steviebps/realm/internal/colors"
 )
 
 func ErrorString(e string) {

@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/steviebps/rein/internal/logger"
-	rein "github.com/steviebps/rein/pkg"
+	"github.com/steviebps/realm/internal/logger"
+	realm "github.com/steviebps/realm/pkg"
 )
 
 var getCmdError = logger.ErrorWithPrefix("Error running get command: ")
@@ -22,7 +22,7 @@ var getCmd = &cobra.Command{
 		toggle, _ := cmd.Flags().GetString("toggle")
 		chamberName, _ = cmd.Flags().GetString("chamber")
 
-		globalChamber.TraverseAndBuild(func(c rein.Chamber) bool {
+		globalChamber.TraverseAndBuild(func(c realm.Chamber) bool {
 			if c.Name == chamberName {
 				value = c.GetToggleValue(toggle, version)
 			}

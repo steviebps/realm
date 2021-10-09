@@ -1,4 +1,4 @@
-package rein
+package realm
 
 import (
 	"errors"
@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/steviebps/rein/utils"
+	"github.com/steviebps/realm/utils"
 	"golang.org/x/mod/semver"
 )
 

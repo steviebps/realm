@@ -1,4 +1,4 @@
-package rein
+package realm
 
 import (
 	"encoding/json"

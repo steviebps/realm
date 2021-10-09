@@ -9,21 +9,21 @@ import (
 	"github.com/spf13/cobra"
 
 	homedir "github.com/mitchellh/go-homedir"
-	"github.com/steviebps/rein/internal/logger"
-	rein "github.com/steviebps/rein/pkg"
-	utils "github.com/steviebps/rein/utils"
+	"github.com/steviebps/realm/internal/logger"
+	realm "github.com/steviebps/realm/pkg"
+	utils "github.com/steviebps/realm/utils"
 )
 
 var home string
 var cfgFile string
-var globalChamber = rein.Chamber{Toggles: map[string]*rein.Toggle{}, Children: []*rein.Chamber{}}
+var globalChamber = realm.Chamber{Toggles: map[string]*realm.Toggle{}, Children: []*realm.Chamber{}}
 
-// Version the version of rein
+// Version the version of realm
 var Version = "development"
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:               "rein",
+	Use:               "realm",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
 	PersistentPreRun:  configPreRun,
@@ -35,7 +35,7 @@ var rootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		logger.ErrorString(fmt.Sprintf("Error while starting rein: %v", err))
+		logger.ErrorString(fmt.Sprintf("Error while starting realm: %v", err))
 		os.Exit(1)
 	}
 }
@@ -51,7 +51,7 @@ func init() {
 	}
 
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "rein configuration file")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "realm configuration file")
 	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
 }
 
@@ -59,15 +59,15 @@ func init() {
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
-		rein.SetConfigFile(cfgFile)
+		realm.SetConfigFile(cfgFile)
 	} else {
-		rein.AddConfigPath("./")
-		rein.AddConfigPath(home + "/.rein/")
-		rein.SetConfigName("rein.json")
+		realm.AddConfigPath("./")
+		realm.AddConfigPath(home + "/.realm/")
+		realm.SetConfigName("realm.json")
 	}
 
 	// If a config file is found, read it in.
-	if err := rein.ReadInConfig(false); err != nil {
+	if err := realm.ReadInConfig(false); err != nil {
 		logger.ErrorString(err.Error())
 		os.Exit(1)
 	}
@@ -81,7 +81,7 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 func configPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
 	var err error
-	chamberFile := rein.StringValue("chamber", "")
+	chamberFile := realm.StringValue("chamber", "")
 
 	validURL, url := utils.IsURL(chamberFile)
 	if validURL {
