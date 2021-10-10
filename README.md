@@ -34,5 +34,53 @@ with forced directory creation
 
 ## example code snippets
 
-https://github.com/steviebps/realm/blob/04853c638dbe63e33b6400070c1b72a2e786d2fc/examples/go/main.go#L3-L41
+```go
+import (
+	"fmt"
+	"log"
+	"net/http"
+
+
+	realm "github.com/steviebps/realm/pkg"
+)
+
+
+func main() {
+
+  // because realm configurations contain overrides based on version of your application, specify it here
+	realm.SetVersion("v1.0.0")
+
+  // tell realm where to look for realm configuration
+	if err := realm.AddConfigPath("./"); err != nil {
+		log.Fatal(err)
+	}
+
+  // tell realm what file name it should look for in the specified paths
+	if err := realm.SetConfigName("chambers.json"); err != nil {
+		log.Fatal(err)
+	}
+
+  // look for and read in the realm configuration
+  // passing "true" will tell realm to watch the file for changes
+	if err := realm.ReadInConfig(true); err != nil {
+		log.Fatal(err)
+	}
+
+  // return a float64 value from the config and specify a default value if it does not exist
+	port, _ := realm.Float64Value("port", 3000)
+  
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+    // retrieve a string value from your realm config and specify a default value if it does not exist
+		message, _ := realm.StringValue("message", "DEFAULT")
+		w.Write([]byte(message))
+	})
+  
+	log.Println("Listening on :", port)
+	err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
 
