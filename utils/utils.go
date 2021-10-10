@@ -16,24 +16,6 @@ func IsURL(str string) (bool, *url.URL) {
 	return err == nil && u.Scheme != "" && u.Host != "", u
 }
 
-// FindExists returns the first file that exists
-func FindExists(names []string) string {
-	for _, file := range names {
-		if Exists(file) {
-			return file
-		}
-	}
-	return ""
-}
-
-// Exists reports whether the named file or directory exists.
-func Exists(name string) bool {
-	if _, err := os.Stat(name); err == nil {
-		return true
-	}
-	return false
-}
-
 func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
 	bw := bufio.NewWriter(w)
 	enc := json.NewEncoder(bw)
@@ -65,7 +47,7 @@ func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("could not open file %q because it does not exist", fileName)
+			return nil, fmt.Errorf("could not open file %q because it does not exist: %w", fileName, err)
 		}
 		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
 	}
