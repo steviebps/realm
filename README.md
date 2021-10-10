@@ -2,7 +2,7 @@
 
 [![release](https://github.com/steviebps/realm/actions/workflows/go.yml/badge.svg)](https://github.com/steviebps/realm/actions/workflows/go.yml)
 
-```go  get -u github.com/steviebps/realm```
+```go install github.com/steviebps/realm```
 
 
 ## starter configs
