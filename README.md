@@ -46,32 +46,31 @@ import (
 
 
 func main() {
-
-  // because realm configurations contain overrides based on version of your application, specify it here
+	// because realm configurations contain overrides based on the version of your application, specify it here
 	realm.SetVersion("v1.0.0")
 
-  // tell realm where to look for realm configuration
+  	// tell realm where to look for realm configuration
 	if err := realm.AddConfigPath("./"); err != nil {
 		log.Fatal(err)
 	}
 
-  // tell realm what file name it should look for in the specified paths
+  	// tell realm what file name it should look for in the specified paths
 	if err := realm.SetConfigName("chambers.json"); err != nil {
 		log.Fatal(err)
 	}
 
-  // look for and read in the realm configuration
-  // passing "true" will tell realm to watch the file for changes
+ 	// look for and read in the realm configuration
+  	// passing "true" will tell realm to watch the file for changes
 	if err := realm.ReadInConfig(true); err != nil {
 		log.Fatal(err)
 	}
 
-  // return a float64 value from the config and specify a default value if it does not exist
+  	// return a float64 value from the config and specify a default value if it does not exist
 	port, _ := realm.Float64Value("port", 3000)
   
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    // retrieve a string value from your realm config and specify a default value if it does not exist
+    		// retrieve a string value from your realm config and specify a default value if it does not exist
 		message, _ := realm.StringValue("message", "DEFAULT")
 		w.Write([]byte(message))
 	})
