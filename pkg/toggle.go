@@ -17,6 +17,11 @@ type Toggle struct {
 	Overrides  []*Override `json:"overrides,omitempty"`
 }
 
+type Toggler interface {
+	IsValidValue(value interface{}) bool
+	GetValueAt(version string) interface{}
+}
+
 type toggleAlias Toggle
 
 func (t toggleAlias) toToggle() Toggle {
