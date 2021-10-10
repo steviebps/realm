@@ -33,4 +33,6 @@ with forced directory creation
 
 
 ## example code snippets
-https://github.com/steviebps/realm/blob/master/examples/go/main.go
+
+https://github.com/steviebps/realm/blob/04853c638dbe63e33b6400070c1b72a2e786d2fc/examples/go/main.go#L3-L41
+
