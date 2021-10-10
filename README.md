@@ -40,7 +40,6 @@ import (
 	"log"
 	"net/http"
 
-
 	realm "github.com/steviebps/realm/pkg"
 )
 
