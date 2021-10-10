@@ -147,7 +147,7 @@ func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
 func (cfg *config) ReadConfigFile(fileName string) error {
 	rc, err := utils.OpenLocalConfig(fileName)
 	if err != nil {
-		return fmt.Errorf("error opening file %q: %w", fileName, err)
+		return err
 	}
 	defer rc.Close()
 
@@ -199,7 +199,7 @@ func (cfg *config) Watch(fileName string) {
 		watcher.Add(fileName)
 		init <- struct{}{}
 		<-events
-		fmt.Println("done watching file")
+		fmt.Printf("done watching file: %q\n", fileName)
 	}()
 	<-init
 }
