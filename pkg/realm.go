@@ -87,6 +87,12 @@ func (cfg *config) AddConfigPath(filePath string) error {
 	return nil
 }
 
+// func AddCustomType(t ToggleType, v ToggleValidator) error { return c.AddCustomType(t, v) }
+
+// func (cfg *config) AddCustomType(t ToggleType, v ToggleValidator) error {
+// 	return nil
+// }
+
 // ReadInConfig attempts to read in the first valid file from all of the config files added by AddConfigPath
 func ReadInConfig(watch bool) error { return c.ReadInConfig(watch) }
 
