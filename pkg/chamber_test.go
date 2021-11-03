@@ -49,9 +49,9 @@ func TestInheritWith(t *testing.T) {
 		Name: "BOTTOM",
 		Toggles: map[string]*Toggle{
 			"toggle2": {
-				Name:       "toggle1",
-				ToggleType: "boolean",
-				Value:      false,
+				Name:  "toggle1",
+				Type:  "boolean",
+				Value: false,
 			},
 		},
 	}
@@ -59,9 +59,9 @@ func TestInheritWith(t *testing.T) {
 		Name: "MIDDLE",
 		Toggles: map[string]*Toggle{
 			"toggle1": {
-				Name:       "toggle1",
-				ToggleType: "boolean",
-				Value:      false,
+				Name:  "toggle1",
+				Type:  "boolean",
+				Value: false,
 			},
 		},
 	}
@@ -69,9 +69,9 @@ func TestInheritWith(t *testing.T) {
 		Name: "TOP",
 		Toggles: map[string]*Toggle{
 			"toggle1": {
-				Name:       "toggle1",
-				ToggleType: "boolean",
-				Value:      false,
+				Name:  "toggle1",
+				Type:  "boolean",
+				Value: false,
 			},
 		},
 	}

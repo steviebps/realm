@@ -7,7 +7,7 @@ import (
 func TestIsValidValue(t *testing.T) {
 
 	tests := []struct {
-		assertedType string
+		assertedType ToggleType
 		input        interface{}
 		output       bool
 	}{
@@ -21,7 +21,7 @@ func TestIsValidValue(t *testing.T) {
 	toggle := Toggle{}
 
 	for _, test := range tests {
-		toggle.ToggleType = test.assertedType
+		toggle.Type = test.assertedType
 		got := toggle.IsValidValue(test.input)
 		if got != test.output {
 			t.Errorf("input: %v with asserted type: %v\nreturned %v expected: %v", test.input, test.assertedType, got, test.output)
