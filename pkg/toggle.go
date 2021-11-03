@@ -8,19 +8,29 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+type ToggleType string
+
+const (
+	booleanType ToggleType = "boolean"
+	stringType  ToggleType = "string"
+	numberType  ToggleType = "number"
+	customType  ToggleType = "custom"
+)
+
 // Toggle is a feature switch/toggle structure for holding
 // its name, value, type and any overrides to be parsed by the applicable realm sdk
 type Toggle struct {
-	Name       string      `json:"name"`
-	ToggleType string      `json:"type"`
-	Value      interface{} `json:"value"`
-	Overrides  []*Override `json:"overrides,omitempty"`
+	Name      string      `json:"name"`
+	Type      ToggleType  `json:"type"`
+	Value     interface{} `json:"value"`
+	Overrides []*Override `json:"overrides,omitempty"`
+	// ToggleValidator ToggleValidator `json:"-"`
 }
 
-type Toggler interface {
-	IsValidValue(value interface{}) bool
-	GetValueAt(version string) interface{}
-}
+// type ToggleValidator interface {
+// 	ValidateValue(value interface{}) bool
+// 	GetValueAt(version string) interface{}
+// }
 
 type toggleAlias Toggle
 
@@ -34,11 +44,11 @@ func (t Toggle) IsValidValue(value interface{}) bool {
 
 	switch typeOfValue {
 	case "bool":
-		return t.ToggleType == "boolean"
+		return t.Type == booleanType
 	case "string":
-		return t.ToggleType == "string"
+		return t.Type == stringType
 	case "float64":
-		return t.ToggleType == "number"
+		return t.Type == numberType
 	default:
 		return false
 	}
@@ -55,7 +65,7 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	*t = alias.toToggle()
 
 	if !t.IsValidValue(t.Value) {
-		return fmt.Errorf("%v (%T) not of the type %q from the toggle: %s", t.Value, t.Value, t.ToggleType, t.Name)
+		return fmt.Errorf("%v (%T) not of the type %q from the toggle: %s", t.Value, t.Value, t.Type, t.Name)
 	}
 
 	var previous *Override
@@ -66,7 +76,7 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 		}
 
 		if !t.IsValidValue(override.Value) {
-			return fmt.Errorf("%v (%T) not of the type %q from the toggle override: %s", override.Value, override.Value, t.ToggleType, t.Name)
+			return fmt.Errorf("%v (%T) not of the type %q from the toggle override: %s", override.Value, override.Value, t.Type, t.Name)
 		}
 
 		previous = override
@@ -75,7 +85,8 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// GetValueAt returns the value at the given version. Will return default value if no override is present for the specified version
+// GetValueAt returns the value at the given version.
+// Will return default value if version is empty string or no override is present for the specified version
 func (t *Toggle) GetValueAt(version string) interface{} {
 	if version != "" {
 		if override := t.GetOverride(version); override != nil {
