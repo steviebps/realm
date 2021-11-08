@@ -8,11 +8,11 @@ import (
 
 // Chamber is a Tree Node struct that contain Toggles and children Chambers
 type Chamber struct {
-	Name        string             `json:"name"`
-	IsBuildable bool               `json:"isBuildable"`
-	IsApp       bool               `json:"isApp"`
-	Toggles     map[string]*Toggle `json:"toggles"`
-	Children    []*Chamber         `json:"children,omitempty"`
+	Name        string                         `json:"name"`
+	IsBuildable bool                           `json:"isBuildable"`
+	IsApp       bool                           `json:"isApp"`
+	Toggles     map[string]*OverrideableToggle `json:"toggles"`
+	Children    []*Chamber                     `json:"children,omitempty"`
 }
 
 // FindByName will return the first child or nth-grandchild with the matching name. BFS.
@@ -39,7 +39,7 @@ func (c *Chamber) FindByName(name string) *Chamber {
 
 // InheritWith will take a map of toggles to inherit from
 // so that any toggles that do not exist in this chamber will be written to the map
-func (c *Chamber) InheritWith(inherited map[string]*Toggle) {
+func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
 	for key := range inherited {
 		if _, ok := c.Toggles[key]; !ok {
 			c.Toggles[key] = inherited[key]
@@ -66,7 +66,7 @@ func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool) {
 // GetToggleValue returns the toggle with the specified toggleName at the specified version.
 // Will return nil if the toggle does not exist
 func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} {
-	var t *Toggle
+	var t *OverrideableToggle
 	var ok bool
 
 	if t, ok = c.Toggles[toggleName]; !ok {
