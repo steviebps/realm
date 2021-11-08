@@ -47,31 +47,37 @@ func TestInheritWith(t *testing.T) {
 
 	bottom := &Chamber{
 		Name: "BOTTOM",
-		Toggles: map[string]*Toggle{
+		Toggles: map[string]*OverrideableToggle{
 			"toggle2": {
-				Name:  "toggle1",
-				Type:  "boolean",
-				Value: false,
+				Toggle: &Toggle{
+					Name:  "toggle1",
+					Type:  "boolean",
+					Value: false,
+				},
 			},
 		},
 	}
 	middle := &Chamber{
 		Name: "MIDDLE",
-		Toggles: map[string]*Toggle{
+		Toggles: map[string]*OverrideableToggle{
 			"toggle1": {
-				Name:  "toggle1",
-				Type:  "boolean",
-				Value: false,
+				Toggle: &Toggle{
+					Name:  "toggle1",
+					Type:  "boolean",
+					Value: false,
+				},
 			},
 		},
 	}
 	top := &Chamber{
 		Name: "TOP",
-		Toggles: map[string]*Toggle{
+		Toggles: map[string]*OverrideableToggle{
 			"toggle1": {
-				Name:  "toggle1",
-				Type:  "boolean",
-				Value: false,
+				Toggle: &Toggle{
+					Name:  "toggle1",
+					Type:  "boolean",
+					Value: false,
+				},
 			},
 		},
 	}

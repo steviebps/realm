@@ -7,7 +7,7 @@ import (
 func TestIsValidValue(t *testing.T) {
 
 	tests := []struct {
-		assertedType ToggleType
+		assertedType string
 		input        interface{}
 		output       bool
 	}{
