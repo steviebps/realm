@@ -6,6 +6,7 @@ import (
 	"io"
 	"path"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -98,6 +99,7 @@ func ReadInConfig(watch bool) error { return c.ReadInConfig(watch) }
 
 func (cfg *config) ReadInConfig(watch bool) error {
 	var err error
+	listOfErrors := make([]string, 0)
 
 	if cfg.configFileToUse != "" {
 		err = cfg.ReadConfigFile(cfg.configFileToUse)
@@ -119,10 +121,16 @@ func (cfg *config) ReadInConfig(watch bool) error {
 			if err == nil {
 				break
 			}
+			listOfErrors = append(listOfErrors, fmt.Sprintf("%v: %v", fullPath, err))
 		}
 
 		if cfg.configFileUsed == "" {
-			return fmt.Errorf("could not open any of the config paths: %v with this name: %v", cfg.configPaths, cfg.configName)
+			errStr := ""
+			for fullPath, err := range listOfErrors {
+				errStr += fmt.Sprintf("%v: %v", fullPath, err)
+			}
+
+			return fmt.Errorf("could not open: [ %v ] with file name: %v", strings.Join(listOfErrors, ", "), cfg.configName)
 		}
 	}
 
@@ -191,6 +199,7 @@ func (cfg *config) Watch(fileName string) {
 						if err != nil {
 							fmt.Printf("could not re-read config file: %v\n", err)
 						}
+						fmt.Printf("refreshing config file: %v\n", fileName)
 					}
 				case err, ok := <-watcher.Errors:
 					if ok {
