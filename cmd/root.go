@@ -16,7 +16,7 @@ import (
 
 var home string
 var cfgFile string
-var globalChamber = realm.Chamber{Toggles: map[string]*realm.Toggle{}, Children: []*realm.Chamber{}}
+var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}, Children: []*realm.Chamber{}}
 
 // Version the version of realm
 var Version = "development"

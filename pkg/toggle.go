@@ -2,70 +2,64 @@ package realm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"reflect"
 
 	"golang.org/x/mod/semver"
 )
 
-type ToggleType string
+type Toggleable interface {
+	IsValidValue(v interface{}) bool
+}
 
-const (
-	booleanType ToggleType = "boolean"
-	stringType  ToggleType = "string"
-	numberType  ToggleType = "number"
-	customType  ToggleType = "custom"
-)
+var typeMap map[string]Toggleable = map[string]Toggleable{
+	"boolean": BooleanToggle{},
+	"string":  StringToggle{},
+	"number":  NumberToggle{},
+}
 
 // Toggle is a feature switch/toggle structure for holding
 // its name, value, type and any overrides to be parsed by the applicable realm sdk
 type Toggle struct {
-	Name      string      `json:"name"`
-	Type      ToggleType  `json:"type"`
-	Value     interface{} `json:"value"`
-	Overrides []*Override `json:"overrides,omitempty"`
-	// ToggleValidator ToggleValidator `json:"-"`
-}
-
-// type ToggleValidator interface {
-// 	ValidateValue(value interface{}) bool
-// 	GetValueAt(version string) interface{}
-// }
-
-type toggleAlias Toggle
-
-func (t toggleAlias) toToggle() Toggle {
-	return Toggle(t)
+	Name  string      `json:"name"`
+	Type  string      `json:"type"`
+	Value interface{} `json:"value"`
 }
 
 // IsValidValue determines whether or not the passed value's type matches the ToggleType
-func (t Toggle) IsValidValue(value interface{}) bool {
-	typeOfValue := reflect.TypeOf(value).String()
+func (t *Toggle) IsValidValue(v interface{}) bool {
+	toggleable := typeMap[t.Type]
+	return toggleable.IsValidValue(v)
+}
 
-	switch typeOfValue {
-	case "bool":
-		return t.Type == booleanType
-	case "string":
-		return t.Type == stringType
-	case "float64":
-		return t.Type == numberType
-	default:
-		return false
-	}
+type OverrideableToggle struct {
+	Toggle    *Toggle     `json:"toggle"`
+	Overrides []*Override `json:"overrides,omitempty"`
+}
+
+type overrideableToggleAlias OverrideableToggle
+
+func (t overrideableToggleAlias) toOverrideableToggle() OverrideableToggle {
+	return OverrideableToggle(t)
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating toggle Value to the ToggleType
-func (t *Toggle) UnmarshalJSON(b []byte) error {
-	var alias toggleAlias
+func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
+
+	var alias overrideableToggleAlias
 
 	err := json.Unmarshal(b, &alias)
 	if err != nil {
 		return err
 	}
-	*t = alias.toToggle()
+	*t = alias.toOverrideableToggle()
 
-	if !t.IsValidValue(t.Value) {
-		return fmt.Errorf("%v (%T) not of the type %q from the toggle: %s", t.Value, t.Value, t.Type, t.Name)
+	if t.Toggle == nil {
+		return errors.New("toggle was not set. please check your config")
+	}
+
+	if !t.Toggle.IsValidValue(t.Toggle.Value) {
+		return fmt.Errorf("%v (%T) not of the type %q from the toggle: %s", t.Toggle.Value, t.Toggle.Value, t.Toggle.Type, t.Toggle.Name)
 	}
 
 	var previous *Override
@@ -75,8 +69,8 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 			return fmt.Errorf("an override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)
 		}
 
-		if !t.IsValidValue(override.Value) {
-			return fmt.Errorf("%v (%T) not of the type %q from the toggle override: %s", override.Value, override.Value, t.Type, t.Name)
+		if !t.Toggle.IsValidValue(override.Value) {
+			return fmt.Errorf("%v (%T) not of the type %q from the toggle override: %s", override.Value, override.Value, t.Toggle.Type, t.Toggle.Name)
 		}
 
 		previous = override
@@ -87,24 +81,16 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 
 // GetValueAt returns the value at the given version.
 // Will return default value if version is empty string or no override is present for the specified version
-func (t *Toggle) GetValueAt(version string) interface{} {
+func (t *OverrideableToggle) GetValueAt(version string) interface{} {
+	v := t.Toggle.Value
 	if version != "" {
-		if override := t.GetOverride(version); override != nil {
-			return override.Value
+		for _, override := range t.Overrides {
+			if semver.Compare(override.MinimumVersion, version) <= 0 && semver.Compare(override.MaximumVersion, version) >= 0 {
+				v = override.Value
+				break
+			}
 		}
 	}
 
-	return t.Value
-}
-
-// GetOverride returns the first override that encapsulates version passed
-func (t *Toggle) GetOverride(version string) *Override {
-
-	for _, override := range t.Overrides {
-		if semver.Compare(override.MinimumVersion, version) <= 0 && semver.Compare(override.MaximumVersion, version) >= 0 {
-			return override
-		}
-	}
-
-	return nil
+	return v
 }

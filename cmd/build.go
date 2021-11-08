@@ -79,9 +79,9 @@ func build(parent *realm.Chamber, fullPath string, version string, cmd *cobra.Co
 			// bake the value at the specified version into the built file
 			// this is for generating a built config without needing the app's version at runtime
 			if version != "" {
-				for _, t := range c.Toggles {
-					t.Value = t.GetValueAt(version)
-					t.Overrides = nil
+				for _, ot := range c.Toggles {
+					ot.Toggle.Value = ot.GetValueAt(version)
+					ot.Overrides = nil
 				}
 			}
 
