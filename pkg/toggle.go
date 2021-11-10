@@ -39,10 +39,6 @@ type OverrideableToggle struct {
 
 type overrideableToggleAlias OverrideableToggle
 
-func (t overrideableToggleAlias) toOverrideableToggle() OverrideableToggle {
-	return OverrideableToggle(t)
-}
-
 // UnmarshalJSON Custom UnmarshalJSON method for validating toggle Value to the ToggleType
 func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
 
@@ -52,7 +48,7 @@ func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	*t = alias.toOverrideableToggle()
+	*t = OverrideableToggle(*t)
 
 	if t.Toggle == nil {
 		return errors.New("toggle was not set. please check your config")
