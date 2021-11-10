@@ -230,10 +230,10 @@ func (cfg *config) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
 	defer cfg.mu.RUnlock()
 	cBool, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(bool)
 	if !ok {
-		return defaultValue, false
+		return defaultValue, ok
 	}
 
-	return cBool, true
+	return cBool, ok
 }
 
 // StringValue retrieves a string by the key of the toggle
@@ -247,10 +247,10 @@ func (cfg *config) StringValue(toggleKey string, defaultValue string) (string, b
 	defer cfg.mu.RUnlock()
 	cStr, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(string)
 	if !ok {
-		return defaultValue, false
+		return defaultValue, ok
 	}
 
-	return cStr, true
+	return cStr, ok
 }
 
 // Float64Value retrieves a float64 by the key of the toggle
@@ -264,10 +264,10 @@ func (cfg *config) Float64Value(toggleKey string, defaultValue float64) (float64
 	defer cfg.mu.RUnlock()
 	cFloat64, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float64)
 	if !ok {
-		return defaultValue, false
+		return defaultValue, ok
 	}
 
-	return cFloat64, true
+	return cFloat64, ok
 }
 
 // Float32Value retrieves a float32 by the key of the toggle
@@ -282,10 +282,10 @@ func (cfg *config) Float32Value(toggleKey string, defaultValue float32) (float32
 	defer cfg.mu.RUnlock()
 	cFloat32, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float32)
 	if !ok {
-		return defaultValue, false
+		return defaultValue, ok
 	}
 
-	return cFloat32, true
+	return cFloat32, ok
 }
 
 // func retrieveRemoteConfig(url string) (*http.Response, error) {
