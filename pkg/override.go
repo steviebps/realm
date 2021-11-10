@@ -15,6 +15,8 @@ type Override struct {
 	Value          interface{} `json:"value"`
 }
 
+type overrideAlias Override
+
 // UnmarshalJSON Custom UnmarshalJSON method for validating Override
 func (o *Override) UnmarshalJSON(b []byte) error {
 
@@ -25,7 +27,7 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	*o = alias.toOverride()
+	*o = Override(alias)
 
 	if o.Value == nil {
 		return errors.New("Override value cannot be empty/nil")
@@ -45,10 +47,4 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 	}
 
 	return nil
-}
-
-type overrideAlias Override
-
-func (o overrideAlias) toOverride() Override {
-	return Override(o)
 }

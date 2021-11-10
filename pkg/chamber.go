@@ -15,6 +15,8 @@ type Chamber struct {
 	Children    []*Chamber                     `json:"children,omitempty"`
 }
 
+type chamberAlias Chamber
+
 // FindByName will return the first child or nth-grandchild with the matching name. BFS.
 func (c *Chamber) FindByName(name string) *Chamber {
 	queue := make([]*Chamber, 0)
@@ -85,7 +87,7 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	*c = alias.toChamber()
+	*c = Chamber(alias)
 
 	if c.Name == "" {
 		return errors.New("all chambers must have a name")
@@ -96,10 +98,4 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 	}
 
 	return nil
-}
-
-type chamberAlias Chamber
-
-func (c chamberAlias) toChamber() Chamber {
-	return Chamber(c)
 }

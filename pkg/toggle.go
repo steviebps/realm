@@ -48,7 +48,7 @@ func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
 	if err != nil {
 		return err
 	}
-	*t = OverrideableToggle(*t)
+	*t = OverrideableToggle(alias)
 
 	if t.Toggle == nil {
 		return errors.New("toggle was not set. please check your config")
