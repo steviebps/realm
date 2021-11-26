@@ -9,6 +9,7 @@ import (
 	"github.com/steviebps/realm/internal/logger"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
+	"golang.org/x/mod/semver"
 )
 
 var chamberName string
@@ -31,6 +32,10 @@ var buildCmd = &cobra.Command{
 
 		var fullPath string
 		var err error
+
+		if version != "" && !semver.IsValid(version) {
+			buildCmdError(fmt.Sprintf("%v is an invalid semantic version", version))
+		}
 
 		if !toStdout {
 			fullPath, err = getOutputDirectory(outputDir)
@@ -80,7 +85,7 @@ func build(parent *realm.Chamber, fullPath string, version string, cmd *cobra.Co
 			// this is for generating a built config without needing the app's version at runtime
 			if version != "" {
 				for _, ot := range c.Toggles {
-					ot.Toggle.Value = ot.GetValueAt(version)
+					ot.Value = ot.GetValueAt(version)
 					ot.Overrides = nil
 				}
 			}
