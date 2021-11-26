@@ -4,11 +4,9 @@
   "isApp": false,
   "toggles": {
     "feature switch four": {
-      "toggle": {
-        "name": "feature switch four",
-        "type": "number",
-        "value": 10.6
-      },
+      "name": "feature switch four",
+      "type": "number",
+      "value": 10.6,
       "overrides": [
         {
           "minimumVersion": "v0.0.1",
@@ -23,27 +21,21 @@
       ]
     },
     "feature switch one": {
-      "toggle": {
-        "name": "feature switch one",
-        "type": "boolean",
-        "value": false
-      },
+      "name": "feature switch one",
+      "type": "boolean",
+      "value": false,
       "overrides": null
     },
     "feature switch three": {
-      "toggle": {
-        "name": "feature switch three",
-        "type": "string",
-        "value": "some value"
-      },
+      "name": "feature switch three",
+      "type": "string",
+      "value": "some value",
       "overrides": null
     },
     "feature switch two": {
-      "toggle": {
-        "name": "feature switch two",
-        "type": "boolean",
-        "value": false
-      },
+      "name": "feature switch two",
+      "type": "boolean",
+      "value": false,
       "overrides": null
     }
   },
@@ -54,19 +46,15 @@
       "isApp": false,
       "toggles": {
         "feature switch one": {
-          "toggle": {
-            "name": "feature switch one",
-            "type": "boolean",
-            "value": true
-          },
+          "name": "feature switch one",
+          "type": "boolean",
+          "value": true,
           "overrides": null
         },
         "feature switch two": {
-          "toggle": {
-            "name": "feature switch two",
-            "type": "boolean",
-            "value": false
-          },
+          "name": "feature switch two",
+          "type": "boolean",
+          "value": false,
           "overrides": null
         }
       },
@@ -77,11 +65,9 @@
           "isApp": true,
           "toggles": {
             "feature switch one": {
-              "toggle": {
-                "name": "feature switch one",
-                "type": "boolean",
-                "value": false
-              },
+              "name": "feature switch one",
+              "type": "boolean",
+              "value": false,
               "overrides": null
             }
           },
@@ -95,11 +81,9 @@
       "isApp": false,
       "toggles": {
         "feature switch one": {
-          "toggle": {
-            "name": "feature switch one",
-            "type": "boolean",
-            "value": false
-          },
+          "name": "feature switch one",
+          "type": "boolean",
+          "value": false,
           "overrides": null
         }
       },
@@ -110,11 +94,9 @@
           "isApp": true,
           "toggles": {
             "feature switch one": {
-              "toggle": {
-                "name": "feature switch one",
-                "type": "boolean",
-                "value": false
-              },
+              "name": "feature switch one",
+              "type": "boolean",
+              "value": false,
               "overrides": null
             }
           },

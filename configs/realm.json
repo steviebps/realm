@@ -2,11 +2,9 @@
     "name": "realm",
     "toggles": {
         "chamber": {
-            "toggle": {
-                "name": "chamber",
-                "type": "string",
-                "value": "/home/steve/go/src/github.com/steviebps/realm/configs/masterChamber.json"
-            }
+            "name": "chamber",
+            "type": "string",
+            "value": "./configs/masterChamber.json"
         }
     }
 }
