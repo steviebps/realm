@@ -1,11 +1,16 @@
 package realm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
-type BooleanToggle struct {
-}
+type BooleanToggle bool
 
-func (bt BooleanToggle) IsValidValue(v interface{}) bool {
+func (bt BooleanToggle) ValidateValue(v interface{}) error {
 	t := reflect.TypeOf(v)
-	return t.String() == "bool"
+	if t.String() != "bool" {
+		return fmt.Errorf("%v is invalid", v)
+	}
+	return nil
 }

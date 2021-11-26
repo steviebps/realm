@@ -1,11 +1,16 @@
 package realm
 
-import "reflect"
+import (
+	"fmt"
+	"reflect"
+)
 
-type StringToggle struct {
-}
+type StringToggle string
 
-func (st StringToggle) IsValidValue(v interface{}) bool {
+func (st StringToggle) ValidateValue(v interface{}) error {
 	t := reflect.TypeOf(v)
-	return t.String() == "string"
+	if t.String() != "string" {
+		return fmt.Errorf("%v is invalid", v)
+	}
+	return nil
 }

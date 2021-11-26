@@ -1,13 +1,16 @@
 package realm
 
 import (
+	"fmt"
 	"reflect"
 )
 
-type NumberToggle struct {
-}
+type NumberToggle float64
 
-func (nt NumberToggle) IsValidValue(v interface{}) bool {
+func (nt NumberToggle) ValidateValue(v interface{}) error {
 	t := reflect.TypeOf(v)
-	return t.String() == "float64"
+	if t.String() != "float64" {
+		return fmt.Errorf("%v is invalid", v)
+	}
+	return nil
 }
