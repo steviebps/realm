@@ -4,11 +4,9 @@
     "isApp": false,
     "toggles": {
         "port": {
-            "toggle": {
-                "name": "port",
-                "type": "number",
-                "value": 80
-            },
+            "name": "port",
+            "type": "number",
+            "value": 80,
             "overrides": [
                 {
                     "minimumVersion": "v0.0.1",
@@ -23,11 +21,9 @@
             ]
         },
         "message": {
-            "toggle": {
-                "name": "message",
-                "type": "string",
-                "value": "<html><body><h1>Hello, world!</h1></body></html>"
-            },
+            "name": "message",
+            "type": "string",
+            "value": "<html><body><h1>Hello, world!</h1></body></html>",
             "overrides": []
         }
     }
