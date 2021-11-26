@@ -23,7 +23,7 @@ func TestIsValidValue(t *testing.T) {
 	for _, test := range tests {
 		toggle.Type = test.assertedType
 		got := toggle.IsValidValue(test.input)
-		if got != test.output {
+		if (got == nil) != test.output {
 			t.Errorf("input: %v with asserted type: %v\nreturned %v expected: %v", test.input, test.assertedType, got, test.output)
 		}
 	}
