@@ -80,11 +80,18 @@ func (cfg *config) SetConfigName(fileName string) error {
 func AddConfigPath(filePath string) error { return c.AddConfigPath(filePath) }
 
 func (cfg *config) AddConfigPath(filePath string) error {
+	var fullPath string
+	var err error
+
 	if filePath == "" {
 		return errors.New("file path cannot be empty")
 	}
 
-	cfg.configPaths = append(c.configPaths, filePath)
+	if fullPath, err = filepath.Abs(filePath); err != nil {
+		return err
+	}
+
+	cfg.configPaths = append(c.configPaths, fullPath)
 	return nil
 }
 
@@ -119,7 +126,7 @@ func (cfg *config) ReadInConfig(watch bool) error {
 		}
 
 		for _, filePath := range cfg.configPaths {
-			fullPath := filepath.Join(filePath + cfg.configName)
+			fullPath := filepath.Join(filePath, cfg.configName)
 			err = cfg.ReadConfigFile(fullPath)
 			if err == nil {
 				break
@@ -201,8 +208,9 @@ func (cfg *config) Watch(fileName string) {
 						err := cfg.ReadConfigFile(fileName)
 						if err != nil {
 							fmt.Printf("could not re-read config file: %v\n", err)
+						} else {
+							fmt.Printf("refreshing config file: %v\n", fileName)
 						}
-						fmt.Printf("refreshing config file: %v\n", fileName)
 					}
 				case err, ok := <-watcher.Errors:
 					if ok {
