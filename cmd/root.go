@@ -29,6 +29,7 @@ var rootCmd = &cobra.Command{
 	PersistentPreRun:  configPreRun,
 	DisableAutoGenTag: true,
 	Version:           Version,
+	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
