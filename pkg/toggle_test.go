@@ -4,7 +4,7 @@ import (
 	"testing"
 )
 
-func TestIsValidValue(t *testing.T) {
+func TestAssertType(t *testing.T) {
 
 	tests := []struct {
 		assertedType string
@@ -18,13 +18,11 @@ func TestIsValidValue(t *testing.T) {
 		{"number", 1000.00, true},
 		{"number", false, false},
 	}
-	toggle := Toggle{}
 
 	for _, test := range tests {
-		toggle.Type = test.assertedType
-		got := toggle.IsValidValue(test.input)
-		if (got == nil) != test.output {
-			t.Errorf("input: %v with asserted type: %v\nreturned %v expected: %v", test.input, test.assertedType, got, test.output)
+		ok := assertType(test.assertedType, test.input)
+		if ok != test.output {
+			t.Errorf("input: %v with asserted type: %v\nreturned %v expected: %v", test.input, test.assertedType, ok, test.output)
 		}
 	}
 }
