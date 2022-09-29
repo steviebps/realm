@@ -89,21 +89,24 @@ func configPreRun(cmd *cobra.Command, args []string) {
 		res, err := retrieveRemoteConfig(url.String())
 
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Error trying to GET this resource %q: %v", chamberFile, err))
+			logger.ErrorString(fmt.Sprintf("error trying to GET this resource %q: %v", chamberFile, err))
 			os.Exit(1)
 		}
 		jsonFile = res.Body
 	} else {
 		jsonFile, err = utils.OpenLocalConfig(chamberFile)
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("Error retrieving local config: %v", err))
+			logger.ErrorString(fmt.Sprintf("error retrieving local config: %v", err))
 			os.Exit(1)
 		}
 	}
-	defer jsonFile.Close()
 
+	code := 0
 	if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
-		logger.ErrorString(fmt.Sprintf("Error reading file %q: %v", chamberFile, err))
-		os.Exit(1)
+		logger.ErrorString(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
+		code = 1
 	}
+
+	jsonFile.Close()
+	os.Exit(code)
 }
