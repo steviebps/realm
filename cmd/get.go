@@ -9,7 +9,7 @@ import (
 	realm "github.com/steviebps/realm/pkg"
 )
 
-var getCmdError = logger.ErrorWithPrefix("Error running get command: ")
+var getCmdError = logger.ErrorWithPrefix("error running get command: ")
 
 // getCmd represents the get command
 var getCmd = &cobra.Command{
@@ -31,7 +31,7 @@ var getCmd = &cobra.Command{
 		})
 
 		if value == nil {
-			getCmdError(fmt.Sprintf("Could not find toggle value %q inside chamber %q", toggle, chamberName))
+			getCmdError(fmt.Sprintf("could not find toggle value %q inside chamber %q", toggle, chamberName))
 			os.Exit(1)
 		}
 
