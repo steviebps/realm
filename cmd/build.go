@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -15,7 +16,7 @@ import (
 var chamberName string
 var toStdout bool
 
-var buildCmdError = logger.ErrorWithPrefix("Error running build command: ")
+var buildCmdError = logger.ErrorWithPrefix("error running build command: ")
 
 // buildCmd represents the build command
 var buildCmd = &cobra.Command{
@@ -48,8 +49,8 @@ var buildCmd = &cobra.Command{
 				if forceCreateDir {
 					os.Mkdir(fullPath, 0700)
 				} else {
-					buildCmdError(fmt.Sprintf("Directory %v does not exist", fullPath))
-					logger.InfoString(fmt.Sprintf("\nTry running: \"realm build --output-dir %v --force\" to force create the directory", outputDir))
+					buildCmdError(fmt.Sprintf("directory %v does not exist", fullPath))
+					logger.InfoString(fmt.Sprintf("\ntry running: \"realm build --output-dir %v --force\" to force create the directory", outputDir))
 					os.Exit(1)
 				}
 			}
@@ -90,27 +91,24 @@ func build(parent *realm.Chamber, fullPath string, version string, cmd *cobra.Co
 				}
 			}
 
+			var w io.Writer
+			var err error
+
 			if toStdout {
-				if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), c, true); err != nil {
-					buildCmdError(err.Error())
-					os.Exit(1)
-				}
+				w = cmd.OutOrStdout()
 			} else {
 				fileName := fullPath + "/" + c.Name + ".json"
-				file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+				w, err = os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 				if err != nil {
 					buildCmdError(err.Error())
 					os.Exit(1)
 				}
-
-				if err := utils.WriteInterfaceWith(file, c, true); err != nil {
-					buildCmdError(err.Error())
-					os.Exit(1)
-				}
-
-				fmt.Println(fileName)
 			}
 
+			if err := utils.WriteInterfaceWith(w, c, true); err != nil {
+				buildCmdError(err.Error())
+				os.Exit(1)
+			}
 		}
 		return foundByName
 	})
