@@ -9,7 +9,7 @@ import (
 	"github.com/steviebps/realm/utils"
 )
 
-var printCmdError = logger.ErrorWithPrefix("Error running print command: ")
+var printCmdError = logger.ErrorWithPrefix("error running print command: ")
 
 // printCmd represents the print command
 var printCmd = &cobra.Command{
