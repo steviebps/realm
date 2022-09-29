@@ -68,14 +68,23 @@ func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool) {
 // GetToggleValue returns the toggle with the specified toggleName at the specified version.
 // Will return nil if the toggle does not exist
 func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} {
-	var t *OverrideableToggle
-	var ok bool
-
-	if t, ok = c.Toggles[toggleName]; !ok {
+	t := c.GetToggle(toggleName)
+	if t == nil {
 		return nil
 	}
 
 	return t.GetValueAt(version)
+}
+
+// GetToggle returns the toggle with the specified toggleName.
+// Will return nil if the toggle does not exist
+func (c *Chamber) GetToggle(toggleName string) *OverrideableToggle {
+	t, ok := c.Toggles[toggleName]
+	if !ok {
+		return nil
+	}
+
+	return t
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Chamber
