@@ -101,12 +101,11 @@ func configPreRun(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	code := 0
 	if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
+		jsonFile.Close()
 		logger.ErrorString(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
-		code = 1
+		os.Exit(1)
 	}
 
 	jsonFile.Close()
-	os.Exit(code)
 }
