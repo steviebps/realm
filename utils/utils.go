@@ -16,7 +16,7 @@ func IsURL(str string) (bool, *url.URL) {
 	return err == nil && u.Scheme != "" && u.Host != "", u
 }
 
-func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
+func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {
 	bw := bufio.NewWriter(w)
 	enc := json.NewEncoder(bw)
 
@@ -24,7 +24,7 @@ func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
 		enc.SetIndent("", "  ")
 	}
 
-	if err := enc.Encode(i); err != nil {
+	if err := enc.Encode(v); err != nil {
 		return err
 	}
 
@@ -32,11 +32,11 @@ func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
 	return nil
 }
 
-func ReadInterfaceWith(r io.Reader, i interface{}) error {
+func ReadInterfaceWith(r io.Reader, v any) error {
 	br := bufio.NewReader(r)
 	dec := json.NewDecoder(br)
 
-	if err := dec.Decode(i); err != nil && err != io.EOF {
+	if err := dec.Decode(v); err != nil && err != io.EOF {
 		return err
 	}
 
@@ -47,9 +47,9 @@ func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("could not open file %q because it does not exist: %w", fileName, err)
+			return file, fmt.Errorf("could not open file %q because it does not exist: %w", fileName, err)
 		}
-		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
+		return file, fmt.Errorf("could not open file %q: %w", fileName, err)
 	}
 
 	return file, nil
