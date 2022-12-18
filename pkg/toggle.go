@@ -2,7 +2,6 @@ package realm
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"golang.org/x/mod/semver"
@@ -11,61 +10,94 @@ import (
 // Toggle is a feature switch/toggle structure for holding
 // its name, value, type and any overrides to be parsed by the applicable realm sdk
 type Toggle struct {
-	Name  string      `json:"name"`
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
 }
 
+type toggleAlias Toggle
+
+func (t *Toggle) UnmarshalJSON(b []byte) error {
+	var raw json.RawMessage
+	alias := toggleAlias{
+		Value: &raw,
+	}
+	err := json.Unmarshal(b, &alias)
+	if err != nil {
+		return err
+	}
+
+	*t = Toggle(alias)
+	if err := t.assertType(raw); err != nil {
+		return fmt.Errorf("%v of the specified type %q is incompatible: %w", string(raw), t.Type, err)
+	}
+
+	return nil
+}
+
 type OverrideableToggle struct {
-	*Toggle
+	Toggle
 	Overrides []*Override `json:"overrides,omitempty"`
 }
 
 type overrideableToggleAlias OverrideableToggle
 
-func assertType(t string, v interface{}) bool {
-	var ok bool
-	switch t {
+type UnsupportedTypeError struct {
+	ToggleType string
+}
+
+func (ut *UnsupportedTypeError) Error() string {
+	return fmt.Sprintf("type %q is currently not supported", ut.ToggleType)
+}
+
+func (t *Toggle) assertType(data json.RawMessage) error {
+	var err error
+	switch t.Type {
 	case "string":
-		_, ok = v.(string)
+		var s string
+		if err = json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		t.Value = s
+		return nil
 	case "number":
-		_, ok = v.(float64)
+		var n float64
+		if err = json.Unmarshal(data, &n); err != nil {
+			return err
+		}
+		t.Value = n
+		return nil
 	case "boolean":
-		_, ok = v.(bool)
+		var b bool
+		if err = json.Unmarshal(data, &b); err != nil {
+			return err
+		}
+		t.Value = b
+		return nil
+	case "custom":
+		return nil
 	}
 
-	return ok
+	return &UnsupportedTypeError{t.Type}
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating toggle Value to the ToggleType
 func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
 	var alias overrideableToggleAlias
-
 	err := json.Unmarshal(b, &alias)
 	if err != nil {
 		return err
 	}
 	*t = OverrideableToggle(alias)
 
-	if t.Toggle == nil {
-		return errors.New("toggle was not set. please check your config")
-	}
-
-	if ok := assertType(t.Type, t.Value); !ok {
-		return fmt.Errorf("%v (%T) not of the type %q from the toggle: %s, %w", t.Value, t.Value, t.Type, t.Name, err)
-	}
-
 	var previous *Override
 	for _, override := range t.Overrides {
+		if override.Type == "" {
+			override.Type = t.Type
+		}
 		// overrides should not overlap
 		if previous != nil && semver.Compare(previous.MaximumVersion, override.MinimumVersion) == 1 {
 			return fmt.Errorf("an override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)
 		}
-
-		if ok := assertType(t.Type, t.Value); !ok {
-			return fmt.Errorf("%v (%T) not of the type %q from the toggle override: %s", override.Value, override.Value, t.Type, t.Name)
-		}
-
 		previous = override
 	}
 

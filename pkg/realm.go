@@ -1,6 +1,7 @@
 package realm
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +17,8 @@ import (
 
 type config struct {
 	mu              sync.RWMutex
-	rootChamber     *Chamber
+	root            *Chamber
+	path            string
 	configPaths     []string
 	configName      string
 	defaultVersion  string
@@ -147,13 +149,11 @@ func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
 	defer cfg.mu.Unlock()
 
 	var root Chamber
-	var err error
-
-	if err = utils.ReadInterfaceWith(r, &root); err != nil {
+	if err := utils.ReadInterfaceWith(r, &root); err != nil {
 		return fmt.Errorf("error reading file %q: %w", fileName, err)
 	}
 
-	cfg.rootChamber = &root
+	cfg.root = &root
 	cfg.configFileUsed = fileName
 
 	return nil
@@ -221,73 +221,63 @@ func (cfg *config) Watch(fileName string) {
 	<-init
 }
 
+func SetPath(path string) {
+	c.SetPath(path)
+}
+
+func (cfg *config) SetPath(path string) {
+	cfg.mu.RLock()
+	defer cfg.mu.RUnlock()
+	cfg.path = path
+}
+
 // BoolValue retrieves a bool by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
 func BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
-	return c.BoolValue(toggleKey, defaultValue)
-}
-
-func (cfg *config) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cBool, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(bool)
-	if !ok {
-		return defaultValue, ok
+	if c.root == nil {
+		return defaultValue, false
 	}
-
-	return cBool, ok
+	return c.root.BoolValue(toggleKey, defaultValue, c.defaultVersion)
 }
 
 // StringValue retrieves a string by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
 func StringValue(toggleKey string, defaultValue string) (string, bool) {
-	return c.StringValue(toggleKey, defaultValue)
-}
-
-func (cfg *config) StringValue(toggleKey string, defaultValue string) (string, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cStr, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(string)
-	if !ok {
-		return defaultValue, ok
+	if c.root == nil {
+		return defaultValue, false
 	}
-
-	return cStr, ok
+	return c.root.StringValue(toggleKey, defaultValue, c.defaultVersion)
 }
 
 // Float64Value retrieves a float64 by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
 func Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
-	return c.Float64Value(toggleKey, defaultValue)
+	if c.root == nil {
+		return defaultValue, false
+	}
+	return c.root.Float64Value(toggleKey, defaultValue, c.defaultVersion)
 }
 
-func (cfg *config) Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
+// CustomValue retrieves an arbitrary value by the key of the toggle
+func CustomValue(toggleKey string, v any) error {
+	return c.CustomValue(toggleKey, v)
+}
+
+func (cfg *config) CustomValue(toggleKey string, v any) error {
 	cfg.mu.RLock()
 	defer cfg.mu.RUnlock()
-	cFloat64, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float64)
-	if !ok {
-		return defaultValue, ok
+
+	t := cfg.root.GetToggle(toggleKey)
+	if t == nil {
+		return fmt.Errorf("could not find toggle with this key: %s", toggleKey)
 	}
 
-	return cFloat64, ok
-}
-
-// Float32Value retrieves a float32 by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-// if the config value overflows the type requested, defaultValue will be returned
-func Float32Value(toggleKey string, defaultValue float32) (float32, bool) {
-	return c.Float32Value(toggleKey, defaultValue)
-}
-
-func (cfg *config) Float32Value(toggleKey string, defaultValue float32) (float32, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cFloat32, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float32)
+	raw, ok := t.GetValueAt(cfg.defaultVersion).(*json.RawMessage)
 	if !ok {
-		return defaultValue, ok
+		return fmt.Errorf("could not convert data type to be unmarshaled: %s", toggleKey)
 	}
 
-	return cFloat32, ok
+	return json.Unmarshal(*raw, v)
 }
 
 // func retrieveRemoteConfig(url string) (*http.Response, error) {

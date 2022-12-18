@@ -11,12 +11,12 @@ import (
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/steviebps/realm/internal/logger"
 	realm "github.com/steviebps/realm/pkg"
-	utils "github.com/steviebps/realm/utils"
+	"github.com/steviebps/realm/utils"
 )
 
 var home string
 var cfgFile string
-var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}, Children: []*realm.Chamber{}}
+var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
 
 // Version the version of realm
 var Version = "development"

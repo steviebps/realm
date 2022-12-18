@@ -10,16 +10,15 @@ import (
 
 // Override is a Toggle value to be consumed by and restricted to a semantic version range
 type Override struct {
-	MinimumVersion string      `json:"minimumVersion"`
-	MaximumVersion string      `json:"maximumVersion"`
-	Value          interface{} `json:"value"`
+	Toggle
+	MinimumVersion string `json:"minimumVersion"`
+	MaximumVersion string `json:"maximumVersion"`
 }
 
 type overrideAlias Override
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Override
 func (o *Override) UnmarshalJSON(b []byte) error {
-
 	var alias overrideAlias
 
 	err := json.Unmarshal(b, &alias)
