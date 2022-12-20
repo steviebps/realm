@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,8 +9,12 @@ import (
 	realm "github.com/steviebps/realm/pkg"
 )
 
-func main() {
+type CustomStruct struct {
+	Foo string `json:"foo,omitempty"`
+}
 
+func main() {
+	var err error
 	realm.SetVersion("v1.0.0")
 
 	if err := realm.AddConfigPath("./"); err != nil {
@@ -33,8 +38,20 @@ func main() {
 		w.Write([]byte(message))
 	})
 
+	mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
+		var custom *CustomStruct
+
+		if err := realm.CustomValue("custom", &custom); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(custom)
+	})
+
 	log.Println("Listening on :", port)
-	err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
+	err = http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
 	if err != nil {
 		log.Fatal(err)
 	}

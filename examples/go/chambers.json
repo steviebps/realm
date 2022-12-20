@@ -4,27 +4,32 @@
     "isApp": false,
     "toggles": {
         "port": {
-            "name": "port",
             "type": "number",
             "value": 80,
             "overrides": [
                 {
                     "minimumVersion": "v0.0.1",
                     "maximumVersion": "v2.0.0",
+                    "type": "number",
                     "value": 3001
                 },
                 {
                     "minimumVersion": "v2.0.0",
                     "maximumVersion": "v3.0.0",
+                    "type": "number",
                     "value": 3002
                 }
             ]
         },
         "message": {
-            "name": "message",
             "type": "string",
-            "value": "<html><body><h1>Hello, world!</h1></body></html>",
-            "overrides": []
+            "value": "<html><body><h1>Hello, world!!!</h1></body></html>",
+        },
+        "custom": {
+            "type": "custom",
+            "value": {
+                "foo": "bar"
+            }
         }
     }
 }

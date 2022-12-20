@@ -21,32 +21,20 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	alias := toggleAlias{
 		Value: &raw,
 	}
-	err := json.Unmarshal(b, &alias)
-	if err != nil {
+	if err := json.Unmarshal(b, &alias); err != nil {
 		return err
 	}
-
 	*t = Toggle(alias)
+
+	if t.Value == nil || len(raw) == 0 {
+		return fmt.Errorf("value cannot be empty/nil with type specified as: %q", t.Type)
+	}
+
 	if err := t.assertType(raw); err != nil {
-		return fmt.Errorf("%v of the specified type %q is incompatible: %w", string(raw), t.Type, err)
+		return fmt.Errorf("%q of the specified type %q is incompatible: %w", string(raw), t.Type, err)
 	}
 
 	return nil
-}
-
-type OverrideableToggle struct {
-	Toggle
-	Overrides []*Override `json:"overrides,omitempty"`
-}
-
-type overrideableToggleAlias OverrideableToggle
-
-type UnsupportedTypeError struct {
-	ToggleType string
-}
-
-func (ut *UnsupportedTypeError) Error() string {
-	return fmt.Sprintf("type %q is currently not supported", ut.ToggleType)
 }
 
 func (t *Toggle) assertType(data json.RawMessage) error {
@@ -80,20 +68,46 @@ func (t *Toggle) assertType(data json.RawMessage) error {
 	return &UnsupportedTypeError{t.Type}
 }
 
+type OverrideableToggle struct {
+	*Toggle
+	Overrides []*Override `json:"overrides,omitempty"`
+}
+
+type UnsupportedTypeError struct {
+	ToggleType string
+}
+
+func (ut *UnsupportedTypeError) Error() string {
+	return fmt.Sprintf("type %q is currently not supported", ut.ToggleType)
+}
+
 // UnmarshalJSON Custom UnmarshalJSON method for validating toggle Value to the ToggleType
 func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
-	var alias overrideableToggleAlias
-	err := json.Unmarshal(b, &alias)
+	var toggle Toggle
+	err := json.Unmarshal(b, &toggle)
 	if err != nil {
 		return err
 	}
-	*t = OverrideableToggle(alias)
+	t.Toggle = &toggle
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+
+	for k, v := range m {
+		switch k {
+		case "overrides":
+			var overrides []*Override
+			if err := json.Unmarshal(v, &overrides); err != nil {
+				return err
+			}
+			t.Overrides = overrides
+		}
+	}
 
 	var previous *Override
 	for _, override := range t.Overrides {
-		if override.Type == "" {
-			override.Type = t.Type
-		}
 		// overrides should not overlap
 		if previous != nil && semver.Compare(previous.MaximumVersion, override.MinimumVersion) == 1 {
 			return fmt.Errorf("an override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)

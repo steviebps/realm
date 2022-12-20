@@ -4,45 +4,6 @@ import (
 	"testing"
 )
 
-func TestFindByName(t *testing.T) {
-
-	// setup
-	bottom := &Chamber{Name: "BOTTOM"}
-	middle := &Chamber{
-		Name: "MIDDLE",
-		Children: []*Chamber{
-			bottom,
-		},
-	}
-	middle2 := &Chamber{
-		Name: "MIDDLE2",
-	}
-	top := &Chamber{
-		Name: "TOP",
-		Children: []*Chamber{
-			middle,
-			middle2,
-		},
-	}
-
-	tests := []struct {
-		input  string
-		output *Chamber
-	}{
-		{"BOTTOM", bottom},
-		{"MIDDLE", middle},
-		{"MIDDLE2", middle2},
-		{"TOP", top},
-	}
-
-	for _, test := range tests {
-		got := top.FindByName(test.input)
-		if got != test.output {
-			t.Errorf("Got %v\nexpected: %q", got, test.output.Name)
-		}
-	}
-}
-
 func TestInheritWith(t *testing.T) {
 
 	bottom := &Chamber{
@@ -50,7 +11,6 @@ func TestInheritWith(t *testing.T) {
 		Toggles: map[string]*OverrideableToggle{
 			"toggle2": {
 				Toggle: &Toggle{
-					Name:  "toggle2",
 					Type:  "boolean",
 					Value: false,
 				},
@@ -62,7 +22,6 @@ func TestInheritWith(t *testing.T) {
 		Toggles: map[string]*OverrideableToggle{
 			"toggle1": {
 				Toggle: &Toggle{
-					Name:  "toggle1",
 					Type:  "boolean",
 					Value: true,
 				},
@@ -74,7 +33,6 @@ func TestInheritWith(t *testing.T) {
 		Toggles: map[string]*OverrideableToggle{
 			"toggle1": {
 				Toggle: &Toggle{
-					Name:  "toggle1",
 					Type:  "boolean",
 					Value: false,
 				},

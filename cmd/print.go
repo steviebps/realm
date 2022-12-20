@@ -26,7 +26,7 @@ var printCmd = &cobra.Command{
 		if output != "" {
 			w, err = os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 			if err != nil {
-				buildCmdError(err.Error())
+				printCmdError(err.Error())
 				os.Exit(1)
 			}
 		}

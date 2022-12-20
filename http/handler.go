@@ -26,11 +26,10 @@ func Handler(storage storage.Storage) http.Handler {
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			utils.WriteInterfaceWith(w, c, false)
+			utils.WriteInterfaceWith(w, c, true)
 			return
 
 		case http.MethodPost:
-
 			var c *realm.Chamber
 			if err := json.NewDecoder(r.Body).Decode(c); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -50,7 +49,7 @@ func Handler(storage storage.Storage) http.Handler {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			if err := utils.WriteInterfaceWith(w, names, false); err != nil {
+			if err := utils.WriteInterfaceWith(w, names, true); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 			}
 			return
