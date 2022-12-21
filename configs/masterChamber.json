@@ -1,37 +1,37 @@
 {
-    "name": "root",
-    "isBuildable": false,
-    "isApp": false,
-    "toggles": {
-      "feature switch four": {
-        "type": "number",
-        "value": 10.6,
-        "overrides": [
-          {
-            "minimumVersion": "v0.0.1",
-            "maximumVersion": "v2.0.0",
-            "type": "number",
-            "value": 10.2
-          },
-          {
-            "minimumVersion": "v2.0.0",
-            "maximumVersion": "v3.0.0",
-            "type": "number",
-            "value": 10.4
-          }
-        ]
-      },
-      "feature switch one": {
-        "type": "boolean",
-        "value": false
-      },
-      "feature switch three": {
-        "type": "string",
-        "value": "some value"
-      },
-      "feature switch two": {
-        "type": "boolean",
-        "value": false
-      }
+  "name": "root",
+  "isBuildable": false,
+  "isApp": false,
+  "toggles": {
+    "feature switch four": {
+      "type": "number",
+      "value": 10.6,
+      "overrides": [
+        {
+          "minimumVersion": "v0.0.1",
+          "maximumVersion": "v2.0.0",
+          "type": "number",
+          "value": 10.2
+        },
+        {
+          "minimumVersion": "v2.0.0",
+          "maximumVersion": "v3.0.0",
+          "type": "number",
+          "value": 10.4
+        }
+      ]
+    },
+    "feature switch one": {
+      "type": "boolean",
+      "value": false
+    },
+    "feature switch three": {
+      "type": "string",
+      "value": "some value"
+    },
+    "feature switch two": {
+      "type": "boolean",
+      "value": false
     }
+  }
 }
