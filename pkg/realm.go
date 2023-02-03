@@ -37,8 +37,13 @@ type RealmOptions struct {
 
 // NewRealm returns a new Realm struct that carries out all of the core features
 func NewRealm(options RealmOptions) *Realm {
+	logger := options.Logger
+	if logger == nil {
+		logger = hclog.Default()
+	}
+
 	return &Realm{
-		logger:  options.Logger,
+		logger:  logger,
 		storage: options.Storage,
 	}
 }

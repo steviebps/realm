@@ -15,33 +15,34 @@ type CustomStruct struct {
 
 func main() {
 	var err error
-	realm.SetVersion("v1.0.0")
+	rlm := realm.NewRealm(realm.RealmOptions{})
+	rlm.SetVersion("v1.0.0")
 
-	if err := realm.AddConfigPath("./"); err != nil {
+	if err := rlm.AddConfigPath("./"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := realm.SetConfigName("chambers.json"); err != nil {
+	if err := rlm.SetConfigName("chambers.json"); err != nil {
 		log.Fatal(err)
 	}
 
-	if err := realm.ReadInConfig(true); err != nil {
+	if err := rlm.ReadInConfig(true); err != nil {
 		log.Fatal(err)
 	}
 
-	port, _ := realm.Float64Value("port", 3000)
+	port, _ := rlm.Float64Value("port", 3000)
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		message, _ := realm.StringValue("message", "DEFAULT")
+		message, _ := rlm.StringValue("message", "DEFAULT")
 		w.Write([]byte(message))
 	})
 
 	mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
 		var custom *CustomStruct
 
-		if err := realm.CustomValue("custom", &custom); err != nil {
+		if err := rlm.CustomValue("custom", &custom); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
