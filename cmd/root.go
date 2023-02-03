@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
 
 	homedir "github.com/mitchellh/go-homedir"
@@ -17,6 +18,7 @@ import (
 var home string
 var cfgFile string
 var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
+var realmCore realm.Realm
 
 // Version the version of realm
 var Version = "development"
@@ -26,7 +28,7 @@ var rootCmd = &cobra.Command{
 	Use:               "realm",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
-	PersistentPreRun:  configPreRun,
+	PersistentPreRun:  persistentPreRun,
 	DisableAutoGenTag: true,
 	Version:           Version,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -50,25 +52,26 @@ func init() {
 		logger.ErrorString(err.Error())
 		os.Exit(1)
 	}
-
+	rootCmd.Flags()
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "realm configuration file")
 	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
+	realmCore = *realm.NewRealm(realm.RealmOptions{Logger: hclog.Default().Named("realm")})
 }
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
-		realm.SetConfigFile(cfgFile)
+		realmCore.SetConfigFile(cfgFile)
 	} else {
-		realm.AddConfigPath("./")
-		realm.AddConfigPath(home + "/.realm/")
-		realm.SetConfigName("realm.json")
+		realmCore.AddConfigPath("./")
+		realmCore.AddConfigPath(home + "/.realm/")
+		realmCore.SetConfigName("realm.json")
 	}
 
 	// If a config file is found, read it in.
-	if err := realm.ReadInConfig(false); err != nil {
+	if err := realmCore.ReadInConfig(false); err != nil {
 		logger.ErrorString(err.Error())
 		os.Exit(1)
 	}
@@ -79,10 +82,10 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 }
 
 // sets up the config for all sub-commands
-func configPreRun(cmd *cobra.Command, args []string) {
+func persistentPreRun(cmd *cobra.Command, args []string) {
 	var jsonFile io.ReadCloser
 	var err error
-	chamberFile, _ := realm.StringValue("chamber", "")
+	chamberFile, _ := realmCore.StringValue("chamber", "")
 
 	validURL, url := utils.IsURL(chamberFile)
 	if validURL {
@@ -100,12 +103,10 @@ func configPreRun(cmd *cobra.Command, args []string) {
 			os.Exit(1)
 		}
 	}
+	defer jsonFile.Close()
 
 	if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
-		jsonFile.Close()
 		logger.ErrorString(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
 		os.Exit(1)
 	}
-
-	jsonFile.Close()
 }

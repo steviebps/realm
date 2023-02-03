@@ -2,14 +2,12 @@ package cmd
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
 	realmhttp "github.com/steviebps/realm/http"
 	"github.com/steviebps/realm/internal/logger"
-	realm "github.com/steviebps/realm/pkg"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
 
@@ -20,17 +18,20 @@ var serverCmd = &cobra.Command{
 	Short: "Starts realm server",
 	Long:  "Starts realm server for serving http requests",
 	Run: func(cmd *cobra.Command, args []string) {
-		port, _ := realm.Float64Value("port", 3000)
+		port, _ := realmCore.Float64Value("port", 3000)
+		path, _ := realmCore.StringValue("path", "./.realm")
+		certFile, _ := realmCore.StringValue("certFile", "")
+		keyFile, _ := realmCore.StringValue("keyFile", "")
+		realmCore.Logger().Info("Server options", "port", port, "path", path)
 
-		storage, err := storage.NewRealmFile("./tmp")
+		storage, err := storage.NewFileStorage(path)
 		if err != nil {
 			serverCmdError(err.Error())
 		}
+		handler := realmhttp.NewHandler(realmhttp.HandlerConfig{Realm: &realmCore, Storage: storage})
 
-		handler := realmhttp.Handler(storage)
-
-		log.Println("Listening on :", port)
-		if err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), handler); err != nil {
+		realmCore.Logger().Info("Listening on", "port", port)
+		if err := http.ListenAndServeTLS(fmt.Sprintf(":%d", int(port)), certFile, keyFile, handler); err != nil {
 			serverCmdError(err.Error())
 			os.Exit(1)
 		}

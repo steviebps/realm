@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,43 +10,46 @@ import (
 	"sort"
 	"strings"
 
-	realm "github.com/steviebps/realm/pkg"
+	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
 )
 
-type RealmFile struct {
-	rootPath string
+type FileStorage struct {
+	path string
 }
 
 var (
-	_ Storage = (*RealmFile)(nil)
+	_ Storage = (*FileStorage)(nil)
 )
 
-func NewRealmFile(path string) (*RealmFile, error) {
+func NewFileStorage(path string) (*FileStorage, error) {
 	if path == "" {
 		return nil, fmt.Errorf("'path' must be set")
 	}
 
-	return &RealmFile{
-		rootPath: path,
+	return &FileStorage{
+		path: path,
 	}, nil
 }
 
-func (f *RealmFile) Get(ctx context.Context, k string) (*realm.Chamber, error) {
-	if err := f.validatePath(k); err != nil {
+func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
+	logger := hclog.FromContext(ctx)
+	logger.Debug("get operation", "logicalPath", logicalPath)
+
+	if err := f.validatePath(logicalPath); err != nil {
 		return nil, err
 	}
-	path, key := f.expandPath(k)
+	path, key := f.expandPath(logicalPath)
 	file, err := os.OpenFile(filepath.Join(path, key), os.O_RDONLY, 0600)
-	if err != nil {
-		return nil, err
-	}
 	if file != nil {
 		defer file.Close()
 	}
+	if err != nil {
+		return nil, err
+	}
 
-	var c realm.Chamber
-	if err := utils.ReadInterfaceWith(file, &c); err != nil {
+	buf := new(bytes.Buffer)
+	if _, err := buf.ReadFrom(file); err != nil {
 		return nil, err
 	}
 
@@ -55,14 +59,18 @@ func (f *RealmFile) Get(ctx context.Context, k string) (*realm.Chamber, error) {
 	default:
 	}
 
-	return &c, nil
+	return &StorageEntry{Key: key, Value: buf.Bytes()}, nil
 }
 
-func (f *RealmFile) Put(ctx context.Context, c *realm.Chamber) error {
-	if err := f.validatePath(c.Name); err != nil {
+func (f *FileStorage) Put(ctx context.Context, prefix string, e StorageEntry) error {
+	logger := hclog.FromContext(ctx)
+	logicalPath := utils.EnsureTrailingSlash(prefix) + e.Key
+	logger.Debug("put operation", "logicalPath", logicalPath)
+
+	if err := f.validatePath(logicalPath); err != nil {
 		return err
 	}
-	path, key := f.expandPath(c.Name)
+	path, key := f.expandPath(logicalPath)
 
 	select {
 	case <-ctx.Done():
@@ -76,21 +84,24 @@ func (f *RealmFile) Put(ctx context.Context, c *realm.Chamber) error {
 	}
 
 	file, err := os.OpenFile(filepath.Join(path, key), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
 	if file != nil {
 		defer file.Close()
 	}
-
-	return utils.WriteInterfaceWith(file, c, false)
-}
-
-func (f *RealmFile) Delete(ctx context.Context, k string) error {
-	if err := f.validatePath(k); err != nil {
+	if err != nil {
 		return err
 	}
-	path, key := f.expandPath(k)
+
+	return utils.WriteInterfaceWith(file, e.Value, true)
+}
+
+func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
+	logger := hclog.FromContext(ctx)
+	logger.Debug("delete operation", "logicalPath", logicalPath)
+
+	if err := f.validatePath(logicalPath); err != nil {
+		return err
+	}
+	path, key := f.expandPath(logicalPath)
 
 	select {
 	case <-ctx.Done():
@@ -105,12 +116,15 @@ func (f *RealmFile) Delete(ctx context.Context, k string) error {
 	return nil
 }
 
-func (f *RealmFile) List(ctx context.Context, prefix string) ([]string, error) {
+func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
+	logger := hclog.FromContext(ctx)
+	logger.Debug("list operation", "prefix", prefix)
+
 	if err := f.validatePath(prefix); err != nil {
 		return nil, err
 	}
 
-	path := f.rootPath
+	path := f.path
 	if prefix != "" {
 		path = filepath.Join(path, prefix)
 	}
@@ -120,10 +134,6 @@ func (f *RealmFile) List(ctx context.Context, prefix string) ([]string, error) {
 		defer file.Close()
 	}
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-
 		return nil, err
 	}
 
@@ -159,7 +169,7 @@ func (f *RealmFile) List(ctx context.Context, prefix string) ([]string, error) {
 	return names, nil
 }
 
-func (f *RealmFile) validatePath(path string) error {
+func (f *FileStorage) validatePath(path string) error {
 	switch {
 	case strings.Contains(path, ".."):
 		return errors.New("path cannot reference parents")
@@ -168,8 +178,8 @@ func (f *RealmFile) validatePath(path string) error {
 	return nil
 }
 
-func (f *RealmFile) expandPath(k string) (string, string) {
-	path := filepath.Join(f.rootPath, k)
+func (f *FileStorage) expandPath(k string) (string, string) {
+	path := filepath.Join(f.path, k)
 	key := filepath.Base(path)
 	path = filepath.Dir(path)
 	return path, "_" + key

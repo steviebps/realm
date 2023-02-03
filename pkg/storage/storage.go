@@ -2,13 +2,17 @@ package storage
 
 import (
 	"context"
-
-	realm "github.com/steviebps/realm/pkg"
+	"encoding/json"
 )
 
+type StorageEntry struct {
+	Key   string
+	Value json.RawMessage
+}
+
 type Storage interface {
-	Get(ctx context.Context, key string) (*realm.Chamber, error)
-	Put(ctx context.Context, c *realm.Chamber) error
+	Get(ctx context.Context, key string) (*StorageEntry, error)
+	Put(ctx context.Context, prefix string, e StorageEntry) error
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, prefix string) ([]string, error)
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strings"
 )
 
 // IsURL returns whether the string is a valid url with a host and scheme
@@ -53,4 +54,16 @@ func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
 	}
 
 	return file, nil
+}
+
+func EnsureTrailingSlash(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+
+	for len(s) > 0 && s[len(s)-1] != '/' {
+		s = s + "/"
+	}
+	return s
 }

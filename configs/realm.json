@@ -4,6 +4,10 @@
         "chamber": {
             "type": "string",
             "value": "./configs/masterChamber.json"
+        },
+        "port": {
+            "type": "number",
+            "value": 443
         }
     }
 }
