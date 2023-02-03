@@ -10,7 +10,6 @@ import (
 	"github.com/spf13/cobra"
 
 	homedir "github.com/mitchellh/go-homedir"
-	"github.com/steviebps/realm/internal/logger"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
 )
@@ -38,25 +37,25 @@ var rootCmd = &cobra.Command{
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
-		logger.ErrorString(fmt.Sprintf("Error while starting realm: %v", err))
+		realmCore.Logger().Error(fmt.Sprintf("Error while starting realm: %v", err))
 		os.Exit(1)
 	}
 }
 
 func init() {
 	cobra.OnInitialize(initConfig)
+	realmCore = *realm.NewRealm(realm.RealmOptions{Logger: hclog.Default().Named("realm")})
 
 	var err error
 	home, err = homedir.Dir()
 	if err != nil {
-		logger.ErrorString(err.Error())
+		realmCore.Logger().Error(err.Error())
 		os.Exit(1)
 	}
 	rootCmd.Flags()
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "realm configuration file")
 	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
-	realmCore = *realm.NewRealm(realm.RealmOptions{Logger: hclog.Default().Named("realm")})
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -72,7 +71,7 @@ func initConfig() {
 
 	// If a config file is found, read it in.
 	if err := realmCore.ReadInConfig(false); err != nil {
-		logger.ErrorString(err.Error())
+		realmCore.Logger().Error(err.Error())
 		os.Exit(1)
 	}
 }
@@ -92,21 +91,21 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 		res, err := retrieveRemoteConfig(url.String())
 
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("error trying to GET this resource %q: %v", chamberFile, err))
+			realmCore.Logger().Error(fmt.Sprintf("error trying to GET this resource %q: %v", chamberFile, err))
 			os.Exit(1)
 		}
 		jsonFile = res.Body
 	} else {
 		jsonFile, err = utils.OpenLocalConfig(chamberFile)
 		if err != nil {
-			logger.ErrorString(fmt.Sprintf("error retrieving local config: %v", err))
+			realmCore.Logger().Error(fmt.Sprintf("error retrieving local config: %v", err))
 			os.Exit(1)
 		}
 	}
 	defer jsonFile.Close()
 
 	if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
-		logger.ErrorString(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
+		realmCore.Logger().Error(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
 		os.Exit(1)
 	}
 }

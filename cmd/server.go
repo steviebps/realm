@@ -7,11 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 	realmhttp "github.com/steviebps/realm/http"
-	"github.com/steviebps/realm/internal/logger"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
-
-var serverCmdError = logger.ErrorWithPrefix("error running server command: ")
 
 var serverCmd = &cobra.Command{
 	Use:   "server",
@@ -26,13 +23,13 @@ var serverCmd = &cobra.Command{
 
 		storage, err := storage.NewFileStorage(path)
 		if err != nil {
-			serverCmdError(err.Error())
+			realmCore.Logger().Error(err.Error())
 		}
 		handler := realmhttp.NewHandler(realmhttp.HandlerConfig{Realm: &realmCore, Storage: storage})
 
 		realmCore.Logger().Info("Listening on", "port", port)
 		if err := http.ListenAndServeTLS(fmt.Sprintf(":%d", int(port)), certFile, keyFile, handler); err != nil {
-			serverCmdError(err.Error())
+			realmCore.Logger().Error(err.Error())
 			os.Exit(1)
 		}
 	},
