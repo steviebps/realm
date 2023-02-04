@@ -39,7 +39,7 @@ type RealmOptions struct {
 func NewRealm(options RealmOptions) *Realm {
 	logger := options.Logger
 	if logger == nil {
-		logger = hclog.Default()
+		logger = hclog.Default().Named("realm")
 	}
 
 	return &Realm{
