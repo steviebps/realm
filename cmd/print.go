@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
 )
 
@@ -14,6 +15,7 @@ var printCmd = &cobra.Command{
 	Short: "Print all chambers",
 	Long:  "Print all chambers as they exist without inheritence",
 	Run: func(cmd *cobra.Command, args []string) {
+		realmCore := cmd.Context().Value("core").(*realm.Realm)
 		pretty, _ := cmd.Flags().GetBool("pretty")
 		output, _ := cmd.Flags().GetString("output")
 

@@ -1,23 +1,21 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 
-	homedir "github.com/mitchellh/go-homedir"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
 )
 
-var home string
-var cfgFile string
 var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
-var realmCore realm.Realm
 
 // Version the version of realm
 var Version = "development"
@@ -36,30 +34,40 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	logger := hclog.Default().Named("realm")
+	logger.SetLevel(hclog.Trace)
+	realmCore := realm.NewRealm(realm.RealmOptions{Logger: logger})
+	ctx := context.WithValue(context.Background(), "core", realmCore)
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		realmCore.Logger().Error(fmt.Sprintf("Error while starting realm: %v", err))
 		os.Exit(1)
 	}
 }
 
 func init() {
-	cobra.OnInitialize(initConfig)
-	realmCore = *realm.NewRealm(realm.RealmOptions{Logger: hclog.Default().Named("realm")})
+	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
+	rootCmd.PersistentFlags().String("config", "", "realm configuration file")
+	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
+}
 
-	var err error
-	home, err = homedir.Dir()
+func retrieveRemoteConfig(url string) (*http.Response, error) {
+	return http.Get(url)
+}
+
+// sets up the config for all sub-commands
+func persistentPreRun(cmd *cobra.Command, args []string) {
+	realmCore := cmd.Context().Value("core").(*realm.Realm)
+
+	flags := cmd.PersistentFlags()
+	cfgFile, _ := flags.GetString("config")
+
+	home, err := homedir.Dir()
 	if err != nil {
 		realmCore.Logger().Error(err.Error())
 		os.Exit(1)
 	}
-	rootCmd.Flags()
-	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "realm configuration file")
-	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
-}
 
-// initConfig reads in config file and ENV variables if set.
-func initConfig() {
 	if cfgFile != "" {
 		// Use config file from the flag.
 		realmCore.SetConfigFile(cfgFile)
@@ -74,19 +82,10 @@ func initConfig() {
 		realmCore.Logger().Error(err.Error())
 		os.Exit(1)
 	}
-}
 
-func retrieveRemoteConfig(url string) (*http.Response, error) {
-	return http.Get(url)
-}
-
-// sets up the config for all sub-commands
-func persistentPreRun(cmd *cobra.Command, args []string) {
-	var jsonFile io.ReadCloser
-	var err error
 	chamberFile, _ := realmCore.StringValue("chamber", "")
-
 	validURL, url := utils.IsURL(chamberFile)
+	var jsonFile io.ReadCloser
 	if validURL {
 		res, err := retrieveRemoteConfig(url.String())
 
@@ -96,8 +95,8 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 		}
 		jsonFile = res.Body
 	} else {
-		jsonFile, err = utils.OpenLocalConfig(chamberFile)
-		if err != nil {
+		var err error
+		if jsonFile, err = utils.OpenLocalConfig(chamberFile); err != nil {
 			realmCore.Logger().Error(fmt.Sprintf("error retrieving local config: %v", err))
 			os.Exit(1)
 		}
