@@ -15,30 +15,32 @@ import (
 )
 
 type FileStorage struct {
-	path string
+	logger hclog.Logger
+	path   string
 }
 
 var (
 	_ Storage = (*FileStorage)(nil)
 )
 
-func NewFileStorage(path string) (*FileStorage, error) {
+func NewFileStorage(path string, logger hclog.Logger) (*FileStorage, error) {
 	if path == "" {
 		return nil, fmt.Errorf("'path' must be set")
 	}
 
 	return &FileStorage{
-		path: path,
+		logger: logger.Named("file"),
+		path:   path,
 	}, nil
 }
 
 func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	logger := hclog.FromContext(ctx)
-	logger.Debug("get operation", "logicalPath", logicalPath)
+	f.logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := f.validatePath(logicalPath); err != nil {
 		return nil, err
 	}
+
 	path, key := f.expandPath(logicalPath)
 	file, err := os.OpenFile(filepath.Join(path, key), os.O_RDONLY, 0600)
 	if file != nil {
@@ -63,9 +65,8 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 }
 
 func (f *FileStorage) Put(ctx context.Context, prefix string, e StorageEntry) error {
-	logger := hclog.FromContext(ctx)
 	logicalPath := utils.EnsureTrailingSlash(prefix) + e.Key
-	logger.Debug("put operation", "logicalPath", logicalPath)
+	f.logger.Debug("put operation", "logicalPath", logicalPath)
 
 	if err := f.validatePath(logicalPath); err != nil {
 		return err
@@ -95,8 +96,7 @@ func (f *FileStorage) Put(ctx context.Context, prefix string, e StorageEntry) er
 }
 
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
-	logger := hclog.FromContext(ctx)
-	logger.Debug("delete operation", "logicalPath", logicalPath)
+	f.logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := f.validatePath(logicalPath); err != nil {
 		return err
@@ -117,8 +117,7 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 }
 
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	logger := hclog.FromContext(ctx)
-	logger.Debug("list operation", "prefix", prefix)
+	f.logger.Debug("list operation", "prefix", prefix)
 
 	if err := f.validatePath(prefix); err != nil {
 		return nil, err
