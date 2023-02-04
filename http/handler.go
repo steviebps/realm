@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -41,6 +42,13 @@ func handle(stg storage.Storage, logger hclog.Logger) http.Handler {
 		path := strings.TrimPrefix(r.URL.Path, "/v1")
 		switch r.Method {
 		case http.MethodGet:
+			if path == "/" {
+				errStr := fmt.Sprintf("path cannot be %q", path)
+				requestLogger.Error(errStr)
+				http.Error(w, errStr, http.StatusNotFound)
+				return
+			}
+
 			entry, err := stg.Get(loggerCtx, path)
 			if err != nil {
 				requestLogger.Error(err.Error())
