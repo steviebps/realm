@@ -58,8 +58,7 @@ func retrieveRemoteConfig(url string) (*http.Response, error) {
 // sets up the config for all sub-commands
 func persistentPreRun(cmd *cobra.Command, args []string) {
 	realmCore := cmd.Context().Value("core").(*realm.Realm)
-
-	flags := cmd.PersistentFlags()
+	flags := cmd.Flags()
 	cfgFile, _ := flags.GetString("config")
 
 	home, err := homedir.Dir()

@@ -29,8 +29,7 @@ func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {
 		return err
 	}
 
-	bw.Flush()
-	return nil
+	return bw.Flush()
 }
 
 func ReadInterfaceWith(r io.Reader, v any) error {
@@ -58,11 +57,8 @@ func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
 
 func EnsureTrailingSlash(s string) string {
 	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
 
-	for len(s) > 0 && s[len(s)-1] != '/' {
+	if len(s) > 0 && s[len(s)-1] != '/' {
 		s = s + "/"
 	}
 	return s

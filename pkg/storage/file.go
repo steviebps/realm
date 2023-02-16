@@ -61,17 +61,16 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	default:
 	}
 
-	return &StorageEntry{Key: key, Value: buf.Bytes()}, nil
+	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
 }
 
-func (f *FileStorage) Put(ctx context.Context, prefix string, e StorageEntry) error {
-	logicalPath := utils.EnsureTrailingSlash(prefix) + e.Key
-	f.logger.Debug("put operation", "logicalPath", logicalPath)
+func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
+	f.logger.Debug("put operation", "logicalPath", e.Key)
 
-	if err := f.validatePath(logicalPath); err != nil {
+	if err := f.validatePath(e.Key); err != nil {
 		return err
 	}
-	path, key := f.expandPath(logicalPath)
+	path, key := f.expandPath(e.Key)
 
 	select {
 	case <-ctx.Done():

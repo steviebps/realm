@@ -28,8 +28,14 @@ type HandlerConfig struct {
 	Storage storage.Storage
 }
 
-func NewHandler(config HandlerConfig) http.Handler {
-	return handle(config.Storage, config.Realm.Logger().Named("http"))
+func NewHandler(config HandlerConfig) (http.Handler, error) {
+	if config.Realm == nil {
+		return nil, fmt.Errorf("handler requires a non-nil Realm")
+	}
+	if config.Storage == nil {
+		return nil, fmt.Errorf("storage cannot be nil")
+	}
+	return handle(config.Storage, config.Realm.Logger().Named("http")), nil
 }
 
 func handle(stg storage.Storage, logger hclog.Logger) http.Handler {
@@ -60,9 +66,11 @@ func handle(stg storage.Storage, logger hclog.Logger) http.Handler {
 				http.Error(w, err.Error(), http.StatusNotFound)
 				return
 			}
+
 			var c realm.Chamber
 			if err := json.Unmarshal(entry.Value, &c); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				requestLogger.Error(err.Error())
+				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 				return
 			}
 
@@ -91,13 +99,22 @@ func handle(stg storage.Storage, logger hclog.Logger) http.Handler {
 			}
 
 			// store the entry if the format is correct
-			entry := storage.StorageEntry{Key: c.Name, Value: buf.Bytes()}
-			if err := stg.Put(loggerCtx, path, entry); err != nil {
+			entry := storage.StorageEntry{Key: utils.EnsureTrailingSlash(path) + c.Name, Value: buf.Bytes()}
+			if err := stg.Put(loggerCtx, entry); err != nil {
 				requestLogger.Error(err.Error())
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 			w.WriteHeader(http.StatusCreated)
+			return
+
+		case http.MethodDelete:
+			if err := stg.Delete(loggerCtx, path); err != nil {
+				requestLogger.Error(err.Error())
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
 			return
 
 		case "LIST":
@@ -124,7 +141,7 @@ func handle(stg storage.Storage, logger hclog.Logger) http.Handler {
 			return
 
 		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 		}
 	})
 
