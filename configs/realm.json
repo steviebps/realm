@@ -1,13 +1,14 @@
 {
-    "name": "realm",
-    "toggles": {
-        "chamber": {
-            "type": "string",
-            "value": "./configs/masterChamber.json"
-        },
-        "port": {
-            "type": "number",
-            "value": 443
+    "server": {
+        "storage": "cacheable",
+        "port": "443",
+        "certFile": "",
+        "keyFile": "",
+        "logLevel": "",
+        "options": {
+            "path": "./.realm",
+            "cache": "bigcache",
+            "source": "file"
         }
     }
 }

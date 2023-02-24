@@ -23,14 +23,14 @@ var (
 	_ Storage = (*FileStorage)(nil)
 )
 
-func NewFileStorage(path string, logger hclog.Logger) (*FileStorage, error) {
-	if path == "" {
+func NewFileStorage(conf map[string]string, logger hclog.Logger) (Storage, error) {
+	if conf["path"] == "" {
 		return nil, fmt.Errorf("'path' must be set")
 	}
 
 	return &FileStorage{
 		logger: logger.Named("file"),
-		path:   path,
+		path:   conf["path"],
 	}, nil
 }
 
@@ -47,6 +47,9 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 		defer file.Close()
 	}
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, &NotFoundError{logicalPath}
+		}
 		return nil, err
 	}
 

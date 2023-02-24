@@ -175,7 +175,7 @@ func (rlm *Realm) readIntoRootChamber(r io.Reader) error {
 }
 
 func (rlm *Realm) ReadConfigFile(fileName string) error {
-	rc, err := utils.OpenLocalConfig(fileName)
+	rc, err := utils.OpenFile(fileName)
 	if err != nil {
 		return err
 	}

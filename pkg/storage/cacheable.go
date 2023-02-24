@@ -33,12 +33,43 @@ func NewCacheableStorage(cache Storage, source Storage, logger hclog.Logger) (*C
 	}, nil
 }
 
+func NewCacheableStorageWithConf(conf map[string]string, logger hclog.Logger) (Storage, error) {
+	cache, ok := conf["cache"]
+	if !ok || cache == "" {
+		cache = "bigcache"
+	}
+	source := conf["source"]
+	if source == "" {
+		return nil, fmt.Errorf("'source' option for cacheable must be set")
+	}
+
+	sourceCreator, exists := CacheableStorageOptions[source]
+	if !exists {
+		return nil, fmt.Errorf("storage type %q does not exist", source)
+	}
+	srcStg, err := sourceCreator(conf, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	cacheCreator, exists := CacheableStorageOptions[cache]
+	if !exists {
+		return nil, fmt.Errorf("storage type %q does not exist", cache)
+	}
+	cacheStg, err := cacheCreator(conf, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewCacheableStorage(cacheStg, srcStg, logger)
+}
+
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	c.logger.Debug("get operation", "logicalPath", logicalPath)
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
-		c.logger.Error(err.Error())
+		c.logger.Error("cache", "error", err.Error())
 	}
 
 	if entry != nil {
@@ -47,7 +78,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
-		c.logger.Error(err.Error())
+		c.logger.Error("source", "error", err.Error())
 		return nil, err
 	}
 
@@ -66,7 +97,7 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 		c.cache.Put(ctx, e)
 	}
 
-	return c.cache.Put(ctx, e)
+	return err
 }
 
 func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error {

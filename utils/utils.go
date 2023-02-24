@@ -43,7 +43,7 @@ func ReadInterfaceWith(r io.Reader, v any) error {
 	return nil
 }
 
-func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
+func OpenFile(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

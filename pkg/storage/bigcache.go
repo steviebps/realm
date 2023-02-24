@@ -3,9 +3,12 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/allegro/bigcache/v3"
 	"github.com/hashicorp/go-hclog"
@@ -20,8 +23,50 @@ var (
 	_ Storage = (*BigCacheStorage)(nil)
 )
 
-func NewBigCacheStorage(logger hclog.Logger, config bigcache.Config) (*BigCacheStorage, error) {
-	cache, err := bigcache.New(context.Background(), config)
+func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage, error) {
+	// defaults
+	var shards int = 64
+	lifeWindow := int64(10 * time.Minute)
+	cleanWindow := int64(5 * time.Minute)
+
+	var err error
+	shardsStr := config["shards"]
+	if shardsStr != "" {
+		shards, err = strconv.Atoi(shardsStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse shards: %w", err)
+		}
+	}
+
+	lifeStr := config["life_window"]
+	if shardsStr != "" {
+		lifeWindow, err = strconv.ParseInt(lifeStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse life_window: %w", err)
+		}
+	}
+
+	cleanStr := config["clean_window"]
+	if shardsStr != "" {
+		cleanWindow, err = strconv.ParseInt(cleanStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse clean_window: %w", err)
+		}
+	}
+
+	cConfig := bigcache.Config{
+		// number of shards (must be a power of 2)
+		Shards: shards,
+
+		// time after which entry can be evicted
+		LifeWindow: time.Duration(lifeWindow),
+
+		// Interval between removing expired entries (clean up).
+		// If set to <= 0 then no action is performed.
+		// Setting to < 1 second is counterproductive — bigcache has a one second resolution.
+		CleanWindow: time.Duration(cleanWindow),
+	}
+	cache, err := bigcache.New(context.Background(), cConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -42,6 +87,9 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 	path, key := f.expandPath(logicalPath)
 	b, err := f.underlying.Get(filepath.Join(path, key))
 	if err != nil {
+		if errors.Is(err, bigcache.ErrEntryNotFound) {
+			return nil, &NotFoundError{logicalPath}
+		}
 		return nil, err
 	}
 

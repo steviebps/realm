@@ -1,18 +1,13 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 
 	"github.com/hashicorp/go-hclog"
-	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 
 	realm "github.com/steviebps/realm/pkg"
-	"github.com/steviebps/realm/utils"
 )
 
 var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
@@ -31,79 +26,81 @@ var rootCmd = &cobra.Command{
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 }
 
+func init() {
+	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
+	rootCmd.PersistentFlags().String("config", "", "realm configuration file")
+}
+
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
 	logger := hclog.Default().Named("realm")
-	logger.SetLevel(hclog.Trace)
-	realmCore := realm.NewRealm(realm.RealmOptions{Logger: logger})
-	ctx := context.WithValue(context.Background(), "core", realmCore)
-
-	if err := rootCmd.ExecuteContext(ctx); err != nil {
-		realmCore.Logger().Error(fmt.Sprintf("Error while starting realm: %v", err))
+	if err := rootCmd.Execute(); err != nil {
+		logger.Error(fmt.Sprintf("Error while starting realm: %v", err))
 		os.Exit(1)
 	}
 }
 
-func init() {
-	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
-	rootCmd.PersistentFlags().String("config", "", "realm configuration file")
-	rootCmd.PersistentFlags().String("app-version", "", "runs all commands with a specified version")
-}
-
-func retrieveRemoteConfig(url string) (*http.Response, error) {
-	return http.Get(url)
-}
+// func retrieveRemoteConfig(url string) (*http.Response, error) {
+// 	return http.Get(url)
+// }
 
 // sets up the config for all sub-commands
 func persistentPreRun(cmd *cobra.Command, args []string) {
-	realmCore := cmd.Context().Value("core").(*realm.Realm)
 	flags := cmd.Flags()
 	cfgFile, _ := flags.GetString("config")
+	logger := hclog.Default().Named("realm")
+	logger.SetLevel(hclog.NoLevel)
 
-	home, err := homedir.Dir()
+	_, err := parseConfig[RealmConfig](cfgFile)
 	if err != nil {
-		realmCore.Logger().Error(err.Error())
+		logger.Error(err.Error())
 		os.Exit(1)
 	}
 
-	if cfgFile != "" {
-		// Use config file from the flag.
-		realmCore.SetConfigFile(cfgFile)
-	} else {
-		realmCore.AddConfigPath("./")
-		realmCore.AddConfigPath(home + "/.realm/")
-		realmCore.SetConfigName("realm.json")
-	}
+	// home, err := homedir.Dir()
+	// if err != nil {
+	// 	logger.Error(err.Error())
+	// 	os.Exit(1)
+	// }
 
-	// If a config file is found, read it in.
-	if err := realmCore.ReadInConfig(false); err != nil {
-		realmCore.Logger().Error(err.Error())
-		os.Exit(1)
-	}
+	// if cfgFile != "" {
+	// 	// Use config file from the flag.
+	// 	realmCore.SetConfigFile(cfgFile)
+	// } else {
+	// 	realmCore.AddConfigPath("./")
+	// 	realmCore.AddConfigPath(home + "/.realm/")
+	// 	realmCore.SetConfigName("realm.json")
+	// }
 
-	chamberFile, _ := realmCore.StringValue("chamber", "")
-	validURL, url := utils.IsURL(chamberFile)
-	var jsonFile io.ReadCloser
-	if validURL {
-		res, err := retrieveRemoteConfig(url.String())
+	// // If a config file is found, read it in.
+	// if err := realmCore.ReadInConfig(false); err != nil {
+	// 	realmCore.Logger().Error(err.Error())
+	// 	os.Exit(1)
+	// }
 
-		if err != nil {
-			realmCore.Logger().Error(fmt.Sprintf("error trying to GET this resource %q: %v", chamberFile, err))
-			os.Exit(1)
-		}
-		jsonFile = res.Body
-	} else {
-		var err error
-		if jsonFile, err = utils.OpenLocalConfig(chamberFile); err != nil {
-			realmCore.Logger().Error(fmt.Sprintf("error retrieving local config: %v", err))
-			os.Exit(1)
-		}
-	}
-	defer jsonFile.Close()
+	// chamberFile, _ := realmCore.StringValue("chamber", "")
+	// validURL, url := utils.IsURL(chamberFile)
+	// var jsonFile io.ReadCloser
+	// defer jsonFile.Close()
+	// if validURL {
+	// 	res, err := retrieveRemoteConfig(url.String())
 
-	if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
-		realmCore.Logger().Error(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
-		os.Exit(1)
-	}
+	// 	if err != nil {
+	// 		realmCore.Logger().Error(fmt.Sprintf("error trying to GET this resource %q: %v", chamberFile, err))
+	// 		os.Exit(1)
+	// 	}
+	// 	jsonFile = res.Body
+	// } else {
+	// 	var err error
+	// 	if jsonFile, err = utils.OpenFile(chamberFile); err != nil {
+	// 		realmCore.Logger().Error(fmt.Sprintf("error retrieving local config: %v", err))
+	// 		os.Exit(1)
+	// 	}
+	// }
+
+	// if err := utils.ReadInterfaceWith(jsonFile, &globalChamber); err != nil {
+	// 	realmCore.Logger().Error(fmt.Sprintf("error reading file %q: %v", chamberFile, err))
+	// 	os.Exit(1)
+	// }
 }

@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/hashicorp/go-hclog"
 )
 
 type StorageEntry struct {
@@ -15,4 +17,17 @@ type Storage interface {
 	Put(ctx context.Context, e StorageEntry) error
 	Delete(ctx context.Context, key string) error
 	List(ctx context.Context, prefix string) ([]string, error)
+}
+
+type StorageCreator func(conf map[string]string, logger hclog.Logger) (Storage, error)
+
+var StorageOptions = map[string]StorageCreator{
+	"file":      NewFileStorage,
+	"bigcache":  NewBigCacheStorage,
+	"cacheable": NewCacheableStorageWithConf,
+}
+
+var CacheableStorageOptions = map[string]StorageCreator{
+	"file":     NewFileStorage,
+	"bigcache": NewBigCacheStorage,
 }
