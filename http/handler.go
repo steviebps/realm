@@ -19,28 +19,29 @@ import (
 )
 
 type OperationResponse struct {
-	Method string
-	Data   any
+	Data  any    `json:"data,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 type HandlerConfig struct {
-	Realm          *realm.Realm
+	Logger         hclog.Logger
+	Storage        storage.Storage
 	RequestTimeout time.Duration
 }
 
 func NewHandler(config HandlerConfig) (http.Handler, error) {
-	if config.Realm == nil {
-		return nil, fmt.Errorf("handler requires a non-nil Realm")
-	}
-	if config.Realm.Storage() == nil {
+	if config.Storage == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
+	}
+	if config.Logger == nil {
+		config.Logger = hclog.Default().Named("realm")
 	}
 	return handle(config), nil
 }
 
 func handle(hc HandlerConfig) http.Handler {
-	logger := hc.Realm.Logger().Named("http")
-	stg := hc.Realm.Storage()
+	logger := hc.Logger.Named("http")
+	strg := hc.Storage
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -53,36 +54,32 @@ func handle(hc HandlerConfig) http.Handler {
 			if path == "/" {
 				errStr := fmt.Sprintf("path cannot be %q", path)
 				requestLogger.Error(errStr)
-				http.Error(w, errStr, http.StatusNotFound)
+				handleResponse(w, http.StatusNotFound, nil, errStr)
 				return
 			}
 
-			entry, err := stg.Get(loggerCtx, path)
+			entry, err := strg.Get(loggerCtx, path)
 			if err != nil {
-				requestLogger.Error(err.Error())
+				msg := err.Error()
+				requestLogger.Error(msg)
+
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
-					http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
-					return
+					msg = http.StatusText(http.StatusNotFound)
 				}
 
-				http.Error(w, err.Error(), http.StatusNotFound)
+				handleResponse(w, http.StatusNotFound, nil, msg)
 				return
 			}
 
 			var c realm.Chamber
 			if err := json.Unmarshal(entry.Value, &c); err != nil {
 				requestLogger.Error(err.Error())
-				http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+				handleResponse(w, http.StatusInternalServerError, nil, http.StatusText(http.StatusInternalServerError))
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
-			response := OperationResponse{
-				Method: "GET",
-				Data:   c,
-			}
-			utils.WriteInterfaceWith(w, response, true)
+			handleResponse(w, http.StatusOK, c, "")
 			return
 
 		case http.MethodPost:
@@ -97,54 +94,54 @@ func handle(hc HandlerConfig) http.Handler {
 				if errors.Is(err, io.EOF) {
 					msg = "Request body must not be empty"
 				}
-				http.Error(w, msg, http.StatusBadRequest)
+				handleResponse(w, http.StatusBadRequest, nil, msg)
 				return
 			}
 
 			// store the entry if the format is correct
 			entry := storage.StorageEntry{Key: utils.EnsureTrailingSlash(path) + c.Name, Value: buf.Bytes()}
-			if err := stg.Put(loggerCtx, entry); err != nil {
+			if err := strg.Put(loggerCtx, entry); err != nil {
 				requestLogger.Error(err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				handleResponse(w, http.StatusInternalServerError, nil, err.Error())
 				return
 			}
-			w.WriteHeader(http.StatusCreated)
+
+			handleResponse(w, http.StatusCreated, nil, "")
 			return
 
 		case http.MethodDelete:
-			if err := stg.Delete(loggerCtx, path); err != nil {
+			if err := strg.Delete(loggerCtx, path); err != nil {
 				requestLogger.Error(err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+
+				var nfError *storage.NotFoundError
+				if errors.As(err, &nfError) {
+					handleResponse(w, http.StatusNotFound, nil, http.StatusText(http.StatusNotFound))
+					return
+				}
+
+				handleResponse(w, http.StatusInternalServerError, nil, err.Error())
 				return
 			}
-			w.WriteHeader(http.StatusOK)
+			handleResponse(w, http.StatusOK, nil, "")
 			return
 
 		case "LIST":
-			names, err := stg.List(loggerCtx, path)
+			names, err := strg.List(loggerCtx, path)
 			if err != nil {
 				requestLogger.Error(err.Error())
 				if errors.Is(err, os.ErrNotExist) {
-					w.WriteHeader(http.StatusNotFound)
+					handleResponse(w, http.StatusNotFound, nil, http.StatusText(http.StatusNotFound))
 					return
 				}
-				http.Error(w, http.StatusText(http.StatusNotFound), http.StatusNotFound)
+				handleResponse(w, http.StatusInternalServerError, nil, err.Error())
 				return
 			}
 
-			response := OperationResponse{
-				Method: "LIST",
-				Data:   names,
-			}
-			w.Header().Set("Content-Type", "application/json")
-			if err := utils.WriteInterfaceWith(w, response, true); err != nil {
-				requestLogger.Error(err.Error())
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-			}
+			handleResponse(w, http.StatusOK, names, "")
 			return
 
 		default:
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			handleResponse(w, http.StatusMethodNotAllowed, nil, http.StatusText(http.StatusMethodNotAllowed))
 		}
 	})
 
@@ -160,4 +157,20 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 		h.ServeHTTP(w, r)
 		cancelFunc()
 	})
+}
+
+func handleResponse(w http.ResponseWriter, statusCode int, data any, error string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	response := OperationResponse{}
+	if data != nil {
+		response.Data = data
+	}
+	if error != "" {
+		response.Error = error
+	}
+
+	if err := utils.WriteInterfaceWith(w, response, true); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
 }

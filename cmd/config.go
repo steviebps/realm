@@ -5,19 +5,31 @@ import (
 )
 
 type RealmConfig struct {
+	Client ClientConfig `json:"client,omitempty"`
 	Server ServerConfig `json:"server,omitempty"`
 }
 
-func parseConfig[T any](path string) (*T, error) {
+type ServerConfig struct {
+	StorageType    string            `json:"storage"`
+	StorageOptions map[string]string `json:"options"`
+	Port           string            `json:"port"`
+	CertFile       string            `json:"certFile"`
+	KeyFile        string            `json:"keyFile"`
+	LogLevel       string            `json:"logLevel"`
+}
+
+type ClientConfig struct {
+	Address string `json:"address"`
+}
+
+func parseConfig(path string) (RealmConfig, error) {
+	var config RealmConfig
+
 	file, err := utils.OpenFile(path)
 	if err != nil {
-		return nil, err
+		return config, err
 	}
 	defer file.Close()
-
-	var config T
-	if err := utils.ReadInterfaceWith(file, &config); err != nil {
-		return nil, err
-	}
-	return &config, nil
+	err = utils.ReadInterfaceWith(file, &config)
+	return config, err
 }

@@ -1,7 +1,10 @@
 {
+    "client": {
+        "address": "http://localhost:8080"
+    },
     "server": {
         "storage": "cacheable",
-        "port": "443",
+        "port": "8080",
         "certFile": "",
         "keyFile": "",
         "logLevel": "",

@@ -10,7 +10,6 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
 	realmhttp "github.com/steviebps/realm/http"
-	realm "github.com/steviebps/realm/pkg"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
 
@@ -19,14 +18,8 @@ var serverCmd = &cobra.Command{
 	Short: "Starts realm server",
 	Long:  "Starts realm server",
 	Run: func(cmd *cobra.Command, args []string) {
-		logger := hclog.Default().Named("realm")
+		logger := hclog.Default().Named("server")
 		flags := cmd.Flags()
-
-		portStr, err := flags.GetString("port")
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
-		}
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
@@ -38,12 +31,18 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		realmConfig, err := parseConfig[RealmConfig](configPath)
+		realmConfig, err := parseConfig(configPath)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
 		serverConfig := realmConfig.Server
+
+		portStr, err := flags.GetString("port")
+		if err != nil {
+			logger.Error(err.Error())
+			os.Exit(1)
+		}
 
 		if portStr == "" {
 			portStr = serverConfig.Port
@@ -58,35 +57,49 @@ var serverCmd = &cobra.Command{
 		keyFile := serverConfig.KeyFile
 		storageType := serverConfig.StorageType
 
+		certFileEmpty := certFile == ""
+		keyFileEmpty := keyFile == ""
+		if certFileEmpty != keyFileEmpty {
+			logger.Error("certFile must be used in conjuction with keyFile")
+			os.Exit(1)
+		}
+
 		logger.Info("Server options", "port", portStr, "certFile", certFile, "keyFile", keyFile, "storage", storageType)
 
-		stgCreator, exists := storage.StorageOptions[storageType]
+		strgCreator, exists := storage.StorageOptions[storageType]
 		if !exists {
 			logger.Error(fmt.Sprintf("storage type %q does not exist", storageType))
 			os.Exit(1)
 		}
-		stg, err := stgCreator(serverConfig.StorageOptions, logger)
+		stg, err := strgCreator(serverConfig.StorageOptions, logger)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
 
-		realmCore := realm.NewRealm(realm.RealmOptions{Storage: stg, Logger: logger})
-
 		if err != nil {
-			realmCore.Logger().Error(err.Error())
+			logger.Error(err.Error())
 			os.Exit(1)
 		}
 
-		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Realm: realmCore, RequestTimeout: 1 * time.Second})
+		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger, RequestTimeout: 5 * time.Second})
 		if err != nil {
-			realmCore.Logger().Error(err.Error())
+			logger.Error(err.Error())
 			os.Exit(1)
 		}
 
-		realmCore.Logger().Info("Listening on", "port", portStr)
+		if certFileEmpty {
+			logger.Info("Listening on", "port", portStr)
+			if err := http.ListenAndServe(fmt.Sprintf(":%d", port), handler); err != nil {
+				logger.Error(err.Error())
+				os.Exit(1)
+			}
+			return
+		}
+
+		logger.Info("Listening on", "port", portStr)
 		if err := http.ListenAndServeTLS(fmt.Sprintf(":%d", port), certFile, keyFile, handler); err != nil {
-			realmCore.Logger().Error(err.Error())
+			logger.Error(err.Error())
 			os.Exit(1)
 		}
 	},

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
@@ -37,7 +36,7 @@ func NewFileStorage(conf map[string]string, logger hclog.Logger) (Storage, error
 func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	f.logger.Debug("get operation", "logicalPath", logicalPath)
 
-	if err := f.validatePath(logicalPath); err != nil {
+	if err := ValidatePath(logicalPath); err != nil {
 		return nil, err
 	}
 
@@ -70,7 +69,7 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	f.logger.Debug("put operation", "logicalPath", e.Key)
 
-	if err := f.validatePath(e.Key); err != nil {
+	if err := ValidatePath(e.Key); err != nil {
 		return err
 	}
 	path, key := f.expandPath(e.Key)
@@ -100,7 +99,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	f.logger.Debug("delete operation", "logicalPath", logicalPath)
 
-	if err := f.validatePath(logicalPath); err != nil {
+	if err := ValidatePath(logicalPath); err != nil {
 		return err
 	}
 	path, key := f.expandPath(logicalPath)
@@ -112,6 +111,9 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	}
 
 	if err := os.Remove(filepath.Join(path, key)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &NotFoundError{logicalPath}
+		}
 		return err
 	}
 
@@ -121,7 +123,7 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	f.logger.Debug("list operation", "prefix", prefix)
 
-	if err := f.validatePath(prefix); err != nil {
+	if err := ValidatePath(prefix); err != nil {
 		return nil, err
 	}
 
@@ -168,15 +170,6 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	return names, nil
-}
-
-func (f *FileStorage) validatePath(path string) error {
-	switch {
-	case strings.Contains(path, ".."):
-		return errors.New("path cannot reference parents")
-	}
-
-	return nil
 }
 
 func (f *FileStorage) expandPath(k string) (string, string) {

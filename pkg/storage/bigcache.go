@@ -80,7 +80,7 @@ func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage,
 func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	f.logger.Debug("get operation", "logicalPath", logicalPath)
 
-	if err := f.validatePath(logicalPath); err != nil {
+	if err := ValidatePath(logicalPath); err != nil {
 		return nil, err
 	}
 
@@ -105,7 +105,7 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	f.logger.Debug("put operation", "logicalPath", e.Key)
 
-	if err := f.validatePath(e.Key); err != nil {
+	if err := ValidatePath(e.Key); err != nil {
 		return err
 	}
 	path, key := f.expandPath(e.Key)
@@ -122,7 +122,7 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
 	f.logger.Debug("delete operation", "logicalPath", logicalPath)
 
-	if err := f.validatePath(logicalPath); err != nil {
+	if err := ValidatePath(logicalPath); err != nil {
 		return err
 	}
 	path, key := f.expandPath(logicalPath)
@@ -139,7 +139,7 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	f.logger.Debug("list operation", "prefix", prefix)
 
-	if err := f.validatePath(prefix); err != nil {
+	if err := ValidatePath(prefix); err != nil {
 		return nil, err
 	}
 
@@ -168,15 +168,6 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 	}
 
 	return names, nil
-}
-
-func (f *BigCacheStorage) validatePath(path string) error {
-	switch {
-	case strings.Contains(path, ".."):
-		return errors.New("path cannot reference parents")
-	}
-
-	return nil
 }
 
 func (f *BigCacheStorage) expandPath(k string) (string, string) {

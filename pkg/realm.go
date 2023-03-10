@@ -12,7 +12,6 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/hashicorp/go-hclog"
-	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
 
 	"golang.org/x/mod/semver"
@@ -22,7 +21,6 @@ type Realm struct {
 	mu              sync.RWMutex
 	root            *Chamber
 	logger          hclog.Logger
-	storage         storage.Storage
 	configPaths     []string
 	configName      string
 	defaultVersion  string
@@ -31,8 +29,7 @@ type Realm struct {
 }
 
 type RealmOptions struct {
-	Storage storage.Storage
-	Logger  hclog.Logger
+	Logger hclog.Logger
 }
 
 // NewRealm returns a new Realm struct that carries out all of the core features
@@ -43,19 +40,15 @@ func NewRealm(options RealmOptions) *Realm {
 	}
 
 	return &Realm{
-		logger:  logger,
-		storage: options.Storage,
+		logger: logger,
 	}
 }
 
 // Logger retrieves the underlying logger for realm
 func (rlm *Realm) Logger() hclog.Logger {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
 	return rlm.logger
-}
-
-// Storage retrieves the underlying storage system
-func (rlm *Realm) Storage() storage.Storage {
-	return rlm.storage
 }
 
 // SetVersion sets the version to use for the current config
@@ -64,7 +57,10 @@ func (rlm *Realm) SetVersion(version string) error {
 		return fmt.Errorf("%q is not a valid semantic version", version)
 	}
 
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
 	rlm.defaultVersion = version
+
 	return nil
 }
 

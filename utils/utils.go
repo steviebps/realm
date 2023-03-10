@@ -11,10 +11,13 @@ import (
 	"strings"
 )
 
-// IsURL returns whether the string is a valid url with a host and scheme
-func IsURL(str string) (bool, *url.URL) {
+// ParseURL returns whether the string is a valid url with a host and scheme
+func ParseURL(str string) (*url.URL, bool) {
 	u, err := url.Parse(str)
-	return err == nil && u.Scheme != "" && u.Host != "", u
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, false
+	}
+	return u, true
 }
 
 func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {

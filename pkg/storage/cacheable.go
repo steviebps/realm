@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/hashicorp/go-hclog"
@@ -69,7 +70,11 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
-		c.logger.Error("cache", "error", err.Error())
+		var nfError *NotFoundError
+		// cache layer is expected to have missing records so let's only log other errors
+		if !errors.As(err, &nfError) {
+			c.logger.Error("cache", "error", err.Error())
+		}
 	}
 
 	if entry != nil {

@@ -29,34 +29,39 @@ var rootCmd = &cobra.Command{
 func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().String("config", "", "realm configuration file")
+	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	logger := hclog.Default().Named("realm")
 	if err := rootCmd.Execute(); err != nil {
-		logger.Error(fmt.Sprintf("Error while starting realm: %v", err))
+		fmt.Printf("Error while starting realm: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-// func retrieveRemoteConfig(url string) (*http.Response, error) {
-// 	return http.Get(url)
-// }
-
 // sets up the config for all sub-commands
 func persistentPreRun(cmd *cobra.Command, args []string) {
 	flags := cmd.Flags()
-	cfgFile, _ := flags.GetString("config")
-	logger := hclog.Default().Named("realm")
-	logger.SetLevel(hclog.NoLevel)
+	debug, _ := flags.GetBool("debug")
 
-	_, err := parseConfig[RealmConfig](cfgFile)
-	if err != nil {
-		logger.Error(err.Error())
-		os.Exit(1)
+	level := hclog.Info
+	if debug {
+		level = hclog.Debug
 	}
+
+	logger := hclog.Default().Named("realm")
+	logger.SetLevel(level)
+	hclog.SetDefault(logger)
+
+	// cfgFile, _ := flags.GetString("config")
+
+	// _, err := parseConfig[RealmConfig](cfgFile)
+	// if err != nil {
+	// 	logger.Error(err.Error())
+	// 	os.Exit(1)
+	// }
 
 	// home, err := homedir.Dir()
 	// if err != nil {
