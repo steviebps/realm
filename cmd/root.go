@@ -28,7 +28,7 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
-	rootCmd.PersistentFlags().String("config", "", "realm configuration file")
+	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
 }
 
@@ -51,8 +51,15 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 		level = hclog.Debug
 	}
 
-	logger := hclog.Default().Named("realm")
-	logger.SetLevel(level)
+	logger := hclog.New(&hclog.LoggerOptions{
+		Name:                 "realm",
+		Level:                level,
+		Output:               cmd.OutOrStdout(),
+		ColorHeaderAndFields: true,
+		Color:                hclog.AutoColor,
+		DisableTime:          true,
+	})
+
 	hclog.SetDefault(logger)
 
 	// cfgFile, _ := flags.GetString("config")

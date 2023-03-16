@@ -11,13 +11,16 @@ import (
 	"strings"
 )
 
-// ParseURL returns whether the string is a valid url with a host and scheme
-func ParseURL(str string) (*url.URL, bool) {
+// ParseURL returns a url.URL when the passed string is a valid url with a host and scheme
+func ParseURL(str string) (*url.URL, error) {
 	u, err := url.Parse(str)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return nil, false
+	if err != nil {
+		return nil, err
 	}
-	return u, true
+	if u.Scheme == "" || u.Host == "" {
+		return nil, errors.New("URL string must contain a protocol scheme and host")
+	}
+	return u, nil
 }
 
 func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {
@@ -62,7 +65,7 @@ func EnsureTrailingSlash(s string) string {
 	s = strings.TrimSpace(s)
 
 	if len(s) > 0 && s[len(s)-1] != '/' {
-		s = s + "/"
+		s += "/"
 	}
 	return s
 }

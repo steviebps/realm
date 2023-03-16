@@ -22,9 +22,9 @@ type Client struct {
 }
 
 func NewClient(c *ClientConfig) (*Client, error) {
-	u, valid := utils.ParseURL(c.Address)
-	if !valid {
-		return nil, fmt.Errorf("could not parse address %q", c.Address)
+	u, err := utils.ParseURL(c.Address)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse address %q: %w", c.Address, err)
 	}
 	logger := c.Logger
 

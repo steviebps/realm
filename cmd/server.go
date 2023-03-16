@@ -18,8 +18,22 @@ var serverCmd = &cobra.Command{
 	Short: "Starts realm server",
 	Long:  "Starts realm server",
 	Run: func(cmd *cobra.Command, args []string) {
-		logger := hclog.Default().Named("server")
 		flags := cmd.Flags()
+		debug, _ := flags.GetBool("debug")
+
+		level := hclog.Info
+		if debug {
+			level = hclog.Debug
+		}
+
+		logger := hclog.New(&hclog.LoggerOptions{
+			Name:                 "realm.server",
+			Level:                level,
+			Output:               cmd.OutOrStdout(),
+			TimeFn:               time.Now,
+			ColorHeaderAndFields: true,
+			Color:                hclog.AutoColor,
+		})
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
