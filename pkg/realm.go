@@ -21,6 +21,7 @@ type Realm struct {
 	root               *Chamber
 	logger             hclog.Logger
 	client             *client.Client
+	interval           time.Duration
 }
 
 type RealmOptions struct {
@@ -28,7 +29,14 @@ type RealmOptions struct {
 	Client             *client.Client
 	Path               string
 	ApplicationVersion string
+	// RefreshInterval is used for how often realm will refetch the underlying chamber from the realm server
+	RefreshInterval time.Duration
 }
+
+const (
+	// DefaultRefreshInterval is used as the default refresh interval for realm
+	DefaultRefreshInterval time.Duration = 15 * time.Minute
+)
 
 // NewRealm returns a new Realm struct that carries out all of the core features
 func NewRealm(options RealmOptions) (*Realm, error) {
@@ -40,6 +48,9 @@ func NewRealm(options RealmOptions) (*Realm, error) {
 	}
 	if options.Logger == nil {
 		options.Logger = hclog.Default().Named("realm")
+	}
+	if options.RefreshInterval <= 0 {
+		options.RefreshInterval = DefaultRefreshInterval
 	}
 
 	return &Realm{
@@ -66,7 +77,7 @@ func (rlm *Realm) Start() error {
 	}
 
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(rlm.interval)
 		defer ticker.Stop()
 		for {
 			select {
