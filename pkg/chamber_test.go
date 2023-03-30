@@ -17,6 +17,7 @@ func TestInheritWith(t *testing.T) {
 				},
 			},
 		},
+		lock: new(sync.RWMutex),
 	}
 	middle := &Chamber{
 		Name: "MIDDLE",
@@ -28,6 +29,7 @@ func TestInheritWith(t *testing.T) {
 				},
 			},
 		},
+		lock: new(sync.RWMutex),
 	}
 	top := &Chamber{
 		Name: "TOP",
@@ -39,6 +41,7 @@ func TestInheritWith(t *testing.T) {
 				},
 			},
 		},
+		lock: new(sync.RWMutex),
 	}
 
 	middle.InheritWith(top.Toggles)
