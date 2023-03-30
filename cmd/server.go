@@ -78,7 +78,7 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		logger.Info("Server options", "port", portStr, "certFile", certFile, "keyFile", keyFile, "storage", storageType)
+		logger.Info("Server options", "port", portStr, "certFile", certFile, "keyFile", keyFile, "storage", storageType, "debug", debug)
 
 		strgCreator, exists := storage.StorageOptions[storageType]
 		if !exists {
