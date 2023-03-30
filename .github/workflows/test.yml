@@ -13,6 +13,7 @@ jobs:
         - macOS
         - windows
         go:
+        - 1.17.x
         - 1.18.x
         - 1.19.x
     name: '${{ matrix.platform }} | ${{ matrix.go }}'
