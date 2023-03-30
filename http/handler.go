@@ -18,11 +18,6 @@ import (
 	"github.com/steviebps/realm/utils"
 )
 
-type OperationResponse struct {
-	Data  any    `json:"data,omitempty"`
-	Error string `json:"error,omitempty"`
-}
-
 type HandlerConfig struct {
 	Logger         hclog.Logger
 	Storage        storage.Storage
@@ -58,6 +53,8 @@ func handle(hc HandlerConfig) http.Handler {
 				return
 			}
 
+			time.Sleep(2 * time.Second)
+
 			entry, err := strg.Get(loggerCtx, path)
 			if err != nil {
 				msg := err.Error()
@@ -72,14 +69,7 @@ func handle(hc HandlerConfig) http.Handler {
 				return
 			}
 
-			var c realm.Chamber
-			if err := json.Unmarshal(entry.Value, &c); err != nil {
-				requestLogger.Error(err.Error())
-				handleResponse(w, http.StatusInternalServerError, nil, http.StatusText(http.StatusInternalServerError))
-				return
-			}
-
-			handleResponse(w, http.StatusOK, c, "")
+			handleResponse(w, http.StatusOK, entry.Value, "")
 			return
 
 		case http.MethodPost:
@@ -136,8 +126,13 @@ func handle(hc HandlerConfig) http.Handler {
 				handleResponse(w, http.StatusInternalServerError, nil, err.Error())
 				return
 			}
+			raw, err := json.Marshal(names)
+			if err != nil {
+				handleResponse(w, http.StatusInternalServerError, nil, err.Error())
+				return
+			}
 
-			handleResponse(w, http.StatusOK, names, "")
+			handleResponse(w, http.StatusOK, raw, "")
 			return
 
 		default:
@@ -159,10 +154,10 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	})
 }
 
-func handleResponse(w http.ResponseWriter, statusCode int, data any, error string) {
+func handleResponse(w http.ResponseWriter, statusCode int, data json.RawMessage, error string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)
-	response := OperationResponse{}
+	response := realm.OperationResponse{}
 	if data != nil {
 		response.Data = data
 	}
