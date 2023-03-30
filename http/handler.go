@@ -53,8 +53,6 @@ func handle(hc HandlerConfig) http.Handler {
 				return
 			}
 
-			time.Sleep(2 * time.Second)
-
 			entry, err := strg.Get(loggerCtx, path)
 			if err != nil {
 				msg := err.Error()
