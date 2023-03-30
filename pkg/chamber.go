@@ -3,6 +3,7 @@ package realm
 import (
 	"encoding/json"
 	"errors"
+	"sync"
 )
 
 // Chamber is a struct that holds metadata and toggles
@@ -11,6 +12,7 @@ type Chamber struct {
 	IsBuildable bool                           `json:"isBuildable"`
 	IsApp       bool                           `json:"isApp"`
 	Toggles     map[string]*OverrideableToggle `json:"toggles"`
+	lock        *sync.RWMutex
 }
 
 type chamberAlias Chamber
@@ -18,6 +20,8 @@ type chamberAlias Chamber
 // InheritWith will take a map of toggles to inherit from
 // so that any toggles that do not exist in this chamber will be written to the map
 func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
 	for key := range inherited {
 		if _, ok := c.Toggles[key]; !ok {
 			c.Toggles[key] = inherited[key]
@@ -47,18 +51,18 @@ func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} 
 	if t == nil {
 		return nil
 	}
-
 	return t.GetValueAt(version)
 }
 
 // GetToggle returns the toggle with the specified toggleName.
 // Will return nil if the toggle does not exist
 func (c *Chamber) GetToggle(toggleName string) *OverrideableToggle {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
 	t, ok := c.Toggles[toggleName]
 	if !ok {
 		return nil
 	}
-
 	return t
 }
 
@@ -69,7 +73,6 @@ func (c *Chamber) StringValue(toggleKey string, defaultValue string, version str
 	if !ok {
 		return defaultValue, ok
 	}
-
 	return cStr, ok
 }
 
@@ -80,7 +83,6 @@ func (c *Chamber) BoolValue(toggleKey string, defaultValue bool, version string)
 	if !ok {
 		return defaultValue, ok
 	}
-
 	return cBool, ok
 }
 
@@ -91,8 +93,17 @@ func (c *Chamber) Float64Value(toggleKey string, defaultValue float64, version s
 	if !ok {
 		return defaultValue, ok
 	}
-
 	return cFloat64, ok
+}
+
+// CustomValue retrieves a json.RawMessage by the key of the toggle
+// and returns a bool on whether or not the toggle exists and is the proper type
+func (c *Chamber) CustomValue(toggleKey string, version string) (*json.RawMessage, bool) {
+	t, ok := c.GetToggleValue(toggleKey, version).(*json.RawMessage)
+	if !ok {
+		return nil, ok
+	}
+	return t, ok
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Chamber
@@ -103,7 +114,7 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 	}
 
 	*c = Chamber(alias)
-
+	c.lock = &sync.RWMutex{}
 	if c.Name == "" {
 		return errors.New("all chambers must have a name")
 	}
