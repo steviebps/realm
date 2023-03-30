@@ -26,8 +26,8 @@ var (
 func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage, error) {
 	// defaults
 	var shards int = 64
-	lifeWindow := int64(10 * time.Minute)
-	cleanWindow := int64(5 * time.Minute)
+	lifeWindow := int64(2 * time.Minute)
+	cleanWindow := int64(1 * time.Minute)
 
 	var err error
 	shardsStr := config["shards"]
@@ -39,7 +39,7 @@ func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage,
 	}
 
 	lifeStr := config["life_window"]
-	if shardsStr != "" {
+	if lifeStr != "" {
 		lifeWindow, err = strconv.ParseInt(lifeStr, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse life_window: %w", err)
@@ -47,7 +47,7 @@ func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage,
 	}
 
 	cleanStr := config["clean_window"]
-	if shardsStr != "" {
+	if cleanStr != "" {
 		cleanWindow, err = strconv.ParseInt(cleanStr, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse clean_window: %w", err)
