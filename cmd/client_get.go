@@ -91,24 +91,6 @@ var clientGet = &cobra.Command{
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
-
-		// var w io.Writer = cmd.OutOrStdout()
-		// var err error
-
-		// if output != "" {
-		// 	w, err = os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
-		// 	if err != nil {
-		// 		realmCore.Logger().Info(err.Error())
-		// 		os.Exit(1)
-		// 	}
-		// }
-
-		// if err = utils.WriteInterfaceWith(w, globalChamber, pretty); err != nil {
-		// 	realmCore.Logger().Info(err.Error())
-		// 	os.Exit(1)
-		// }
-
-		os.Exit(0)
 	},
 }
 
