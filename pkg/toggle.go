@@ -62,6 +62,7 @@ func (t *Toggle) assertType(data json.RawMessage) error {
 		t.Value = b
 		return nil
 	case "custom":
+		// keep value as json.RawMessage for unmarshaling later
 		return nil
 	}
 
@@ -95,15 +96,12 @@ func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	for k, v := range m {
-		switch k {
-		case "overrides":
-			var overrides []*Override
-			if err := json.Unmarshal(v, &overrides); err != nil {
-				return err
-			}
-			t.Overrides = overrides
+	if v, ok := m["overrides"]; ok {
+		var overrides []*Override
+		if err := json.Unmarshal(v, &overrides); err != nil {
+			return err
 		}
+		t.Overrides = overrides
 	}
 
 	var previous *Override
