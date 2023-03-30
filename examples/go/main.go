@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/steviebps/realm/client"
 	realm "github.com/steviebps/realm/pkg"
 )
 
@@ -15,18 +16,17 @@ type CustomStruct struct {
 
 func main() {
 	var err error
-	rlm := realm.NewRealm(realm.RealmOptions{})
-	rlm.SetVersion("v1.0.0")
 
-	if err := rlm.AddConfigPath("./"); err != nil {
+	client, err := client.NewClient(&client.ClientConfig{Address: "https://mbp.tail6488a.ts.net"})
+	if err != nil {
 		log.Fatal(err)
 	}
-
-	if err := rlm.SetConfigName("chambers.json"); err != nil {
+	rlm, err := realm.NewRealm(realm.RealmOptions{Client: client, ApplicationVersion: "v1.0.0", Path: "root"})
+	if err != nil {
 		log.Fatal(err)
 	}
-
-	if err := rlm.ReadInConfig(true); err != nil {
+	err = rlm.Start()
+	if err != nil {
 		log.Fatal(err)
 	}
 
