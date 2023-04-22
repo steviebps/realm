@@ -35,8 +35,7 @@ var CacheableStorageOptions = map[string]StorageCreator{
 }
 
 func ValidatePath(path string) error {
-	switch {
-	case strings.Contains(path, ".."):
+	if strings.Contains(path, "..") {
 		return errors.New("path cannot reference parents")
 	}
 
