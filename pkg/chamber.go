@@ -2,20 +2,14 @@ package realm
 
 import (
 	"encoding/json"
-	"errors"
 	"sync"
 )
 
 // Chamber is a struct that holds metadata and toggles
 type Chamber struct {
-	Name        string                         `json:"name"`
-	IsBuildable bool                           `json:"isBuildable"`
-	IsApp       bool                           `json:"isApp"`
-	Toggles     map[string]*OverrideableToggle `json:"toggles"`
-	lock        *sync.RWMutex
+	Toggles map[string]*OverrideableToggle `json:"toggles"`
+	lock    *sync.RWMutex
 }
-
-type chamberAlias Chamber
 
 // InheritWith will take a map of toggles to inherit from
 // so that any toggles that do not exist in this chamber will be written to the map
@@ -31,45 +25,62 @@ func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
 
 // TraverseAndBuild will traverse all Chambers while inheriting their parent Toggles and executes a callback on each Chamber node.
 // Traversing will stop if callback returns true.
-func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool, children []*Chamber) {
+// func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool, children []*Chamber) {
 
-	// if callback returns true, stop traversing
-	// consumer was only looking to build up to this point
-	if callback(*c) {
-		return
+// 	// if callback returns true, stop traversing
+// 	// consumer was only looking to build up to this point
+// 	if callback(*c) {
+// 		return
+// 	}
+
+// 	for _, v := range children {
+// 		v.InheritWith(c.Toggles)
+// 	}
+// }
+
+// ChamberEntry is a read-only version of Chamber
+type ChamberEntry struct {
+	toggles map[string]*OverrideableToggle
+	version string
+}
+
+func NewChamberEntry(c *Chamber, version string) *ChamberEntry {
+	m := make(map[string]*OverrideableToggle)
+	for k, v := range c.Toggles {
+		m[k] = v
 	}
 
-	for _, v := range children {
-		v.InheritWith(c.Toggles)
+	return &ChamberEntry{
+		toggles: m,
+		version: version,
 	}
 }
 
 // GetToggleValue returns the toggle with the specified toggleName at the specified version.
 // Will return nil if the toggle does not exist
-func (c *Chamber) GetToggleValue(toggleName string, version string) interface{} {
-	t := c.GetToggle(toggleName)
+func (c *ChamberEntry) GetToggleValue(toggleName string) interface{} {
+	t := c.Get(toggleName)
 	if t == nil {
 		return nil
 	}
-	return t.GetValueAt(version)
+	return t.GetValueAt(c.version)
 }
 
-// GetToggle returns the toggle with the specified toggleName.
+// Get returns the toggle with the specified toggleName.
 // Will return nil if the toggle does not exist
-func (c *Chamber) GetToggle(toggleName string) *OverrideableToggle {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
-	t, ok := c.Toggles[toggleName]
+func (c *ChamberEntry) Get(toggleName string) *OverrideableToggle {
+	t, ok := c.toggles[toggleName]
 	if !ok {
 		return nil
 	}
+
 	return t
 }
 
 // StringValue retrieves a string by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (c *Chamber) StringValue(toggleKey string, defaultValue string, version string) (string, bool) {
-	cStr, ok := c.GetToggleValue(toggleKey, version).(string)
+func (c *ChamberEntry) StringValue(toggleKey string, defaultValue string) (string, bool) {
+	cStr, ok := c.GetToggleValue(toggleKey).(string)
 	if !ok {
 		return defaultValue, ok
 	}
@@ -78,8 +89,8 @@ func (c *Chamber) StringValue(toggleKey string, defaultValue string, version str
 
 // BoolValue retrieves a bool by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (c *Chamber) BoolValue(toggleKey string, defaultValue bool, version string) (bool, bool) {
-	cBool, ok := c.GetToggleValue(toggleKey, version).(bool)
+func (c *ChamberEntry) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
+	cBool, ok := c.GetToggleValue(toggleKey).(bool)
 	if !ok {
 		return defaultValue, ok
 	}
@@ -88,8 +99,8 @@ func (c *Chamber) BoolValue(toggleKey string, defaultValue bool, version string)
 
 // Float64Value retrieves a float64 by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (c *Chamber) Float64Value(toggleKey string, defaultValue float64, version string) (float64, bool) {
-	cFloat64, ok := c.GetToggleValue(toggleKey, version).(float64)
+func (c *ChamberEntry) Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
+	cFloat64, ok := c.GetToggleValue(toggleKey).(float64)
 	if !ok {
 		return defaultValue, ok
 	}
@@ -98,26 +109,10 @@ func (c *Chamber) Float64Value(toggleKey string, defaultValue float64, version s
 
 // CustomValue retrieves a json.RawMessage by the key of the toggle
 // and returns a bool on whether or not the toggle exists and is the proper type
-func (c *Chamber) CustomValue(toggleKey string, version string) (*json.RawMessage, bool) {
-	t, ok := c.GetToggleValue(toggleKey, version).(*json.RawMessage)
+func (c *ChamberEntry) CustomValue(toggleKey string, version string) (*json.RawMessage, bool) {
+	t, ok := c.GetToggleValue(toggleKey).(*json.RawMessage)
 	if !ok {
 		return nil, ok
 	}
 	return t, ok
-}
-
-// UnmarshalJSON Custom UnmarshalJSON method for validating Chamber
-func (c *Chamber) UnmarshalJSON(b []byte) error {
-	var alias chamberAlias
-	if err := json.Unmarshal(b, &alias); err != nil {
-		return err
-	}
-
-	*c = Chamber(alias)
-	c.lock = &sync.RWMutex{}
-	if c.Name == "" {
-		return errors.New("all chambers must have a name")
-	}
-
-	return nil
 }

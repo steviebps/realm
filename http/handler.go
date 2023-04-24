@@ -53,7 +53,7 @@ func handle(hc HandlerConfig) http.Handler {
 				return
 			}
 
-			entry, err := strg.Get(loggerCtx, path)
+			entry, err := strg.Get(loggerCtx, utils.EnsureTrailingSlash(path)+"entry")
 			if err != nil {
 				msg := err.Error()
 				requestLogger.Error(msg)
@@ -87,7 +87,7 @@ func handle(hc HandlerConfig) http.Handler {
 			}
 
 			// store the entry if the format is correct
-			entry := storage.StorageEntry{Key: utils.EnsureTrailingSlash(path) + c.Name, Value: buf.Bytes()}
+			entry := storage.StorageEntry{Key: utils.EnsureTrailingSlash(path) + "entry", Value: buf.Bytes()}
 			if err := strg.Put(loggerCtx, entry); err != nil {
 				requestLogger.Error(err.Error())
 				handleResponse(w, http.StatusInternalServerError, nil, err.Error())
@@ -98,7 +98,7 @@ func handle(hc HandlerConfig) http.Handler {
 			return
 
 		case http.MethodDelete:
-			if err := strg.Delete(loggerCtx, path); err != nil {
+			if err := strg.Delete(loggerCtx, utils.EnsureTrailingSlash(path)+"entry"); err != nil {
 				requestLogger.Error(err.Error())
 
 				var nfError *storage.NotFoundError

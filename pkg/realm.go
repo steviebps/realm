@@ -18,7 +18,7 @@ type Realm struct {
 	initSync           sync.Once
 	stopCh             chan struct{}
 	mu                 sync.RWMutex
-	root               *Chamber
+	root               *ChamberEntry
 	logger             hclog.Logger
 	client             *client.Client
 	interval           time.Duration
@@ -29,7 +29,7 @@ type RealmOptions struct {
 	Client             *client.Client
 	Path               string
 	ApplicationVersion string
-	// RefreshInterval is used for how often realm will refetch the underlying chamber from the realm server
+	// RefreshInterval is how often realm will refetch the chamber from the realm server
 	RefreshInterval time.Duration
 }
 
@@ -59,6 +59,7 @@ func NewRealm(options RealmOptions) (*Realm, error) {
 		path:               options.Path,
 		applicationVersion: options.ApplicationVersion,
 		stopCh:             make(chan struct{}),
+		interval:           options.RefreshInterval,
 	}, nil
 }
 
@@ -108,13 +109,6 @@ func (rlm *Realm) Logger() hclog.Logger {
 	return rlm.logger
 }
 
-// Client retrieves a realm client
-func (rlm *Realm) Client() *client.Client {
-	rlm.mu.RLock()
-	defer rlm.mu.RUnlock()
-	return rlm.client
-}
-
 func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	client := rlm.client
 	logger := rlm.logger
@@ -148,45 +142,70 @@ func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 }
 
 func (rlm *Realm) setChamber(c *Chamber) {
+	entry := NewChamberEntry(c, rlm.applicationVersion)
 	rlm.mu.Lock()
 	defer rlm.mu.Unlock()
-	rlm.root = c
+	rlm.root = entry
 }
 
-func (rlm *Realm) getChamber() *Chamber {
+func (rlm *Realm) getChamber() *ChamberEntry {
 	rlm.mu.RLock()
 	defer rlm.mu.RUnlock()
 	return rlm.root
 }
 
-// BoolValue retrieves a bool by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (rlm *Realm) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
+// Bool retrieves a bool by the key of the toggle.
+// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
+func (rlm *Realm) Bool(toggleKey string, defaultValue bool) (bool, error) {
 	c := rlm.getChamber()
 	if c == nil {
-		return defaultValue, false
+		return defaultValue, ErrChamberEmpty
 	}
-	return c.BoolValue(toggleKey, defaultValue, rlm.applicationVersion)
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
+	}
+	v, ok := t.GetValueAt(rlm.applicationVersion).(bool)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
-// StringValue retrieves a string by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (rlm *Realm) StringValue(toggleKey string, defaultValue string) (string, bool) {
+// String retrieves a string by the key of the toggle.
+// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
+func (rlm *Realm) String(toggleKey string, defaultValue string) (string, error) {
 	c := rlm.getChamber()
 	if c == nil {
-		return defaultValue, false
+		return defaultValue, ErrChamberEmpty
 	}
-	return c.StringValue(toggleKey, defaultValue, rlm.applicationVersion)
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
+	}
+	v, ok := t.GetValueAt(rlm.applicationVersion).(string)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
-// Float64Value retrieves a float64 by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (rlm *Realm) Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
+// Float64 retrieves a float64 by the key of the toggle.
+// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
+func (rlm *Realm) Float64(toggleKey string, defaultValue float64) (float64, error) {
 	c := rlm.getChamber()
 	if c == nil {
-		return defaultValue, false
+		return defaultValue, ErrChamberEmpty
 	}
-	return c.Float64Value(toggleKey, defaultValue, rlm.applicationVersion)
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
+	}
+	v, ok := t.GetValueAt(rlm.applicationVersion).(float64)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
 // CustomValue retrieves an arbitrary value by the key of the toggle
@@ -194,13 +213,15 @@ func (rlm *Realm) Float64Value(toggleKey string, defaultValue float64) (float64,
 func (rlm *Realm) CustomValue(toggleKey string, v any) error {
 	c := rlm.getChamber()
 	if c == nil {
-		return errors.New("root chamber is nil")
+		return ErrChamberEmpty
 	}
-
-	raw, ok := c.CustomValue(toggleKey, rlm.applicationVersion)
+	t := c.Get(toggleKey)
+	if t == nil {
+		return &ErrToggleNotFound{toggleKey}
+	}
+	raw, ok := t.GetValueAt(rlm.applicationVersion).(*json.RawMessage)
 	if !ok {
-		return fmt.Errorf("could not retrieve custom toggle %q", toggleKey)
+		return fmt.Errorf("could not convert custom toggle %q: it is of type %q", toggleKey, t.Type)
 	}
-
 	return json.Unmarshal(*raw, v)
 }

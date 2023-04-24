@@ -30,12 +30,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	port, _ := rlm.Float64Value("port", 3000)
+	port, _ := rlm.Float64("port", 3000)
 
 	mux := http.NewServeMux()
-
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		message, _ := rlm.StringValue("message", "DEFAULT")
+		message, _ := rlm.String("message", "DEFAULT")
 		w.Write([]byte(message))
 	})
 
