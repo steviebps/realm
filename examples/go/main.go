@@ -17,7 +17,7 @@ type CustomStruct struct {
 func main() {
 	var err error
 
-	client, err := client.NewClient(&client.ClientConfig{Address: "https://mbp.tail6488a.ts.net"})
+	client, err := client.NewClient(&client.ClientConfig{Address: "http://localhost"})
 	if err != nil {
 		log.Fatal(err)
 	}
