@@ -113,7 +113,7 @@ func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	client := rlm.client
 	logger := rlm.logger
 
-	res, err := client.PerformRequest("GET", "/v1/"+path)
+	res, err := client.PerformRequest("GET", path, nil)
 	if err != nil {
 		logger.Error(err.Error())
 		return nil, err

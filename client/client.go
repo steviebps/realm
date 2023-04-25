@@ -3,16 +3,18 @@ package client
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
 )
 
 type ClientConfig struct {
-	Address string
 	Logger  hclog.Logger
+	Address string
 }
 
 type Client struct {
@@ -45,19 +47,19 @@ func NewClient(c *ClientConfig) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) NewRequest(method string, path string) (*http.Request, error) {
+func (c *Client) NewRequest(method string, path string, body io.Reader) (*http.Request, error) {
 	c.logger.Debug("creating a new request", "method", method, "path", path)
-	return http.NewRequest(method, c.address.Scheme+"://"+c.address.Host+path, nil)
+	return http.NewRequest(method, c.address.Scheme+"://"+c.address.Host+"/v1/"+strings.TrimPrefix(path, "/"), body)
 }
 
 func (c *Client) Do(r *http.Request) (*http.Response, error) {
-	c.logger.Debug("executing request", "method", r.Method, "path", r.URL.Path)
+	c.logger.Debug("executing request", "method", r.Method, "path", r.URL.Path, "host", r.URL.Host)
 	return c.underlying.Do(r)
 }
 
-func (c *Client) PerformRequest(method string, path string) (*http.Response, error) {
+func (c *Client) PerformRequest(method string, path string, body io.Reader) (*http.Response, error) {
 	c.logger.Debug("performing a new request", "method", method, "path", path)
-	req, err := c.NewRequest(method, path)
+	req, err := c.NewRequest(method, path, body)
 	if err != nil {
 		return nil, err
 	}

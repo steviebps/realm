@@ -62,13 +62,7 @@ var clientGet = &cobra.Command{
 			os.Exit(1)
 		}
 
-		req, err := c.NewRequest("GET", "/v1/"+args[0])
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
-		}
-
-		res, err := c.Do(req)
+		res, err := c.PerformRequest("GET", args[0], nil)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
