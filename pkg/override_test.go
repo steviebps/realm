@@ -14,10 +14,10 @@ func convertToBytes(i interface{}) []byte {
 }
 
 func TestEmptyMinAndMaxVersion(t *testing.T) {
-	o := Override{
+	o := &Override{
 		MinimumVersion: "",
 		MaximumVersion: "",
-		Value:          false,
+		Toggle:         &Toggle{Type: "boolean", Value: false},
 	}
 
 	err := o.UnmarshalJSON(convertToBytes(o))
@@ -28,10 +28,10 @@ func TestEmptyMinAndMaxVersion(t *testing.T) {
 }
 
 func TestMinGreaterThanMaxVersion(t *testing.T) {
-	o := Override{
+	o := &Override{
 		MinimumVersion: "v1.0.0",
 		MaximumVersion: "v0.0.1",
-		Value:          false,
+		Toggle:         &Toggle{Type: "boolean", Value: false},
 	}
 
 	err := o.UnmarshalJSON(convertToBytes(o))
@@ -42,10 +42,10 @@ func TestMinGreaterThanMaxVersion(t *testing.T) {
 }
 
 func TestValidMinAndMaxVersion(t *testing.T) {
-	o := Override{
+	o := &Override{
 		MinimumVersion: "v1.0.0",
 		MaximumVersion: "v2.0.0",
-		Value:          false,
+		Toggle:         &Toggle{Type: "boolean", Value: false},
 	}
 
 	err := o.UnmarshalJSON(convertToBytes(o))

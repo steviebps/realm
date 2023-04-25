@@ -20,9 +20,6 @@ with forced directory creation
 
 ```realm build -o /path/to/your/directory --force```
 
-#### Pipe into an archive: 
-```realm build | tar zcf realm.tar.gz -T -```
-
 ### print
 
 #### Pretty prints your global chamber to stdout:

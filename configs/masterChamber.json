@@ -4,105 +4,34 @@
   "isApp": false,
   "toggles": {
     "feature switch four": {
-      "name": "feature switch four",
       "type": "number",
       "value": 10.6,
       "overrides": [
         {
           "minimumVersion": "v0.0.1",
           "maximumVersion": "v2.0.0",
+          "type": "number",
           "value": 10.2
         },
         {
           "minimumVersion": "v2.0.0",
           "maximumVersion": "v3.0.0",
+          "type": "number",
           "value": 10.4
         }
       ]
     },
     "feature switch one": {
-      "name": "feature switch one",
       "type": "boolean",
-      "value": false,
-      "overrides": null
+      "value": false
     },
     "feature switch three": {
-      "name": "feature switch three",
       "type": "string",
-      "value": "some value",
-      "overrides": null
+      "value": "some value"
     },
     "feature switch two": {
-      "name": "feature switch two",
       "type": "boolean",
-      "value": false,
-      "overrides": null
+      "value": false
     }
-  },
-  "children": [
-    {
-      "name": "middle",
-      "isBuildable": true,
-      "isApp": false,
-      "toggles": {
-        "feature switch one": {
-          "name": "feature switch one",
-          "type": "boolean",
-          "value": true,
-          "overrides": null
-        },
-        "feature switch two": {
-          "name": "feature switch two",
-          "type": "boolean",
-          "value": false,
-          "overrides": null
-        }
-      },
-      "children": [
-        {
-          "name": "app1",
-          "isBuildable": false,
-          "isApp": true,
-          "toggles": {
-            "feature switch one": {
-              "name": "feature switch one",
-              "type": "boolean",
-              "value": false,
-              "overrides": null
-            }
-          },
-          "children": []
-        }
-      ]
-    },
-    {
-      "name": "middle2",
-      "isBuildable": false,
-      "isApp": false,
-      "toggles": {
-        "feature switch one": {
-          "name": "feature switch one",
-          "type": "boolean",
-          "value": false,
-          "overrides": null
-        }
-      },
-      "children": [
-        {
-          "name": "app2",
-          "isBuildable": true,
-          "isApp": true,
-          "toggles": {
-            "feature switch one": {
-              "name": "feature switch one",
-              "type": "boolean",
-              "value": false,
-              "overrides": null
-            }
-          },
-          "children": []
-        }
-      ]
-    }
-  ]
+  }
 }

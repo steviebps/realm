@@ -1,2 +1,3 @@
 dist/*
 realm
+.realm/

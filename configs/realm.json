@@ -1,10 +1,17 @@
 {
-    "name": "realm",
-    "toggles": {
-        "chamber": {
-            "name": "chamber",
-            "type": "string",
-            "value": "/path/to/your/masterChamber.json"
+    "client": {
+        "address": "http://localhost:8080"
+    },
+    "server": {
+        "storage": "cacheable",
+        "port": "8080",
+        "certFile": "",
+        "keyFile": "",
+        "logLevel": "",
+        "options": {
+            "path": "./.realm",
+            "cache": "bigcache",
+            "source": "file"
         }
     }
 }

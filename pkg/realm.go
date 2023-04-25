@@ -1,278 +1,227 @@
 package realm
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"path"
-	"path/filepath"
 	"sync"
+	"time"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/hashicorp/go-hclog"
+	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/utils"
-	"golang.org/x/mod/semver"
 )
 
-type config struct {
-	mu              sync.RWMutex
-	rootChamber     *Chamber
-	configPaths     []string
-	configName      string
-	defaultVersion  string
-	configFileToUse string
-	configFileUsed  string
+type Realm struct {
+	applicationVersion string
+	path               string
+	initSync           sync.Once
+	stopCh             chan struct{}
+	mu                 sync.RWMutex
+	root               *ChamberEntry
+	logger             hclog.Logger
+	client             *client.Client
+	interval           time.Duration
 }
 
-var c *config
-
-func init() {
-	c = &config{}
+type RealmOptions struct {
+	Logger             hclog.Logger
+	Client             *client.Client
+	Path               string
+	ApplicationVersion string
+	// RefreshInterval is how often realm will refetch the chamber from the realm server
+	RefreshInterval time.Duration
 }
 
-// SetVersion sets the version to use for the current config
-func SetVersion(version string) error { return c.SetVersion(version) }
+const (
+	// DefaultRefreshInterval is used as the default refresh interval for realm
+	DefaultRefreshInterval time.Duration = 15 * time.Minute
+)
 
-func (cfg *config) SetVersion(version string) error {
-	if isValidVersion := semver.IsValid(version); !isValidVersion {
-		return fmt.Errorf("%q is not a valid semantic version", version)
+// NewRealm returns a new Realm struct that carries out all of the core features
+func NewRealm(options RealmOptions) (*Realm, error) {
+	if options.Client == nil {
+		return nil, errors.New("client option must not be nil")
+	}
+	if options.Path == "" {
+		return nil, errors.New("path must not be empty")
+	}
+	if options.Logger == nil {
+		options.Logger = hclog.Default().Named("realm")
+	}
+	if options.RefreshInterval <= 0 {
+		options.RefreshInterval = DefaultRefreshInterval
 	}
 
-	cfg.defaultVersion = version
-	return nil
+	return &Realm{
+		logger:             options.Logger,
+		client:             options.Client,
+		path:               options.Path,
+		applicationVersion: options.ApplicationVersion,
+		stopCh:             make(chan struct{}),
+		interval:           options.RefreshInterval,
+	}, nil
 }
 
-// SetConfigFile sets the config file to use when initializing
-func SetConfigFile(fileName string) error { return c.SetConfigFile(fileName) }
-
-func (cfg *config) SetConfigFile(fileName string) error {
-	if fileName == "" {
-		return errors.New("file name cannot be empty")
-	}
-
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
-
-	cfg.configFileToUse = fileName
-	return nil
-}
-
-// SetConfigName sets the config name to look for when initializing
-func SetConfigName(fileName string) error { return c.SetConfigName(fileName) }
-
-func (cfg *config) SetConfigName(fileName string) error {
-	if fileName == "" {
-		return errors.New("file name cannot be empty")
-	}
-
-	if path.Ext(fileName) != ".json" {
-		return fmt.Errorf("%q does not have an acceptable file extension. please use JSON", fileName)
-	}
-
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
-
-	cfg.configName = fileName
-	return nil
-}
-
-// AddConfigPath adds a file path to be look for the config when initializing
-func AddConfigPath(filePath string) error { return c.AddConfigPath(filePath) }
-
-func (cfg *config) AddConfigPath(filePath string) error {
-	if filePath == "" {
-		return errors.New("file path cannot be empty")
-	}
-
-	cfg.configPaths = append(c.configPaths, filePath)
-	return nil
-}
-
-// ReadInConfig attempts to read in the first valid file from all of the config files added by AddConfigPath
-func ReadInConfig(watch bool) error { return c.ReadInConfig(watch) }
-
-func (cfg *config) ReadInConfig(watch bool) error {
+// Start starts realm and initializes the underlying chamber
+func (rlm *Realm) Start() error {
 	var err error
-
-	if cfg.configFileToUse != "" {
-		err = cfg.ReadConfigFile(cfg.configFileToUse)
-		if err != nil {
-			return err
+	rlm.initSync.Do(func() {
+		var chamber *Chamber
+		if chamber, err = rlm.retrieveChamber(rlm.path); err == nil {
+			rlm.setChamber(chamber)
 		}
-	} else {
-		if len(cfg.configPaths) == 0 {
-			return errors.New("could not open config because there were no paths specified. please add a config path")
-		}
+	})
 
-		if cfg.configName == "" {
-			return errors.New("could not open config because there was no name specified specified. please set a config name")
-		}
-
-		for _, filePath := range cfg.configPaths {
-			fullPath := filepath.Join(filePath + cfg.configName)
-			err = cfg.ReadConfigFile(fullPath)
-			if err == nil {
-				break
-			}
-		}
-
-		if cfg.configFileUsed == "" {
-			return fmt.Errorf("could not open any of the config paths: %v with this name: %v", cfg.configPaths, cfg.configName)
-		}
-	}
-
-	if watch {
-		defer cfg.Watch(cfg.configFileUsed)
-	}
-
-	return nil
-}
-
-func (cfg *config) ReadChamber(r io.Reader, fileName string) error {
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
-
-	var root Chamber
-	var err error
-
-	if err = utils.ReadInterfaceWith(r, &root); err != nil {
-		return fmt.Errorf("error reading file %q: %w", fileName, err)
-	}
-
-	cfg.rootChamber = &root
-	cfg.configFileUsed = fileName
-
-	return nil
-}
-
-func (cfg *config) ReadConfigFile(fileName string) error {
-	rc, err := utils.OpenLocalConfig(fileName)
 	if err != nil {
 		return err
 	}
-	defer rc.Close()
 
-	return cfg.ReadChamber(rc, fileName)
-}
-
-func (cfg *config) Watch(fileName string) {
-	if fileName == "" {
-		return
-	}
-
-	init := make(chan interface{})
 	go func() {
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			init <- struct{}{}
-			return
-		}
-		defer watcher.Close()
-
-		events := make(chan interface{})
-		go func() {
-
-			for {
-				select {
-				case event, ok := <-watcher.Events:
-					if !ok {
-						events <- struct{}{}
-						return
-					}
-
-					const writeOrCreateMask = fsnotify.Write | fsnotify.Create
-					if event.Op&writeOrCreateMask != 0 {
-						err := cfg.ReadConfigFile(fileName)
-						if err != nil {
-							fmt.Printf("could not re-read config file: %v\n", err)
-						}
-					}
-				case err, ok := <-watcher.Errors:
-					if ok {
-						fmt.Printf("error: %v\n", err)
-					}
-					events <- struct{}{}
-					return
+		ticker := time.NewTicker(rlm.interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-rlm.stopCh:
+				rlm.logger.Info("shutting down realm")
+				return
+			case <-ticker.C:
+				var chamber *Chamber
+				if chamber, err = rlm.retrieveChamber(rlm.path); err == nil {
+					rlm.setChamber(chamber)
 				}
 			}
-		}()
-
-		watcher.Add(fileName)
-		init <- struct{}{}
-		<-events
-		fmt.Printf("done watching file: %q\n", fileName)
+		}
 	}()
-	<-init
+
+	return nil
 }
 
-// BoolValue retrieves a bool by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
-	return c.BoolValue(toggleKey, defaultValue)
+// Stop stops realm and flushes any pending tasks
+func (rlm *Realm) Stop() {
+	close(rlm.stopCh)
 }
 
-func (cfg *config) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cBool, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(bool)
-	if !ok {
-		return defaultValue, false
+// Logger retrieves the underlying logger for realm
+func (rlm *Realm) Logger() hclog.Logger {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	return rlm.logger
+}
+
+func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
+	client := rlm.client
+	logger := rlm.logger
+
+	res, err := client.PerformRequest("GET", path, nil)
+	if err != nil {
+		logger.Error(err.Error())
+		return nil, err
+	}
+	defer res.Body.Close()
+
+	var or OperationResponse
+	if err := utils.ReadInterfaceWith(res.Body, &or); err != nil {
+		logger.Error(fmt.Sprintf("could not read response for getting: %q", path), "error", err.Error())
+		return nil, err
 	}
 
-	return cBool, true
-}
-
-// StringValue retrieves a string by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func StringValue(toggleKey string, defaultValue string) (string, bool) {
-	return c.StringValue(toggleKey, defaultValue)
-}
-
-func (cfg *config) StringValue(toggleKey string, defaultValue string) (string, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cStr, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(string)
-	if !ok {
-		return defaultValue, false
+	if or.Error != "" {
+		logger.Error(fmt.Sprintf("could not get %q", path), "error", or.Error)
+		return nil, fmt.Errorf(or.Error)
 	}
 
-	return cStr, true
-}
-
-// Float64Value retrieves a float64 by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
-	return c.Float64Value(toggleKey, defaultValue)
-}
-
-func (cfg *config) Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cFloat64, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float64)
-	if !ok {
-		return defaultValue, false
+	var c Chamber
+	err = json.Unmarshal(or.Data, &c)
+	if err != nil {
+		rlm.logger.Error(err.Error())
+		return nil, err
 	}
 
-	return cFloat64, true
+	return &c, nil
 }
 
-// Float32Value retrieves a float32 by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-// if the config value overflows the type requested, defaultValue will be returned
-func Float32Value(toggleKey string, defaultValue float32) (float32, bool) {
-	return c.Float32Value(toggleKey, defaultValue)
+func (rlm *Realm) setChamber(c *Chamber) {
+	entry := NewChamberEntry(c, rlm.applicationVersion)
+	rlm.mu.Lock()
+	defer rlm.mu.Unlock()
+	rlm.root = entry
 }
 
-func (cfg *config) Float32Value(toggleKey string, defaultValue float32) (float32, bool) {
-	cfg.mu.RLock()
-	defer cfg.mu.RUnlock()
-	cFloat32, ok := cfg.rootChamber.GetToggleValue(toggleKey, cfg.defaultVersion).(float32)
-	if !ok {
-		return defaultValue, false
+func (rlm *Realm) getChamber() *ChamberEntry {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	return rlm.root
+}
+
+// Bool retrieves a bool by the key of the toggle.
+// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
+func (rlm *Realm) Bool(toggleKey string, defaultValue bool) (bool, error) {
+	c := rlm.getChamber()
+	if c == nil {
+		return defaultValue, ErrChamberEmpty
 	}
-
-	return cFloat32, true
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
+	}
+	v, ok := t.GetValueAt(rlm.applicationVersion).(bool)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
-// func retrieveRemoteConfig(url string) (*http.Response, error) {
-// 	return http.Get(url)
-// }
+// String retrieves a string by the key of the toggle.
+// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
+func (rlm *Realm) String(toggleKey string, defaultValue string) (string, error) {
+	c := rlm.getChamber()
+	if c == nil {
+		return defaultValue, ErrChamberEmpty
+	}
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
+	}
+	v, ok := t.GetValueAt(rlm.applicationVersion).(string)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
+}
+
+// Float64 retrieves a float64 by the key of the toggle.
+// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
+func (rlm *Realm) Float64(toggleKey string, defaultValue float64) (float64, error) {
+	c := rlm.getChamber()
+	if c == nil {
+		return defaultValue, ErrChamberEmpty
+	}
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
+	}
+	v, ok := t.GetValueAt(rlm.applicationVersion).(float64)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
+}
+
+// CustomValue retrieves an arbitrary value by the key of the toggle
+// and unmarshals the value into the custom value v
+func (rlm *Realm) CustomValue(toggleKey string, v any) error {
+	c := rlm.getChamber()
+	if c == nil {
+		return ErrChamberEmpty
+	}
+	t := c.Get(toggleKey)
+	if t == nil {
+		return &ErrToggleNotFound{toggleKey}
+	}
+	raw, ok := t.GetValueAt(rlm.applicationVersion).(*json.RawMessage)
+	if !ok {
+		return fmt.Errorf("could not convert custom toggle %q: it is of type %q", toggleKey, t.Type)
+	}
+	return json.Unmarshal(*raw, v)
+}

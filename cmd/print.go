@@ -5,11 +5,9 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/steviebps/realm/internal/logger"
+	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
 )
-
-var printCmdError = logger.ErrorWithPrefix("Error running print command: ")
 
 // printCmd represents the print command
 var printCmd = &cobra.Command{
@@ -17,6 +15,7 @@ var printCmd = &cobra.Command{
 	Short: "Print all chambers",
 	Long:  "Print all chambers as they exist without inheritence",
 	Run: func(cmd *cobra.Command, args []string) {
+		realmCore := cmd.Context().Value("core").(*realm.Realm)
 		pretty, _ := cmd.Flags().GetBool("pretty")
 		output, _ := cmd.Flags().GetString("output")
 
@@ -26,13 +25,13 @@ var printCmd = &cobra.Command{
 		if output != "" {
 			w, err = os.OpenFile(output, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 			if err != nil {
-				buildCmdError(err.Error())
+				realmCore.Logger().Info(err.Error())
 				os.Exit(1)
 			}
 		}
 
 		if err = utils.WriteInterfaceWith(w, globalChamber, pretty); err != nil {
-			printCmdError(err.Error())
+			realmCore.Logger().Info(err.Error())
 			os.Exit(1)
 		}
 

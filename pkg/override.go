@@ -10,22 +10,43 @@ import (
 
 // Override is a Toggle value to be consumed by and restricted to a semantic version range
 type Override struct {
-	MinimumVersion string      `json:"minimumVersion"`
-	MaximumVersion string      `json:"maximumVersion"`
-	Value          interface{} `json:"value"`
+	*Toggle
+	MinimumVersion string `json:"minimumVersion"`
+	MaximumVersion string `json:"maximumVersion"`
 }
+
+// type overrideAlias Override
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Override
 func (o *Override) UnmarshalJSON(b []byte) error {
-
-	var alias overrideAlias
-
-	err := json.Unmarshal(b, &alias)
+	var toggle Toggle
+	err := json.Unmarshal(b, &toggle)
 	if err != nil {
 		return err
 	}
+	o.Toggle = &toggle
 
-	*o = alias.toOverride()
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+
+	for k, v := range m {
+		switch k {
+		case "minimumVersion":
+			var min string
+			if err := json.Unmarshal(v, &min); err != nil {
+				return err
+			}
+			o.MinimumVersion = min
+		case "maximumVersion":
+			var max string
+			if err := json.Unmarshal(v, &max); err != nil {
+				return err
+			}
+			o.MaximumVersion = max
+		}
+	}
 
 	if o.Value == nil {
 		return errors.New("Override value cannot be empty/nil")
@@ -45,10 +66,4 @@ func (o *Override) UnmarshalJSON(b []byte) error {
 	}
 
 	return nil
-}
-
-type overrideAlias Override
-
-func (o overrideAlias) toOverride() Override {
-	return Override(o)
 }

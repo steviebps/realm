@@ -8,15 +8,22 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strings"
 )
 
-// IsURL returns whether the string is a valid url with a host and scheme
-func IsURL(str string) (bool, *url.URL) {
+// ParseURL returns a url.URL when the passed string is a valid url with a host and scheme
+func ParseURL(str string) (*url.URL, error) {
 	u, err := url.Parse(str)
-	return err == nil && u.Scheme != "" && u.Host != "", u
+	if err != nil {
+		return nil, err
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, errors.New("URL string must contain a protocol scheme and host")
+	}
+	return u, nil
 }
 
-func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
+func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {
 	bw := bufio.NewWriter(w)
 	enc := json.NewEncoder(bw)
 
@@ -24,33 +31,41 @@ func WriteInterfaceWith(w io.Writer, i interface{}, pretty bool) error {
 		enc.SetIndent("", "  ")
 	}
 
-	if err := enc.Encode(i); err != nil {
+	if err := enc.Encode(v); err != nil {
 		return err
 	}
 
-	bw.Flush()
-	return nil
+	return bw.Flush()
 }
 
-func ReadInterfaceWith(r io.Reader, i interface{}) error {
+func ReadInterfaceWith(r io.Reader, v any) error {
 	br := bufio.NewReader(r)
 	dec := json.NewDecoder(br)
 
-	if err := dec.Decode(i); err != nil && err != io.EOF {
+	if err := dec.Decode(v); err != nil && err != io.EOF {
 		return err
 	}
 
 	return nil
 }
 
-func OpenLocalConfig(fileName string) (io.ReadCloser, error) {
+func OpenFile(fileName string) (io.ReadCloser, error) {
 	file, err := os.OpenFile(fileName, os.O_RDONLY, 0755)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("could not open file %q because it does not exist: %w", fileName, err)
+			return file, fmt.Errorf("could not open file %q because it does not exist: %w", fileName, err)
 		}
-		return nil, fmt.Errorf("could not open file %q: %w", fileName, err)
+		return file, fmt.Errorf("could not open file %q: %w", fileName, err)
 	}
 
 	return file, nil
+}
+
+func EnsureTrailingSlash(s string) string {
+	s = strings.TrimSpace(s)
+
+	if len(s) > 0 && s[len(s)-1] != '/' {
+		s += "/"
+	}
+	return s
 }

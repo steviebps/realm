@@ -1,89 +1,96 @@
 package realm
 
 import (
+	"strconv"
+	"sync"
 	"testing"
 )
 
-func TestFindByName(t *testing.T) {
-
-	// setup
-	bottom := &Chamber{Name: "BOTTOM"}
-	middle := &Chamber{
-		Name: "MIDDLE",
-		Children: []*Chamber{
-			bottom,
-		},
-	}
-	middle2 := &Chamber{
-		Name: "MIDDLE2",
-	}
-	top := &Chamber{
-		Name: "TOP",
-		Children: []*Chamber{
-			middle,
-			middle2,
-		},
-	}
-
-	tests := []struct {
-		input  string
-		output *Chamber
-	}{
-		{"BOTTOM", bottom},
-		{"MIDDLE", middle},
-		{"MIDDLE2", middle2},
-		{"TOP", top},
-	}
-
-	for _, test := range tests {
-		got := top.FindByName(test.input)
-		if got != test.output {
-			t.Errorf("Got %v\nexpected: %q", got, test.output.Name)
-		}
-	}
-}
-
 func TestInheritWith(t *testing.T) {
-
 	bottom := &Chamber{
-		Name: "BOTTOM",
-		Toggles: map[string]*Toggle{
+		Toggles: map[string]*OverrideableToggle{
 			"toggle2": {
-				Name:       "toggle1",
-				ToggleType: "boolean",
-				Value:      false,
+				Toggle: &Toggle{
+					Type:  "boolean",
+					Value: false,
+				},
 			},
 		},
+		lock: new(sync.RWMutex),
 	}
 	middle := &Chamber{
-		Name: "MIDDLE",
-		Toggles: map[string]*Toggle{
+		Toggles: map[string]*OverrideableToggle{
 			"toggle1": {
-				Name:       "toggle1",
-				ToggleType: "boolean",
-				Value:      false,
+				Toggle: &Toggle{
+					Type:  "boolean",
+					Value: true,
+				},
 			},
 		},
+		lock: new(sync.RWMutex),
 	}
 	top := &Chamber{
-		Name: "TOP",
-		Toggles: map[string]*Toggle{
+		Toggles: map[string]*OverrideableToggle{
 			"toggle1": {
-				Name:       "toggle1",
-				ToggleType: "boolean",
-				Value:      false,
+				Toggle: &Toggle{
+					Type:  "boolean",
+					Value: false,
+				},
 			},
 		},
+		lock: new(sync.RWMutex),
 	}
 
 	middle.InheritWith(top.Toggles)
 	bottom.InheritWith(middle.Toggles)
 
-	if len(middle.Toggles) != 1 {
-		t.Errorf("%q did not inherit properly from %q", middle.Name, top.Name)
+	v1 := top.Toggles["toggle1"]
+	v2 := middle.Toggles["toggle1"]
+	v3 := bottom.Toggles["toggle1"]
+
+	// should not inherit top value as is
+	if v1 == v2 {
+		t.Errorf("middle did not inherit properly from top: value of toggle1 is: %v", v2)
 	}
 
-	if len(bottom.Toggles) != 2 {
-		t.Errorf("%q did not inherit properly from %q", bottom.Name, middle.Name)
+	// should inherit middle value as is
+	if v3 != v2 {
+		t.Errorf("bottom did not inherit properly from top: value of toggle1 is: %v", v3)
 	}
+}
+
+func BenchmarkStringValue(b *testing.B) {
+	m := make(map[string]*OverrideableToggle)
+	for i := 1; i < 10000; i++ {
+		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "string", Value: "string"}}
+	}
+
+	chamber := NewChamberEntry(&Chamber{
+		Toggles: m,
+	}, "")
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			chamber.StringValue("1", "")
+		}
+	})
+}
+
+func BenchmarkBoolValue(b *testing.B) {
+
+	m := make(map[string]*OverrideableToggle)
+	for i := 1; i < 100000; i++ {
+		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "boolean", Value: false}}
+	}
+	chamber := NewChamberEntry(&Chamber{
+		Toggles: m,
+	}, "")
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			chamber.BoolValue("1", false)
+		}
+	})
 }
