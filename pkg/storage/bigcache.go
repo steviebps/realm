@@ -16,14 +16,13 @@ import (
 
 type BigCacheStorage struct {
 	underlying *bigcache.BigCache
-	logger     hclog.Logger
 }
 
 var (
 	_ Storage = (*BigCacheStorage)(nil)
 )
 
-func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage, error) {
+func NewBigCacheStorage(config map[string]string) (Storage, error) {
 	// defaults
 	var shards int = 64
 	lifeWindow := int64(2 * time.Minute)
@@ -73,12 +72,12 @@ func NewBigCacheStorage(config map[string]string, logger hclog.Logger) (Storage,
 
 	return &BigCacheStorage{
 		underlying: cache,
-		logger:     logger.Named("bigcache"),
 	}, nil
 }
 
 func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	f.logger.Debug("get operation", "logicalPath", logicalPath)
+	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
 		return nil, err
@@ -103,7 +102,8 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 }
 
 func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
-	f.logger.Debug("put operation", "logicalPath", e.Key)
+	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
 		return err
@@ -120,7 +120,8 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
-	f.logger.Debug("delete operation", "logicalPath", logicalPath)
+	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
 		return err
@@ -137,7 +138,8 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 }
 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	f.logger.Debug("list operation", "prefix", prefix)
+	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
 		return nil, err
@@ -148,7 +150,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 	for iterator.SetNext() {
 		record, err := iterator.Value()
 		if err != nil {
-			f.logger.Error(err.Error())
+			logger.Error(err.Error())
 			return names, err
 		}
 		key := record.Key()
