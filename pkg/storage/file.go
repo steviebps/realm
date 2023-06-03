@@ -14,27 +14,26 @@ import (
 )
 
 type FileStorage struct {
-	logger hclog.Logger
-	path   string
+	path string
 }
 
 var (
 	_ Storage = (*FileStorage)(nil)
 )
 
-func NewFileStorage(conf map[string]string, logger hclog.Logger) (Storage, error) {
+func NewFileStorage(conf map[string]string) (Storage, error) {
 	if conf["path"] == "" {
 		return nil, fmt.Errorf("'path' must be set")
 	}
 
 	return &FileStorage{
-		logger: logger.Named("file"),
-		path:   conf["path"],
+		path: conf["path"],
 	}, nil
 }
 
 func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	f.logger.Debug("get operation", "logicalPath", logicalPath)
+	logger := hclog.FromContext(ctx).ResetNamed("file")
+	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
 		return nil, err
@@ -67,7 +66,8 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 }
 
 func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
-	f.logger.Debug("put operation", "logicalPath", e.Key)
+	logger := hclog.FromContext(ctx).ResetNamed("file")
+	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
 		return err
@@ -97,7 +97,8 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
-	f.logger.Debug("delete operation", "logicalPath", logicalPath)
+	logger := hclog.FromContext(ctx).ResetNamed("file")
+	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
 		return err
@@ -121,7 +122,8 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 }
 
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	f.logger.Debug("list operation", "prefix", prefix)
+	logger := hclog.FromContext(ctx).ResetNamed("file")
+	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
 		return nil, err

@@ -85,7 +85,7 @@ var serverCmd = &cobra.Command{
 			logger.Error(fmt.Sprintf("storage type %q does not exist", storageType))
 			os.Exit(1)
 		}
-		stg, err := strgCreator(serverConfig.StorageOptions, logger)
+		stg, err := strgCreator(serverConfig.StorageOptions)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)

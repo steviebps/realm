@@ -14,7 +14,6 @@ import (
 type CacheableStorage struct {
 	cache  Storage
 	source Storage
-	logger hclog.Logger
 }
 
 var (
@@ -22,7 +21,7 @@ var (
 )
 
 // NewCacheableStorage returns a write-through cacheable storage.
-func NewCacheableStorage(cache Storage, source Storage, logger hclog.Logger) (*CacheableStorage, error) {
+func NewCacheableStorage(cache Storage, source Storage) (*CacheableStorage, error) {
 	if cache == nil || source == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
 	}
@@ -30,11 +29,10 @@ func NewCacheableStorage(cache Storage, source Storage, logger hclog.Logger) (*C
 	return &CacheableStorage{
 		cache:  cache,
 		source: source,
-		logger: logger.Named("cacheable"),
 	}, nil
 }
 
-func NewCacheableStorageWithConf(conf map[string]string, logger hclog.Logger) (Storage, error) {
+func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 	cache, ok := conf["cache"]
 	if !ok || cache == "" {
 		cache = "bigcache"
@@ -48,7 +46,7 @@ func NewCacheableStorageWithConf(conf map[string]string, logger hclog.Logger) (S
 	if !exists {
 		return nil, fmt.Errorf("storage type %q does not exist", source)
 	}
-	srcStg, err := sourceCreator(conf, logger)
+	srcStg, err := sourceCreator(conf)
 	if err != nil {
 		return nil, err
 	}
@@ -57,23 +55,24 @@ func NewCacheableStorageWithConf(conf map[string]string, logger hclog.Logger) (S
 	if !exists {
 		return nil, fmt.Errorf("storage type %q does not exist", cache)
 	}
-	cacheStg, err := cacheCreator(conf, logger)
+	cacheStg, err := cacheCreator(conf)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewCacheableStorage(cacheStg, srcStg, logger)
+	return NewCacheableStorage(cacheStg, srcStg)
 }
 
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	c.logger.Debug("get operation", "logicalPath", logicalPath)
+	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
 		if !errors.As(err, &nfError) {
-			c.logger.Error("cache", "error", err.Error())
+			logger.Error("cache", "error", err.Error())
 		}
 	}
 
@@ -83,7 +82,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
-		c.logger.Error("source", "error", err.Error())
+		logger.Error("source", "error", err.Error())
 		return nil, err
 	}
 
@@ -95,7 +94,8 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 }
 
 func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
-	c.logger.Debug("put operation", "logicalPath", e.Key)
+	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	logger.Debug("put operation", "logicalPath", e.Key)
 
 	err := c.source.Put(ctx, e)
 	if err == nil {
@@ -106,7 +106,8 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error {
-	c.logger.Debug("delete operation", "logicalPath", logicalPath)
+	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	err := c.source.Delete(ctx, logicalPath)
 	if err == nil {
@@ -117,6 +118,7 @@ func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error
 }
 
 func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	c.logger.Debug("list operation", "prefix", prefix)
+	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	logger.Debug("list operation", "prefix", prefix)
 	return c.source.List(ctx, prefix)
 }

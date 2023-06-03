@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-
-	"github.com/hashicorp/go-hclog"
 )
 
 type StorageEntry struct {
@@ -21,7 +19,7 @@ type Storage interface {
 	List(ctx context.Context, prefix string) ([]string, error)
 }
 
-type StorageCreator func(conf map[string]string, logger hclog.Logger) (Storage, error)
+type StorageCreator func(conf map[string]string) (Storage, error)
 
 var StorageOptions = map[string]StorageCreator{
 	"file":      NewFileStorage,
