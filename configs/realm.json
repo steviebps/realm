@@ -11,7 +11,10 @@
         "options": {
             "path": "./.realm",
             "cache": "bigcache",
-            "source": "file"
+            "source": "file",
+            "life_window": "",
+            "shards": "",
+            "clean_window": ""
         }
     }
 }
