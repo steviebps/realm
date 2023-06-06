@@ -2,80 +2,92 @@
 
 [![release](https://github.com/steviebps/realm/actions/workflows/go.yml/badge.svg)](https://github.com/steviebps/realm/actions/workflows/go.yml)
 
-```go install github.com/steviebps/realm```
-
-
-## starter configs
-
-### a basic chamber file
-```wget -O $HOME/.realm/masterChamber.json https://raw.githubusercontent.com/steviebps/realm/master/configs/masterChamber.json```
-
+```bash
+go install github.com/steviebps/realm
+```
 
 ## example commands
 
-### build
-```realm build -o /path/to/your/directory```
+### server
 
-with forced directory creation
+#### start a local realm server
 
-```realm build -o /path/to/your/directory --force```
-
-### print
-
-#### Pretty prints your global chamber to stdout:
-```realm print -p```
-
-#### Print your global chamber to file:
-```realm print -o /path/to/your/file.json```
-
+```bash
+realm server --config ./configs/realm.json
+```
 
 ## example code snippets
 
 ```go
+package main
+
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 
+	"github.com/steviebps/realm/client"
 	realm "github.com/steviebps/realm/pkg"
 )
 
+type CustomStruct struct {
+	Foo string `json:"foo,omitempty"`
+}
 
 func main() {
-	// because realm configurations contain overrides based on the version of your application, specify it here
-	realm.SetVersion("v1.0.0")
+	var err error
 
-  	// tell realm where to look for realm configuration
-	if err := realm.AddConfigPath("./"); err != nil {
+	// create a realm client for retrieving your chamber from your local or remote host
+	client, err := client.NewClient(&client.ClientConfig{Address: "http://localhost"})
+	if err != nil {
 		log.Fatal(err)
 	}
 
-  	// tell realm what file name it should look for in the specified paths
-	if err := realm.SetConfigName("chambers.json"); err != nil {
+	// initialize your realm 
+	rlm, err := realm.NewRealm(realm.RealmOptions{Client: client, ApplicationVersion: "v1.0.0", Path: "root"})
+	if err != nil {
 		log.Fatal(err)
 	}
 
- 	// look for and read in the realm configuration
-  	// passing "true" will tell realm to watch the file for changes
-	if err := realm.ReadInConfig(true); err != nil {
+	// start fetching your chamber from the local or remote host
+	err = rlm.Start()
+	if err != nil {
 		log.Fatal(err)
 	}
 
-  	// return a float64 value from the config and specify a default value if it does not exist
-	port, _ := realm.Float64Value("port", 3000)
-  
+	// create a realm context
+	bootCtx := rlm.NewContext(context.Background())
+	// retrieve your first config value
+	port, _ := rlm.Float64(bootCtx, "port", 3000)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-    		// retrieve a string value from your realm config and specify a default value if it does not exist
-		message, _ := realm.StringValue("message", "DEFAULT")
+		// retrieve the message value with a new context
+		// note: use the same context value throughout the request for consistency
+		message, _ := rlm.String(rlm.NewContext(r.Context()), "message", "DEFAULT")
 		w.Write([]byte(message))
 	})
-  
+
+	mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
+		var custom *CustomStruct
+		// retrieve a custom value and unmarshal it
+		if err := rlm.CustomValue(rlm.NewContext(r.Context()), "custom", &custom); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(custom)
+	})
+
 	log.Println("Listening on :", port)
-	err := http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
+	err = http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 ```
+
 
