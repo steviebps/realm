@@ -6,11 +6,7 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
-
-	realm "github.com/steviebps/realm/pkg"
 )
-
-var globalChamber = realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
 
 // Version the version of realm
 var Version = "development"
