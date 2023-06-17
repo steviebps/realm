@@ -28,3 +28,55 @@ func TestAssertType(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkToggleStringValue(b *testing.B) {
+	t := &OverrideableToggle{Toggle: &Toggle{Type: "string", Value: "string"}}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			t.StringValue("v1.0.0", "")
+		}
+	})
+}
+
+func BenchmarkToggleBoolValue(b *testing.B) {
+	t := &OverrideableToggle{Toggle: &Toggle{Type: "boolean", Value: false}}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			t.BoolValue("v1.0.0", false)
+		}
+	})
+}
+
+func BenchmarkToggleFloat64Value(b *testing.B) {
+	t := &OverrideableToggle{Toggle: &Toggle{Type: "number", Value: float64(10)}}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			t.Float64Value("v1.0.0", 15)
+		}
+	})
+}
+
+func BenchmarkToggleCustomValue(b *testing.B) {
+	type CustomStruct struct {
+		Test string
+	}
+	raw := json.RawMessage(`{"Test":"test"}`)
+	toggle := &OverrideableToggle{Toggle: &Toggle{Type: "custom", Value: &raw}}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			var v CustomStruct
+			err := toggle.CustomValue("v1.0.0", &v)
+			if err != nil {
+				b.Errorf("something went wrong: %v", err)
+			}
+		}
+	})
+}
