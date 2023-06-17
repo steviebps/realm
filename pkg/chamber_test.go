@@ -144,9 +144,6 @@ func BenchmarkChamberCustomValue(b *testing.B) {
 			if err != nil {
 				b.Errorf("should not be failing benchmark with error: %v", err)
 			}
-			if i == 99999 {
-				i = 0
-			}
 		}
 	})
 }
