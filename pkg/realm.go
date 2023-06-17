@@ -186,15 +186,7 @@ func (rlm *Realm) Bool(ctx context.Context, toggleKey string, defaultValue bool)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	t := c.Get(toggleKey)
-	if t == nil {
-		return defaultValue, &ErrToggleNotFound{toggleKey}
-	}
-	v, ok := t.GetValueAt(rlm.applicationVersion).(bool)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
-	}
-	return v, nil
+	return c.BoolValue(toggleKey, defaultValue)
 }
 
 // String retrieves a string by the key of the toggle.
@@ -204,15 +196,7 @@ func (rlm *Realm) String(ctx context.Context, toggleKey string, defaultValue str
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	t := c.Get(toggleKey)
-	if t == nil {
-		return defaultValue, &ErrToggleNotFound{toggleKey}
-	}
-	v, ok := t.GetValueAt(rlm.applicationVersion).(string)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
-	}
-	return v, nil
+	return c.StringValue(toggleKey, defaultValue)
 }
 
 // Float64 retrieves a float64 by the key of the toggle.
@@ -222,15 +206,7 @@ func (rlm *Realm) Float64(ctx context.Context, toggleKey string, defaultValue fl
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	t := c.Get(toggleKey)
-	if t == nil {
-		return defaultValue, &ErrToggleNotFound{toggleKey}
-	}
-	v, ok := t.GetValueAt(rlm.applicationVersion).(float64)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
-	}
-	return v, nil
+	return c.Float64Value(toggleKey, defaultValue)
 }
 
 // CustomValue retrieves an arbitrary value by the key of the toggle
@@ -240,13 +216,9 @@ func (rlm *Realm) CustomValue(ctx context.Context, toggleKey string, v any) erro
 	if c == nil {
 		return ErrChamberEmpty
 	}
-	t := c.Get(toggleKey)
-	if t == nil {
-		return &ErrToggleNotFound{toggleKey}
+	err := c.CustomValue(toggleKey, v)
+	if err != nil {
+		return fmt.Errorf("could not convert custom toggle %q: %w", toggleKey, err)
 	}
-	raw, ok := t.GetValueAt(rlm.applicationVersion).(*json.RawMessage)
-	if !ok {
-		return fmt.Errorf("could not convert custom toggle %q: it is of type %q", toggleKey, t.Type)
-	}
-	return json.Unmarshal(*raw, v)
+	return nil
 }
