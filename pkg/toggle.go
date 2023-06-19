@@ -12,7 +12,6 @@ import (
 type Toggle struct {
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
-	m     map[*any]any
 }
 
 type toggleAlias Toggle
