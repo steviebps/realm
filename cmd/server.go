@@ -29,7 +29,7 @@ var serverCmd = &cobra.Command{
 		logger := hclog.New(&hclog.LoggerOptions{
 			Name:                 "realm.server",
 			Level:                level,
-			Output:               cmd.OutOrStdout(),
+			Output:               cmd.ErrOrStderr(),
 			TimeFn:               time.Now,
 			ColorHeaderAndFields: true,
 			Color:                hclog.AutoColor,
@@ -85,6 +85,13 @@ var serverCmd = &cobra.Command{
 			logger.Error(fmt.Sprintf("storage type %q does not exist", storageType))
 			os.Exit(1)
 		}
+
+		options := []interface{}{}
+		for k, v := range serverConfig.StorageOptions {
+			options = append(options, k, v)
+		}
+		logger.Debug("Storage options", options...)
+
 		stg, err := strgCreator(serverConfig.StorageOptions)
 		if err != nil {
 			logger.Error(err.Error())
