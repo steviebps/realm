@@ -35,3 +35,15 @@ changelog:
     exclude:
       - '^docs:'
       - '^test:'
+brews:
+  - name: realm@{{ .Major }}.{{ .Minor }}.{{ .Patch }}
+    description: "Inheritable and overridable configuration management "
+    tap:
+      owner: steviebps
+      name: realm
+      branch: master
+    download_strategy: CurlDownloadStrategy
+    folder: Formula
+    url_template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
+    homepage: "https://github.com/steviebps/realm"
+    license: "Apache 2.0"
