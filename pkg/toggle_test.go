@@ -6,7 +6,6 @@ import (
 )
 
 func TestAssertType(t *testing.T) {
-
 	tests := []struct {
 		assertedType  string
 		input         json.RawMessage
@@ -25,6 +24,29 @@ func TestAssertType(t *testing.T) {
 		err := toggle.assertType(test.input)
 		if err != nil && !test.errorExpected {
 			t.Errorf("input: %v with asserted type: %v\nreturned %v", string(test.input), test.assertedType, err)
+		}
+	}
+}
+
+func TestGetValueAt(t *testing.T) {
+	tests := []struct {
+		version string
+		output  string
+	}{
+		{"", "default"},
+		{"v1.0.0-pre.0", "default"},
+		{"v1.0.0", "override1"},
+		{"v1.0.1", "override1"},
+		{"v1.0.2-pre.0", "override2"},
+		{"v1.0.2", "override2"},
+		{"v1.0.3-pre.0", "default"},
+	}
+	toggle := &OverrideableToggle{Toggle: &Toggle{Type: "string", Value: "default"}, Overrides: []*Override{{Toggle: &Toggle{Type: "string", Value: "override1"}, MinimumVersion: "v1.0.0", MaximumVersion: "v1.0.1"}, {Toggle: &Toggle{Type: "string", Value: "override2"}, MinimumVersion: "v1.0.1", MaximumVersion: "v1.0.2"}}}
+
+	for _, test := range tests {
+		val := toggle.GetValueAt(test.version)
+		if val != test.output {
+			t.Errorf("version: %q should return %q but returned %q", test.version, test.output, val)
 		}
 	}
 }
