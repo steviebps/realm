@@ -15,8 +15,8 @@ import (
 // clientDelete represents the client delete command
 var clientDelete = &cobra.Command{
 	Use:   "delete [path]",
-	Short: "get a chamber",
-	Long:  "get retrieves the chamber at the specified path",
+	Short: "delete a chamber",
+	Long:  "delete a chamber at the specified path",
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
 			return err
