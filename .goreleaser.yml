@@ -41,7 +41,7 @@ brews:
     tap:
       owner: steviebps
       name: homebrew-realm
-      branch: master
+      branch: main
     download_strategy: CurlDownloadStrategy
     folder: Formula
     url_template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
