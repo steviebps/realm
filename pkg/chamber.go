@@ -1,7 +1,6 @@
 package realm
 
 import (
-	"encoding/json"
 	"sync"
 )
 
@@ -56,16 +55,6 @@ func NewChamberEntry(c *Chamber, version string) *ChamberEntry {
 	}
 }
 
-// GetToggleValue returns the toggle with the specified toggleName at the specified version.
-// Will return nil if the toggle does not exist
-func (c *ChamberEntry) GetToggleValue(toggleName string) interface{} {
-	t := c.Get(toggleName)
-	if t == nil {
-		return nil
-	}
-	return t.GetValueAt(c.version)
-}
-
 // Get returns the toggle with the specified toggleName.
 // Will return nil if the toggle does not exist
 func (c *ChamberEntry) Get(toggleName string) *OverrideableToggle {
@@ -79,40 +68,56 @@ func (c *ChamberEntry) Get(toggleName string) *OverrideableToggle {
 
 // StringValue retrieves a string by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (c *ChamberEntry) StringValue(toggleKey string, defaultValue string) (string, bool) {
-	cStr, ok := c.GetToggleValue(toggleKey).(string)
-	if !ok {
-		return defaultValue, ok
+func (c *ChamberEntry) StringValue(toggleKey string, defaultValue string) (string, error) {
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
 	}
-	return cStr, ok
+	v, ok := t.StringValue(c.version, defaultValue)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
 // BoolValue retrieves a bool by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (c *ChamberEntry) BoolValue(toggleKey string, defaultValue bool) (bool, bool) {
-	cBool, ok := c.GetToggleValue(toggleKey).(bool)
-	if !ok {
-		return defaultValue, ok
+func (c *ChamberEntry) BoolValue(toggleKey string, defaultValue bool) (bool, error) {
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
 	}
-	return cBool, ok
+	v, ok := t.BoolValue(c.version, defaultValue)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
 // Float64Value retrieves a float64 by the key of the toggle
 // and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (c *ChamberEntry) Float64Value(toggleKey string, defaultValue float64) (float64, bool) {
-	cFloat64, ok := c.GetToggleValue(toggleKey).(float64)
-	if !ok {
-		return defaultValue, ok
+func (c *ChamberEntry) Float64Value(toggleKey string, defaultValue float64) (float64, error) {
+	t := c.Get(toggleKey)
+	if t == nil {
+		return defaultValue, &ErrToggleNotFound{toggleKey}
 	}
-	return cFloat64, ok
+	v, ok := t.Float64Value(c.version, defaultValue)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return v, nil
 }
 
 // CustomValue retrieves a json.RawMessage by the key of the toggle
 // and returns a bool on whether or not the toggle exists and is the proper type
-func (c *ChamberEntry) CustomValue(toggleKey string, version string) (*json.RawMessage, bool) {
-	t, ok := c.GetToggleValue(toggleKey).(*json.RawMessage)
-	if !ok {
-		return nil, ok
+func (c *ChamberEntry) CustomValue(toggleKey string, v any) error {
+	t := c.Get(toggleKey)
+	if t == nil {
+		return &ErrToggleNotFound{toggleKey}
 	}
-	return t, ok
+	err := t.CustomValue(c.version, v)
+	if err != nil {
+		return &ErrCouldNotConvertToggle{toggleKey, t.Type}
+	}
+	return nil
 }

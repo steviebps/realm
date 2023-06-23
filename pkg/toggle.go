@@ -131,3 +131,42 @@ func (t *OverrideableToggle) GetValueAt(version string) interface{} {
 
 	return v
 }
+
+// StringValue retrieves a string value of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+func (t *OverrideableToggle) StringValue(version string, defaultValue string) (string, bool) {
+	v, ok := t.GetValueAt(version).(string)
+	if !ok {
+		return defaultValue, ok
+	}
+	return v, ok
+}
+
+// BoolValue retrieves a bool value of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+func (t *OverrideableToggle) BoolValue(version string, defaultValue bool) (bool, bool) {
+	v, ok := t.GetValueAt(version).(bool)
+	if !ok {
+		return defaultValue, ok
+	}
+	return v, ok
+}
+
+// Float64Value retrieves a float64 value of the toggle
+// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+func (t *OverrideableToggle) Float64Value(version string, defaultValue float64) (float64, bool) {
+	v, ok := t.GetValueAt(version).(float64)
+	if !ok {
+		return defaultValue, ok
+	}
+	return v, ok
+}
+
+// CustomValue unmarshals v into the value of the toggle
+func (t *OverrideableToggle) CustomValue(version string, v any) error {
+	raw, ok := t.GetValueAt(version).(*json.RawMessage)
+	if !ok {
+		return fmt.Errorf("toggle with type %q could not be converted for unmarshalling", t.Type)
+	}
+	return json.Unmarshal(*raw, v)
+}

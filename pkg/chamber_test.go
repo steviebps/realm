@@ -1,6 +1,7 @@
 package realm
 
 import (
+	"encoding/json"
 	"strconv"
 	"sync"
 	"testing"
@@ -59,8 +60,8 @@ func TestInheritWith(t *testing.T) {
 	}
 }
 
-func BenchmarkStringValue(b *testing.B) {
-	m := make(map[string]*OverrideableToggle)
+func BenchmarkChamberStringValue(b *testing.B) {
+	m := make(map[string]*OverrideableToggle, 100000)
 	for i := 1; i < 10000; i++ {
 		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "string", Value: "string"}}
 	}
@@ -72,14 +73,16 @@ func BenchmarkStringValue(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			chamber.StringValue("1", "")
+			_, err := chamber.StringValue("1", "")
+			if err != nil {
+				b.Errorf("should not be failing benchmark with error: %v", err)
+			}
 		}
 	})
 }
 
-func BenchmarkBoolValue(b *testing.B) {
-
-	m := make(map[string]*OverrideableToggle)
+func BenchmarkChamberBoolValue(b *testing.B) {
+	m := make(map[string]*OverrideableToggle, 100000)
 	for i := 1; i < 100000; i++ {
 		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "boolean", Value: false}}
 	}
@@ -90,7 +93,57 @@ func BenchmarkBoolValue(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			chamber.BoolValue("1", false)
+			_, err := chamber.BoolValue("1", false)
+			if err != nil {
+				b.Errorf("should not be failing benchmark with error: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkChamberFloat64Value(b *testing.B) {
+	m := make(map[string]*OverrideableToggle, 100000)
+	for i := 1; i < 100000; i++ {
+		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "number", Value: float64(10)}}
+	}
+	chamber := NewChamberEntry(&Chamber{
+		Toggles: m,
+	}, "")
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, err := chamber.Float64Value("1", 100)
+			if err != nil {
+				b.Errorf("should not be failing benchmark with error: %v", err)
+			}
+		}
+	})
+}
+
+func BenchmarkChamberCustomValue(b *testing.B) {
+	type CustomStruct struct {
+		Test string
+	}
+
+	m := make(map[string]*OverrideableToggle, 100000)
+	for i := 0; i < 100000; i++ {
+		raw := json.RawMessage(`{"Test":"test"}`)
+		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "custom", Value: &raw}}
+	}
+
+	chamber := NewChamberEntry(&Chamber{
+		Toggles: m,
+	}, "")
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			var v CustomStruct
+			err := chamber.CustomValue("1", &v)
+			if err != nil {
+				b.Errorf("should not be failing benchmark with error: %v", err)
+			}
 		}
 	})
 }
