@@ -40,7 +40,7 @@ brews:
     description: "Inheritable and overridable configuration management "
     tap:
       owner: steviebps
-      name: realm
+      name: homebrew-realm
       branch: master
     download_strategy: CurlDownloadStrategy
     folder: Formula
