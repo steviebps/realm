@@ -37,7 +37,7 @@ changelog:
       - '^test:'
 brews:
   - name: realm@{{ .Major }}.{{ .Minor }}.{{ .Patch }}
-    description: "Inheritable and overridable configuration management "
+    description: "Inheritable and overridable configuration management"
     tap:
       owner: steviebps
       name: homebrew-realm
