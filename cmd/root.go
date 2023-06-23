@@ -50,7 +50,7 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 	logger := hclog.New(&hclog.LoggerOptions{
 		Name:                 "realm",
 		Level:                level,
-		Output:               cmd.OutOrStdout(),
+		Output:               cmd.OutOrStderr(),
 		ColorHeaderAndFields: true,
 		Color:                hclog.AutoColor,
 		DisableTime:          true,
