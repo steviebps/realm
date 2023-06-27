@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,23 +23,17 @@ func ParseURL(str string) (*url.URL, error) {
 }
 
 func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {
-	bw := bufio.NewWriter(w)
-	enc := json.NewEncoder(bw)
-
+	enc := json.NewEncoder(w)
 	if pretty {
 		enc.SetIndent("", "  ")
 	}
 
-	if err := enc.Encode(v); err != nil {
-		return err
-	}
-
-	return bw.Flush()
+	return enc.Encode(v)
 }
 
 func ReadInterfaceWith(r io.Reader, v any) error {
-	br := bufio.NewReader(r)
-	dec := json.NewDecoder(br)
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
 
 	if err := dec.Decode(v); err != nil && err != io.EOF {
 		return err
