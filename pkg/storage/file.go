@@ -72,7 +72,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	if err := ValidatePath(e.Key); err != nil {
 		return err
 	}
-	path, key := f.expandPath(e.Key)
+	path, key := f.expandPath(e.Key + "entry")
 
 	select {
 	case <-ctx.Done():
@@ -103,7 +103,7 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	if err := ValidatePath(logicalPath); err != nil {
 		return err
 	}
-	path, key := f.expandPath(logicalPath)
+	path, key := f.expandPath(logicalPath + "entry")
 
 	select {
 	case <-ctx.Done():
@@ -154,10 +154,6 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		}
 		if fi.IsDir() {
 			names[i] = name + "/"
-		} else {
-			if name[0] == '_' {
-				names[i] = name[1:]
-			}
 		}
 	}
 
