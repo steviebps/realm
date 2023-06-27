@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
+	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/utils"
 )
@@ -131,19 +132,19 @@ func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	}
 	defer res.Body.Close()
 
-	var or OperationResponse
-	if err := utils.ReadInterfaceWith(res.Body, &or); err != nil {
+	var httpRes api.HTTPErrorAndDataRespone
+	if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
 		logger.Error(fmt.Sprintf("could not read response for getting: %q", path), "error", err.Error())
 		return nil, err
 	}
 
-	if or.Error != "" {
-		logger.Error(fmt.Sprintf("could not get %q", path), "error", or.Error)
-		return nil, fmt.Errorf(or.Error)
+	if len(httpRes.Errors) > 0 {
+		logger.Error(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
+		return nil, fmt.Errorf("%s", httpRes.Errors)
 	}
 
 	var c Chamber
-	err = json.Unmarshal(or.Data, &c)
+	err = json.Unmarshal(httpRes.Data, &c)
 	if err != nil {
 		rlm.logger.Error(err.Error())
 		return nil, err

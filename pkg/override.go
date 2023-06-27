@@ -15,8 +15,6 @@ type Override struct {
 	MaximumVersion string `json:"maximumVersion"`
 }
 
-// type overrideAlias Override
-
 // UnmarshalJSON Custom UnmarshalJSON method for validating Override
 func (o *Override) UnmarshalJSON(b []byte) error {
 	var toggle Toggle

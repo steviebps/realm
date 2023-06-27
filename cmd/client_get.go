@@ -6,8 +6,8 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
+	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
-	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
 )
@@ -69,18 +69,18 @@ var clientGet = &cobra.Command{
 		}
 		defer res.Body.Close()
 
-		var or realm.OperationResponse
-		if err := utils.ReadInterfaceWith(res.Body, &or); err != nil {
+		var httpRes api.HTTPErrorAndDataRespone
+		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
 			logger.Error(fmt.Sprintf("could not read response for getting: %q", args[0]), "error", err.Error())
 			os.Exit(1)
 		}
 
-		if or.Error != "" {
-			logger.Error(fmt.Sprintf("could not get %q", args[0]), "error", or.Error)
+		if len(httpRes.Errors) > 0 {
+			logger.Error(fmt.Sprintf("could not get %q: %s", args[0], httpRes.Errors))
 			os.Exit(1)
 		}
 
-		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), or.Data, true)
+		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)

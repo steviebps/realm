@@ -1,7 +1,4 @@
 {
-  "name": "root",
-  "isBuildable": false,
-  "isApp": false,
   "toggles": {
     "feature switch four": {
       "type": "number",
