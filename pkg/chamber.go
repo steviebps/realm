@@ -1,13 +1,12 @@
 package realm
 
 import (
-	"errors"
 	"sync"
 )
 
 // Chamber is a struct that holds metadata and toggles
 type Chamber struct {
-	Toggles map[string]*OverrideableToggle `json:"toggles" validate:"required"`
+	Toggles map[string]*OverrideableToggle `json:"toggles"`
 	lock    *sync.RWMutex
 }
 
@@ -21,15 +20,6 @@ func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
 			c.Toggles[key] = inherited[key]
 		}
 	}
-}
-
-// UnmarshalJSON Custom UnmarshalJSON method for validating the Chamber
-func (c *Chamber) UnmarshalJSON(b []byte) error {
-	if string(b) == "null" {
-		return errors.New("chamber cannot be null")
-	}
-
-	return nil
 }
 
 // TraverseAndBuild will traverse all Chambers while inheriting their parent Toggles and executes a callback on each Chamber node.
