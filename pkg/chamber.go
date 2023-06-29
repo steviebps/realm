@@ -1,20 +1,13 @@
 package realm
 
-import (
-	"sync"
-)
-
 // Chamber is a struct that holds metadata and toggles
 type Chamber struct {
 	Toggles map[string]*OverrideableToggle `json:"toggles"`
-	lock    *sync.RWMutex
 }
 
 // InheritWith will take a map of toggles to inherit from
 // so that any toggles that do not exist in this chamber will be written to the map
 func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
-	c.lock.Lock()
-	defer c.lock.Unlock()
 	for key := range inherited {
 		if _, ok := c.Toggles[key]; !ok {
 			c.Toggles[key] = inherited[key]
