@@ -39,7 +39,7 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 		return nil, err
 	}
 
-	path, key := f.expandPath(logicalPath)
+	path, key := f.expandPath(logicalPath + "entry")
 	file, err := os.OpenFile(filepath.Join(path, key), os.O_RDONLY, 0600)
 	if file != nil {
 		defer file.Close()
