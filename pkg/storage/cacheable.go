@@ -71,10 +71,10 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	if err != nil {
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
-		if !errors.As(err, &nfError) {
-			logger.Error("cache", "miss", err.Error())
+		if errors.As(err, &nfError) {
+			logger.Debug("cache", "miss", err.Error())
 		} else {
-			logger.Debug("cache", "error", err.Error())
+			logger.Error("cache", "error", err.Error())
 		}
 	}
 
