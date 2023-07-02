@@ -8,6 +8,7 @@
         "certFile": "",
         "keyFile": "",
         "logLevel": "",
+        "inheritable": true,
         "options": {
             "path": "./.realm",
             "cache": "bigcache",
