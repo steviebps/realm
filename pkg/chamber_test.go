@@ -3,7 +3,6 @@ package realm
 import (
 	"encoding/json"
 	"strconv"
-	"sync"
 	"testing"
 )
 
@@ -17,7 +16,6 @@ func TestInheritWith(t *testing.T) {
 				},
 			},
 		},
-		lock: new(sync.RWMutex),
 	}
 	middle := &Chamber{
 		Toggles: map[string]*OverrideableToggle{
@@ -28,7 +26,6 @@ func TestInheritWith(t *testing.T) {
 				},
 			},
 		},
-		lock: new(sync.RWMutex),
 	}
 	top := &Chamber{
 		Toggles: map[string]*OverrideableToggle{
@@ -39,7 +36,6 @@ func TestInheritWith(t *testing.T) {
 				},
 			},
 		},
-		lock: new(sync.RWMutex),
 	}
 
 	middle.InheritWith(top.Toggles)
