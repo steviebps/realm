@@ -21,7 +21,7 @@ var (
 )
 
 // NewCacheableStorage returns a write-through cacheable storage.
-func NewCacheableStorage(cache Storage, source Storage) (*CacheableStorage, error) {
+func NewCacheableStorage(cache Storage, source Storage) (Storage, error) {
 	if cache == nil || source == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
 	}
@@ -72,7 +72,9 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
 		if !errors.As(err, &nfError) {
-			logger.Error("cache", "error", err.Error())
+			logger.Error("cache", "miss", err.Error())
+		} else {
+			logger.Debug("cache", "error", err.Error())
 		}
 	}
 
