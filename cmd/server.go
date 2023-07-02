@@ -78,7 +78,7 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		logger.Info("Server options", "port", portStr, "certFile", certFile, "keyFile", keyFile, "storage", storageType, "debug", debug)
+		logger.Info("Server options", "port", portStr, "certFile", certFile, "keyFile", keyFile, "storage", storageType, "inheritable", serverConfig.Inheritable, "debug", debug)
 
 		strgCreator, exists := storage.StorageOptions[storageType]
 		if !exists {
@@ -96,6 +96,14 @@ var serverCmd = &cobra.Command{
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
+		}
+
+		if serverConfig.Inheritable {
+			stg, err = storage.NewInheritableStorage(stg)
+			if err != nil {
+				logger.Error(err.Error())
+				os.Exit(1)
+			}
 		}
 
 		if err != nil {
