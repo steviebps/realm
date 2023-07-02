@@ -38,7 +38,7 @@ changelog:
 brews:
   - name: realm
     description: "Inheritable and overridable configuration management"
-    tap:
+    repository:
       owner: steviebps
       name: homebrew-realm
       branch: main
