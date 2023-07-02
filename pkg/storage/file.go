@@ -154,6 +154,8 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		}
 		if fi.IsDir() {
 			names[i] = name + "/"
+		} else {
+			names[i] = "."
 		}
 	}
 
