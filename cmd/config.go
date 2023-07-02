@@ -16,6 +16,7 @@ type ServerConfig struct {
 	CertFile       string            `json:"certFile"`
 	KeyFile        string            `json:"keyFile"`
 	LogLevel       string            `json:"logLevel"`
+	Inheritable    bool              `json:"inheritable"`
 }
 
 type ClientConfig struct {
