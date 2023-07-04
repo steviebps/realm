@@ -31,11 +31,13 @@ func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
 // }
 
 // ChamberEntry is a read-only version of Chamber
+// it is specifically used for realm clients
 type ChamberEntry struct {
 	toggles map[string]*OverrideableToggle
 	version string
 }
 
+// NewChamberEntry creates a new ChamberEntry with the specified version
 func NewChamberEntry(c *Chamber, version string) *ChamberEntry {
 	m := make(map[string]*OverrideableToggle)
 	for k, v := range c.Toggles {
@@ -60,7 +62,7 @@ func (c *ChamberEntry) Get(toggleName string) *OverrideableToggle {
 }
 
 // StringValue retrieves a string by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+// and returns the default value if it does not exist and an error if it is not found or could not be converted
 func (c *ChamberEntry) StringValue(toggleKey string, defaultValue string) (string, error) {
 	t := c.Get(toggleKey)
 	if t == nil {
@@ -74,7 +76,7 @@ func (c *ChamberEntry) StringValue(toggleKey string, defaultValue string) (strin
 }
 
 // BoolValue retrieves a bool by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+// and returns the default value if it does not exist and an error if it is not found or could not be converted
 func (c *ChamberEntry) BoolValue(toggleKey string, defaultValue bool) (bool, error) {
 	t := c.Get(toggleKey)
 	if t == nil {
@@ -88,7 +90,7 @@ func (c *ChamberEntry) BoolValue(toggleKey string, defaultValue bool) (bool, err
 }
 
 // Float64Value retrieves a float64 by the key of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
+// and returns the default value if it does not exist and an error if it is not found or could not be converted
 func (c *ChamberEntry) Float64Value(toggleKey string, defaultValue float64) (float64, error) {
 	t := c.Get(toggleKey)
 	if t == nil {
@@ -102,7 +104,7 @@ func (c *ChamberEntry) Float64Value(toggleKey string, defaultValue float64) (flo
 }
 
 // CustomValue retrieves a json.RawMessage by the key of the toggle
-// and returns a bool on whether or not the toggle exists and is the proper type
+// and returns an error if it is not found or could not be converted
 func (c *ChamberEntry) CustomValue(toggleKey string, v any) error {
 	t := c.Get(toggleKey)
 	if t == nil {
