@@ -45,8 +45,8 @@ type contextKey struct {
 }
 
 var (
-	// RequestContextKey is a context key. It is used to store the root chamber of the current context
-	// such that toggle retrievals will be consistent throughout the consumers request
+	// RequestContextKey is the context key to use with a WithValue function to associate a root chamber value with a context
+	// such that toggle retrievals will be consistent throughout the client's request
 	RequestContextKey = &contextKey{"realm"}
 )
 
