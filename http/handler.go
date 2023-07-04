@@ -38,21 +38,20 @@ func handle(hc HandlerConfig) http.Handler {
 	logger := hc.Logger.Named("http")
 	strg := hc.Storage
 	mux := http.NewServeMux()
+
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		requestLogger := logger.With("method", r.Method, "path", r.URL.Path)
 		loggerCtx := hclog.WithContext(ctx, requestLogger)
 
 		path := strings.TrimPrefix(r.URL.Path, "/v1")
+		if path == "/" {
+			http.NotFound(w, r)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
-			if path == "/" {
-				err := fmt.Errorf("path cannot be %q", path)
-				requestLogger.Error(err.Error())
-				handleError(w, http.StatusNotFound, err)
-				return
-			}
-
 			entry, err := strg.Get(loggerCtx, utils.EnsureTrailingSlash(path))
 			if err != nil {
 				requestLogger.Error(err.Error())
