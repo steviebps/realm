@@ -98,8 +98,7 @@ func (rlm *Realm) Start() error {
 				rlm.logger.Info("shutting down realm")
 				return
 			case <-ticker.C:
-				var chamber *Chamber
-				if chamber, err = rlm.retrieveChamber(rlm.path); err == nil {
+				if chamber, err := rlm.retrieveChamber(rlm.path); err == nil {
 					rlm.setChamber(chamber)
 				}
 			}
