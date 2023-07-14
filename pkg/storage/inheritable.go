@@ -20,6 +20,7 @@ var (
 	_ Storage = (*InheritableStorage)(nil)
 )
 
+// NewInheritableStorage returns a InheritableStorage with the source Storage
 func NewInheritableStorage(source Storage) (Storage, error) {
 	return &InheritableStorage{
 		source: source,
