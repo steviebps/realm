@@ -1,3 +1,5 @@
+//go:build ui
+
 package http
 
 import (

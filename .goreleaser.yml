@@ -13,6 +13,8 @@ builds:
       - darwin
     ldflags:
       - -s -w -X github.com/steviebps/realm/cmd.Version={{ .Version }}
+    tags:
+      - ui
 archives:
   - 
     name_template: >-
