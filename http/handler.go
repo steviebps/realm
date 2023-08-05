@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/NYTimes/gziphandler"
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/api"
 	realm "github.com/steviebps/realm/pkg"
@@ -36,15 +37,79 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 
 func handle(hc HandlerConfig) http.Handler {
 	logger := hc.Logger.Named("http")
-	strg := hc.Storage
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))))
+
+	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, logger))
+
+	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
+	return wrapCommonHandler(timeoutHandler)
+}
+
+func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		var cancelFunc context.CancelFunc
+		ctx, cancelFunc = context.WithTimeout(ctx, t)
+		r = r.WithContext(ctx)
+		h.ServeHTTP(w, r)
+		cancelFunc()
+	})
+}
+func wrapCommonHandler(h http.Handler) http.Handler {
+	hostname, _ := os.Hostname()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+
+		if hostname != "" {
+			w.Header().Set("X-Realm-Hostname", hostname)
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+func createResponse(data json.RawMessage) *api.HTTPResponse {
+	response := &api.HTTPResponse{}
+	if data != nil {
+		response.Data = data
+	}
+
+	return response
+}
+
+func handleOk(w http.ResponseWriter, body interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	if body == nil {
+		w.WriteHeader(http.StatusNoContent)
+	} else {
+		w.WriteHeader(http.StatusOK)
+		utils.WriteInterfaceWith(w, body, true)
+	}
+}
+
+func handleOkWithStatus(w http.ResponseWriter, status int, body interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	utils.WriteInterfaceWith(w, body, true)
+}
+
+func handleError(w http.ResponseWriter, status int, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	resp := &api.HTTPErrorResponse{Errors: make([]string, 0, 1)}
+	if err != nil {
+		resp.Errors = append(resp.Errors, err.Error())
+	}
+	w.WriteHeader(status)
+	utils.WriteInterfaceWith(w, resp, true)
+}
+
+func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		requestLogger := logger.With("method", r.Method, "path", r.URL.Path)
 		loggerCtx := hclog.WithContext(ctx, requestLogger)
 
-		path := strings.TrimPrefix(r.URL.Path, "/v1")
+		path := strings.TrimPrefix(r.URL.Path, "/v1/chambers")
 		if path == "/" {
 			http.NotFound(w, r)
 			return
@@ -142,50 +207,4 @@ func handle(hc HandlerConfig) http.Handler {
 		}
 	})
 
-	return wrapWithTimeout(mux, hc.RequestTimeout)
-}
-
-func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		var cancelFunc context.CancelFunc
-		ctx, cancelFunc = context.WithTimeout(ctx, t)
-		r = r.WithContext(ctx)
-		h.ServeHTTP(w, r)
-		cancelFunc()
-	})
-}
-
-func createResponse(data json.RawMessage) *api.HTTPResponse {
-	response := &api.HTTPResponse{}
-	if data != nil {
-		response.Data = data
-	}
-
-	return response
-}
-
-func handleOk(w http.ResponseWriter, body interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	if body == nil {
-		w.WriteHeader(http.StatusNoContent)
-	} else {
-		w.WriteHeader(http.StatusOK)
-		utils.WriteInterfaceWith(w, body, true)
-	}
-}
-
-func handleOkWithStatus(w http.ResponseWriter, status int, body interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	utils.WriteInterfaceWith(w, body, true)
-}
-
-func handleError(w http.ResponseWriter, status int, err error) {
-	w.Header().Set("Content-Type", "application/json")
-	resp := &api.HTTPErrorResponse{Errors: make([]string, 0, 1)}
-	if err != nil {
-		resp.Errors = append(resp.Errors, err.Error())
-	}
-	utils.WriteInterfaceWith(w, resp, true)
 }
