@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,7 +125,7 @@ func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	client := rlm.client
 	logger := rlm.logger
 
-	res, err := client.PerformRequest("GET", path, nil)
+	res, err := client.PerformRequest("GET", "chambers/"+strings.TrimPrefix(path, "/"), nil)
 	if err != nil {
 		logger.Error(err.Error())
 		return nil, err

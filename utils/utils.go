@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 )
 
@@ -61,4 +62,15 @@ func EnsureTrailingSlash(s string) string {
 		s += "/"
 	}
 	return s
+}
+
+func pathSplit(p string) []string {
+	dir, last := path.Split(p)
+	if dir == "/" {
+		return []string{last}
+	}
+	if dir == "" {
+		return []string{}
+	}
+	return append(pathSplit(path.Clean(dir)), last)
 }
