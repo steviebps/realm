@@ -8,7 +8,6 @@
     "build": "tsc && npm run build:client",
     "build:client": "vite build --outDir dist",
     "build:watch": "tsc && vite build --watch",
-    "generate": "vite build --outDir dist/static && npm run build:server && node prerender",
     "lint": "eslint src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint --fix src --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
