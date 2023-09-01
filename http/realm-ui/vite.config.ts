@@ -1,13 +1,14 @@
 import { resolve } from 'path';
+import fs from 'node:fs'
 import { defineConfig, splitVendorChunkPlugin } from 'vite'
 import react from '@vitejs/plugin-react'
-import basicSsl from '@vitejs/plugin-basic-ssl';
+// import basicSsl from '@vitejs/plugin-basic-ssl';
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode, ssrBuild }) => {
   return {
     plugins: [
-      basicSsl(),
+      // basicSsl(),
       react(),
       splitVendorChunkPlugin()
     ],
@@ -22,10 +23,14 @@ export default defineConfig(({ command, mode, ssrBuild }) => {
     },
     server: {
       open: true,
-      https: true,
+      https: {
+        key: fs.readFileSync('/etc/ssl/private/mbp.tail6488a.ts.net.key'),
+        cert: fs.readFileSync('/etc/ssl/certs/mbp.tail6488a.ts.net.crt')
+      },
       proxy: {
         '/v1': {
-          target: 'http://localhost:8080/',
+          changeOrigin: true,
+          target: 'https://mbp.tail6488a.ts.net/',
         }
       },
     }

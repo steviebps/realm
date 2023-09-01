@@ -5,6 +5,7 @@ module.exports = {
   env: { browser: true, es2020: true },
   extends: [
     'eslint:recommended',
+    "plugin:prettier/recommended",
     'plugin:@typescript-eslint/recommended',
     'plugin:@typescript-eslint/recommended-requiring-type-checking',
     'plugin:react-hooks/recommended',
@@ -15,6 +16,12 @@ module.exports = {
     sourceType: 'module',
     project: true,
     tsconfigRootDir: __dirname,
+  },
+  env: {
+    "browser": true,
+    "node": true,
+    "es6": true,
+    "jest": true
   },
   plugins: ['react-refresh'],
   rules: {
