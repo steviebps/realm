@@ -1,18 +1,13 @@
 import { resolve } from 'path';
-import fs from 'node:fs'
-import { defineConfig, splitVendorChunkPlugin } from 'vite'
-import react from '@vitejs/plugin-react'
-// import basicSsl from '@vitejs/plugin-basic-ssl';
+import { defineConfig, splitVendorChunkPlugin } from 'vite';
+import react from '@vitejs/plugin-react';
+import basicSsl from '@vitejs/plugin-basic-ssl';
 
 // https://vitejs.dev/config/
-export default defineConfig(({ command, mode, ssrBuild }) => {
+export default defineConfig(({ mode }) => {
   return {
-    plugins: [
-      // basicSsl(),
-      react(),
-      splitVendorChunkPlugin()
-    ],
-    base: "/ui",
+    plugins: [basicSsl(), react(), splitVendorChunkPlugin()],
+    base: '/ui',
     build: {
       manifest: true,
       rollupOptions: {
@@ -23,16 +18,12 @@ export default defineConfig(({ command, mode, ssrBuild }) => {
     },
     server: {
       open: true,
-      https: {
-        key: fs.readFileSync('/etc/ssl/private/mbp.tail6488a.ts.net.key'),
-        cert: fs.readFileSync('/etc/ssl/certs/mbp.tail6488a.ts.net.crt')
-      },
       proxy: {
         '/v1': {
           changeOrigin: true,
-          target: 'https://mbp.tail6488a.ts.net/',
-        }
+          target: 'https://localhost:8080/',
+        },
       },
-    }
-  }
+    },
+  };
 });

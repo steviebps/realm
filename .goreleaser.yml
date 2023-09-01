@@ -3,7 +3,7 @@ before:
   hooks:
     # You may remove this if you don't use go modules.
     - go mod download
-    - cd http/realm-ui && npm i && npm run generate
+    - cd http/realm-ui && npm i && npm run build
 builds:
   - env:
       - CGO_ENABLED=0
