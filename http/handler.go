@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -109,15 +108,11 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 		requestLogger := logger.With("method", r.Method, "path", r.URL.Path)
 		loggerCtx := hclog.WithContext(ctx, requestLogger)
 
-		path := strings.TrimPrefix(r.URL.Path, "/v1/chambers")
-		if path == "/" {
-			http.NotFound(w, r)
-			return
-		}
+		req := buildAgentRequest(r)
 
-		switch r.Method {
-		case http.MethodGet:
-			entry, err := strg.Get(loggerCtx, utils.EnsureTrailingSlash(path))
+		switch req.Operation {
+		case GetOperation:
+			entry, err := strg.Get(loggerCtx, req.Path)
 			if err != nil {
 				requestLogger.Error(err.Error())
 
@@ -133,7 +128,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			handleOk(w, createResponse(entry.Value))
 			return
 
-		case http.MethodPost:
+		case PutOperation:
 			var c realm.Chamber
 
 			// ensure data is in correct format
@@ -156,7 +151,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			}
 
 			// store the entry if the format is correct
-			entry := storage.StorageEntry{Key: utils.EnsureTrailingSlash(path), Value: b}
+			entry := storage.StorageEntry{Key: req.Path, Value: b}
 			if err := strg.Put(loggerCtx, entry); err != nil {
 				requestLogger.Error(err.Error())
 				handleError(w, http.StatusInternalServerError, err)
@@ -166,8 +161,8 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			handleOkWithStatus(w, http.StatusCreated, nil)
 			return
 
-		case http.MethodDelete:
-			if err := strg.Delete(loggerCtx, utils.EnsureTrailingSlash(path)); err != nil {
+		case DeleteOperation:
+			if err := strg.Delete(loggerCtx, req.Path); err != nil {
 				requestLogger.Error(err.Error())
 
 				var nfError *storage.NotFoundError
@@ -182,8 +177,8 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			handleOk(w, nil)
 			return
 
-		case "LIST":
-			names, err := strg.List(loggerCtx, path)
+		case ListOperation:
+			names, err := strg.List(loggerCtx, req.Path)
 			if err != nil {
 				requestLogger.Error(err.Error())
 				if errors.Is(err, os.ErrNotExist) {

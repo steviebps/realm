@@ -1,4 +1,5 @@
 //go:build !ui
+// +build !ui
 
 package http
 
