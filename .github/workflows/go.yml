@@ -28,6 +28,9 @@ jobs:
           go test ./...
           go test -race ./...
 
+      - name: Install and Build UI
+        run: cd http/realm-ui && npm ci && npm run build
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v2
         with:

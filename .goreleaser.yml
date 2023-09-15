@@ -2,7 +2,6 @@
 before:
   hooks:
     - go mod download
-    - cd http/realm-ui && npm ci && npm run build
 builds:
   - env:
       - CGO_ENABLED=0
