@@ -1,5 +1,9 @@
 package realm
 
+import (
+	"encoding/json"
+)
+
 // Chamber is a struct that holds metadata and toggles
 type Chamber struct {
 	Toggles map[string]*OverrideableToggle `json:"toggles"`
@@ -13,6 +17,22 @@ func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
 			c.Toggles[key] = inherited[key]
 		}
 	}
+}
+
+type chamberAlias Chamber
+
+func (c *Chamber) UnmarshalJSON(b []byte) error {
+	var alias chamberAlias
+	if err := json.Unmarshal(b, &alias); err != nil {
+		return err
+	}
+
+	*c = Chamber(alias)
+	if c.Toggles == nil {
+		c.Toggles = make(map[string]*OverrideableToggle)
+	}
+
+	return nil
 }
 
 // TraverseAndBuild will traverse all Chambers while inheriting their parent Toggles and executes a callback on each Chamber node.

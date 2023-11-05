@@ -1,4 +1,3 @@
-// import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from 'react-query';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 
@@ -56,7 +55,7 @@ type Toggle = {
 const Content = () => {
   const location = useLocation();
 
-  const { data } = useQuery<ListResponse>(location.pathname, () => {
+  const { data: listResponse } = useQuery<ListResponse>(location.pathname, () => {
     return fetch(`/v1/chambers${encodePath(location.pathname)}?list=true`, {
       method: 'GET',
       mode: 'same-origin',
@@ -83,21 +82,32 @@ const Content = () => {
   const { data: chamberData } = chamber || {};
   const { toggles } = chamberData || {};
 
+  const trimmed = location.pathname.slice(1, location.pathname.length - 2);
+  const up = trimmed !== '' ? trimmed.split('/') : [];
+
   return (
     <div>
       <h1>Realm</h1>
       <div className="grid gap-3">
         <ul>
-          {data?.data?.map((curChamber) => {
-            const to = curChamber === '.' ? '../' : curChamber;
-            return (
-              <li key={curChamber}>
-                <Link to={to} relative="path">
-                  {curChamber}
-                </Link>
-              </li>
-            );
-          })}
+          {up.length > 0 && (
+            <li>
+              <Link to={'../'} relative="path">
+                {'../'}
+              </Link>
+            </li>
+          )}
+          {listResponse?.data
+            ?.filter((curChamber) => curChamber !== '.')
+            .map((curChamber) => {
+              return (
+                <li key={curChamber}>
+                  <Link to={curChamber} relative="path">
+                    {curChamber}
+                  </Link>
+                </li>
+              );
+            })}
         </ul>
 
         {!!toggles && (
@@ -108,7 +118,7 @@ const Content = () => {
                 return null;
               }
               return (
-                <li>
+                <li key={toggleName}>
                   <h2>{toggleName}</h2>
                   <h3>
                     {toggle.type} : {String(toggle.value)}
