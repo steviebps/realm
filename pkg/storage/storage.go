@@ -2,14 +2,13 @@ package storage
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 )
 
 type StorageEntry struct {
 	Key   string
-	Value json.RawMessage
+	Value []byte
 }
 
 type Storage interface {

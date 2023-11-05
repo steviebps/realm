@@ -23,6 +23,8 @@ var (
 	_ Storage = (*GCSStorage)(nil)
 )
 
+const gcsEntryKey string = "entry"
+
 func NewGCSStorage(conf map[string]string) (Storage, error) {
 	if conf["bucket"] == "" {
 		return nil, fmt.Errorf("'bucket' must be set")
@@ -48,7 +50,7 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 		return nil, err
 	}
 
-	p, key := s.expandPath(logicalPath + "entry")
+	p, key := s.expandPath(logicalPath + gcsEntryKey)
 
 	r, err := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewReader(ctx)
 	if err == gcs.ErrObjectNotExist {
@@ -87,7 +89,7 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	default:
 	}
 
-	p, key := s.expandPath(e.Key + "entry")
+	p, key := s.expandPath(e.Key + gcsEntryKey)
 
 	w := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewWriter(ctx)
 	md5Array := md5.Sum(e.Value)
@@ -118,7 +120,7 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 	default:
 	}
 
-	p, key := s.expandPath(logicalPath + "entry")
+	p, key := s.expandPath(logicalPath + gcsEntryKey)
 	err := s.client.Bucket(s.bucket).Object(path.Join(p, key)).Delete(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to delete: %w", err)
@@ -127,7 +129,6 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 	return nil
 }
 
-// TODO: finish
 func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("gcs")
 	logger.Debug("list operation", "prefix", prefix)
@@ -142,10 +143,11 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 	default:
 	}
 
+	cleanPrefix := strings.TrimPrefix(prefix, "/")
 	iter := s.client.Bucket(s.bucket).Objects(ctx, &gcs.Query{
-		Prefix: prefix,
-		// Delimiter: "/",
-		Versions: false,
+		Prefix:    cleanPrefix,
+		Delimiter: "/",
+		Versions:  false,
 	})
 
 	keys := []string{}
@@ -162,15 +164,16 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 		var path string
 		if objAttrs.Prefix != "" {
 			// "subdirectory"
-			path = objAttrs.Prefix
-		} else {
+			path = strings.TrimPrefix(objAttrs.Prefix, cleanPrefix)
+		} else if strings.HasSuffix(objAttrs.Name, "_"+gcsEntryKey) {
 			// file
-			path = objAttrs.Name
+			path = "."
 		}
 
-		// get relative file/dir just like "basename"
-		key := strings.TrimPrefix(path, prefix)
-		keys = append(keys, key)
+		if path != "" {
+			keys = append(keys, path)
+		}
+
 	}
 
 	sort.Strings(keys)
