@@ -22,6 +22,8 @@ var (
 	_ Storage = (*BigCacheStorage)(nil)
 )
 
+const bigCacheEntryKey string = "bc"
+
 func NewBigCacheStorage(config map[string]string) (Storage, error) {
 	// defaults
 	var shards int = 64
@@ -83,7 +85,7 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 		return nil, err
 	}
 
-	path, key := f.expandPath(logicalPath)
+	path, key := f.expandPath(logicalPath + bigCacheEntryKey)
 	b, err := f.underlying.Get(filepath.Join(path, key))
 	if err != nil {
 		if errors.Is(err, bigcache.ErrEntryNotFound) {
@@ -108,7 +110,7 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	if err := ValidatePath(e.Key); err != nil {
 		return err
 	}
-	path, key := f.expandPath(e.Key)
+	path, key := f.expandPath(e.Key + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -126,7 +128,7 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 	if err := ValidatePath(logicalPath); err != nil {
 		return err
 	}
-	path, key := f.expandPath(logicalPath)
+	path, key := f.expandPath(logicalPath + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -155,7 +157,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 		}
 		key := record.Key()
 		if strings.HasPrefix(key, prefix) {
-			names = append(names, strings.TrimPrefix(key, prefix))
+			names = append(names, filepath.Dir(strings.TrimPrefix(key, prefix)))
 		}
 	}
 
@@ -175,5 +177,5 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 func (f *BigCacheStorage) expandPath(k string) (string, string) {
 	key := filepath.Base(k)
 	path := filepath.Dir(k)
-	return path, key
+	return path, "_" + key
 }

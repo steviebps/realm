@@ -17,6 +17,12 @@ var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Starts realm server",
 	Long:  "Starts realm server",
+	PreRun: func(cmd *cobra.Command, args []string) {
+		devMode, _ := cmd.Flags().GetBool("dev")
+		if !devMode {
+			cmd.MarkFlagRequired("config")
+		}
+	},
 	Run: func(cmd *cobra.Command, args []string) {
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")
@@ -40,16 +46,24 @@ var serverCmd = &cobra.Command{
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
-		if configPath == "" {
+
+		devMode, _ := flags.GetBool("dev")
+		if !devMode && configPath == "" {
 			logger.Error("config must be specified")
 			os.Exit(1)
 		}
+		var realmConfig RealmConfig
 
-		realmConfig, err := parseConfig(configPath)
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+		if devMode {
+			realmConfig = NewDefaultServerConfig()
+		} else {
+			realmConfig, err = parseConfig(configPath)
+			if err != nil {
+				logger.Error(err.Error())
+				os.Exit(1)
+			}
 		}
+
 		serverConfig := realmConfig.Server
 
 		portStr, err := flags.GetString("port")
@@ -90,7 +104,9 @@ var serverCmd = &cobra.Command{
 		for k, v := range serverConfig.StorageOptions {
 			options = append(options, k, v)
 		}
-		logger.Debug("Storage options", options...)
+		if len(options) > 0 {
+			logger.Debug("Storage options", options...)
+		}
 
 		stg, err := strgCreator(serverConfig.StorageOptions)
 		if err != nil {
@@ -104,11 +120,6 @@ var serverCmd = &cobra.Command{
 				logger.Error(err.Error())
 				os.Exit(1)
 			}
-		}
-
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
 		}
 
 		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger, RequestTimeout: 5 * time.Second})
@@ -136,5 +147,6 @@ var serverCmd = &cobra.Command{
 
 func init() {
 	serverCmd.Flags().String("port", "", "port to run server on")
+	serverCmd.Flags().Bool("dev", false, "run server in dev mode")
 	rootCmd.AddCommand(serverCmd)
 }
