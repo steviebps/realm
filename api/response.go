@@ -10,7 +10,7 @@ type HTTPResponse struct {
 	Data json.RawMessage `json:"data"`
 }
 
-type HTTPErrorAndDataRespone struct {
+type HTTPErrorAndDataResponse struct {
 	Data   json.RawMessage `json:"data,omitempty"`
 	Errors []string        `json:"errors,omitempty"`
 }

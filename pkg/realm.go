@@ -132,7 +132,7 @@ func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	}
 	defer res.Body.Close()
 
-	var httpRes api.HTTPErrorAndDataRespone
+	var httpRes api.HTTPErrorAndDataResponse
 	if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
 		logger.Error(fmt.Sprintf("could not read response for getting: %q", path), "error", err.Error())
 		return nil, err
@@ -166,10 +166,18 @@ func (rlm *Realm) getChamber() *ChamberEntry {
 	return rlm.root
 }
 
-func (rlm *Realm) getChamberFromContext(ctx context.Context) *ChamberEntry {
-	cChamber, ok := ctx.Value(RequestContextKey).(*ChamberEntry)
-	if ok && cChamber != nil {
-		return cChamber
+func chamberFromContext(ctx context.Context) *ChamberEntry {
+	c, ok := ctx.Value(RequestContextKey).(*ChamberEntry)
+	if !ok {
+		return nil
+	}
+	return c
+}
+
+func (rlm *Realm) chamberFromContext(ctx context.Context) *ChamberEntry {
+	c := chamberFromContext(ctx)
+	if c != nil {
+		return c
 	}
 	return rlm.getChamber()
 }
@@ -183,7 +191,7 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 // Bool retrieves a bool by the key of the toggle.
 // Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
 func (rlm *Realm) Bool(ctx context.Context, toggleKey string, defaultValue bool) (bool, error) {
-	c := rlm.getChamberFromContext(ctx)
+	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
@@ -193,7 +201,7 @@ func (rlm *Realm) Bool(ctx context.Context, toggleKey string, defaultValue bool)
 // String retrieves a string by the key of the toggle.
 // Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
 func (rlm *Realm) String(ctx context.Context, toggleKey string, defaultValue string) (string, error) {
-	c := rlm.getChamberFromContext(ctx)
+	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
@@ -203,7 +211,7 @@ func (rlm *Realm) String(ctx context.Context, toggleKey string, defaultValue str
 // Float64 retrieves a float64 by the key of the toggle.
 // Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
 func (rlm *Realm) Float64(ctx context.Context, toggleKey string, defaultValue float64) (float64, error) {
-	c := rlm.getChamberFromContext(ctx)
+	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
@@ -213,7 +221,7 @@ func (rlm *Realm) Float64(ctx context.Context, toggleKey string, defaultValue fl
 // CustomValue retrieves an arbitrary value by the key of the toggle
 // and unmarshals the value into the custom value v
 func (rlm *Realm) CustomValue(ctx context.Context, toggleKey string, v any) error {
-	c := rlm.getChamberFromContext(ctx)
+	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return ErrChamberEmpty
 	}

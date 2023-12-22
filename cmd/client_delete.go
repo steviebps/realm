@@ -70,7 +70,7 @@ var clientDelete = &cobra.Command{
 		}
 		defer res.Body.Close()
 
-		var httpRes api.HTTPErrorAndDataRespone
+		var httpRes api.HTTPErrorAndDataResponse
 		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
 			logger.Error(fmt.Sprintf("could not read response for deleting: %q", args[0]), "error", err.Error())
 			os.Exit(1)

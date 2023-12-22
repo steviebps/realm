@@ -1,12 +1,22 @@
 package cmd
 
 import (
+	"strconv"
+	"time"
+
 	"github.com/steviebps/realm/utils"
 )
 
 type RealmConfig struct {
 	Client ClientConfig `json:"client,omitempty"`
 	Server ServerConfig `json:"server,omitempty"`
+}
+
+func NewDefaultServerConfig() RealmConfig {
+	return RealmConfig{
+		Client: ClientConfig{},
+		Server: ServerConfig{StorageType: "bigcache", StorageOptions: map[string]string{"life_window": strconv.FormatInt(int64(time.Hour*24), 10)}, Port: "8080", Inheritable: true},
+	}
 }
 
 type ServerConfig struct {

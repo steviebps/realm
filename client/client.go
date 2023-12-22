@@ -7,21 +7,24 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
 )
 
+const DefaultClientTimeout = 15 * time.Second
+
 type ClientConfig struct {
 	Logger  hclog.Logger
 	Address string
+	Timeout time.Duration
 }
 
 type Client struct {
+	underlying *http.Client
 	logger     hclog.Logger
 	address    *url.URL
-	config     *ClientConfig
-	underlying *http.Client
 }
 
 func NewClient(c *ClientConfig) (*Client, error) {
@@ -37,13 +40,14 @@ func NewClient(c *ClientConfig) (*Client, error) {
 	if logger == nil {
 		logger = hclog.Default().Named("client")
 	}
+	if c.Timeout <= 0 {
+		c.Timeout = DefaultClientTimeout
+	}
 
 	return &Client{
-		address: u,
-		config:  c,
-		logger:  logger,
-		// TODO: add internal client options
-		underlying: &http.Client{},
+		underlying: &http.Client{Timeout: c.Timeout},
+		address:    u,
+		logger:     logger,
 	}, nil
 }
 
