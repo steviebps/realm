@@ -60,7 +60,6 @@ func handle(hc HandlerConfig) http.Handler {
 
 func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("timeout")
 		ctx := r.Context()
 		var cancelFunc context.CancelFunc
 		ctx, cancelFunc = context.WithTimeout(ctx, t)
@@ -72,7 +71,6 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 func wrapCommonHandler(h http.Handler) http.Handler {
 	hostname, _ := os.Hostname()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Println("common")
 		w.Header().Set("Cache-Control", "no-store")
 
 		if hostname != "" {
