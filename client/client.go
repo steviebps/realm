@@ -40,7 +40,7 @@ func NewClient(c *ClientConfig) (*Client, error) {
 	if logger == nil {
 		logger = hclog.Default().Named("client")
 	}
-	if c.Timeout == 0 {
+	if c.Timeout <= 0 {
 		c.Timeout = DefaultClientTimeout
 	}
 
