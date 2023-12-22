@@ -122,7 +122,7 @@ var serverCmd = &cobra.Command{
 			}
 		}
 
-		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger, RequestTimeout: 5 * time.Second})
+		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger})
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)

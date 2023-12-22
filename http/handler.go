@@ -18,10 +18,19 @@ import (
 	"github.com/steviebps/realm/utils"
 )
 
+const DefaultHandlerTimeout = 10 * time.Second
+
 type HandlerConfig struct {
 	Logger         hclog.Logger
 	Storage        storage.Storage
 	RequestTimeout time.Duration
+}
+
+func RealmHandler(rlm *realm.Realm, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := r.WithContext(rlm.NewContext(r.Context()))
+		h.ServeHTTP(w, req)
+	})
 }
 
 func NewHandler(config HandlerConfig) (http.Handler, error) {
@@ -30,6 +39,9 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	}
 	if config.Logger == nil {
 		config.Logger = hclog.Default().Named("realm")
+	}
+	if config.RequestTimeout == 0 {
+		config.RequestTimeout = DefaultHandlerTimeout
 	}
 	return handle(config), nil
 }
@@ -48,6 +60,7 @@ func handle(hc HandlerConfig) http.Handler {
 
 func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("timeout")
 		ctx := r.Context()
 		var cancelFunc context.CancelFunc
 		ctx, cancelFunc = context.WithTimeout(ctx, t)
@@ -59,6 +72,7 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 func wrapCommonHandler(h http.Handler) http.Handler {
 	hostname, _ := os.Hostname()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Println("common")
 		w.Header().Set("Cache-Control", "no-store")
 
 		if hostname != "" {
@@ -67,10 +81,14 @@ func wrapCommonHandler(h http.Handler) http.Handler {
 		h.ServeHTTP(w, r)
 	})
 }
-func createResponse(data json.RawMessage) *api.HTTPResponse {
-	response := &api.HTTPResponse{}
+
+func createResponseWithErrors(data json.RawMessage, errors []string) api.HTTPErrorAndDataResponse {
+	response := api.HTTPErrorAndDataResponse{}
 	if data != nil {
 		response.Data = data
+	}
+	if len(errors) > 0 {
+		response.Errors = errors
 	}
 
 	return response
@@ -86,18 +104,14 @@ func handleOk(w http.ResponseWriter, body interface{}) {
 	}
 }
 
-func handleOkWithStatus(w http.ResponseWriter, status int, body interface{}) {
+func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	utils.WriteInterfaceWith(w, body, true)
 }
 
-func handleError(w http.ResponseWriter, status int, err error) {
+func handleError(w http.ResponseWriter, status int, resp api.HTTPErrorAndDataResponse) {
 	w.Header().Set("Content-Type", "application/json")
-	resp := &api.HTTPErrorResponse{Errors: make([]string, 0, 1)}
-	if err != nil {
-		resp.Errors = append(resp.Errors, err.Error())
-	}
 	w.WriteHeader(status)
 	utils.WriteInterfaceWith(w, resp, true)
 }
@@ -121,11 +135,11 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 					err = nfError
 				}
 
-				handleError(w, http.StatusNotFound, err)
+				handleError(w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
-			handleOk(w, createResponse(entry.Value))
+			handleOk(w, createResponseWithErrors(entry.Value, nil))
 			return
 
 		case PutOperation:
@@ -139,7 +153,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 				} else {
 					err = errors.New(http.StatusText(http.StatusBadRequest))
 				}
-				handleError(w, http.StatusBadRequest, err)
+				handleError(w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -147,18 +161,19 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			if err != nil {
 				requestLogger.Error(err.Error())
 				err = errors.New(http.StatusText(http.StatusInternalServerError))
-				handleError(w, http.StatusInternalServerError, err)
+				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				return
 			}
 
 			// store the entry if the format is correct
 			entry := storage.StorageEntry{Key: req.Path, Value: b}
 			if err := strg.Put(loggerCtx, entry); err != nil {
 				requestLogger.Error(err.Error())
-				handleError(w, http.StatusInternalServerError, err)
+				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
-			handleOkWithStatus(w, http.StatusCreated, nil)
+			handleWithStatus(w, http.StatusCreated, nil)
 			return
 
 		case DeleteOperation:
@@ -167,11 +182,11 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
-					handleError(w, http.StatusNotFound, nfError)
+					handleError(w, http.StatusNotFound, createResponseWithErrors(nil, []string{nfError.Error()}))
 					return
 				}
 
-				handleError(w, http.StatusInternalServerError, err)
+				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 			handleOk(w, nil)
@@ -182,23 +197,23 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			if err != nil {
 				requestLogger.Error(err.Error())
 				if errors.Is(err, os.ErrNotExist) {
-					handleError(w, http.StatusNotFound, errors.New(http.StatusText(http.StatusNotFound)))
+					handleError(w, http.StatusNotFound, createResponseWithErrors(nil, []string{http.StatusText(http.StatusNotFound)}))
 					return
 				}
-				handleError(w, http.StatusInternalServerError, err)
+				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 			raw, err := json.Marshal(names)
 			if err != nil {
-				handleError(w, http.StatusInternalServerError, err)
+				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
-			handleOk(w, createResponse(raw))
+			handleOk(w, createResponseWithErrors(raw, nil))
 			return
 
 		default:
-			handleError(w, http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))
+			handleError(w, http.StatusMethodNotAllowed, createResponseWithErrors(nil, []string{http.StatusText(http.StatusMethodNotAllowed)}))
 		}
 	})
 
