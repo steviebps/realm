@@ -13,9 +13,9 @@ jobs:
         - macOS
         - windows
         go:
-        - 1.19.x
         - 1.20.x
         - 1.21.x
+        - 1.22.x
     name: '${{ matrix.platform }} | ${{ matrix.go }}'
     runs-on: ${{ matrix.platform }}-latest
     steps:
