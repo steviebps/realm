@@ -1,5 +1,5 @@
 {
-  "toggles": {
+  "rules": {
     "feature switch four": {
       "type": "number",
       "value": 10.6,

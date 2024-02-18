@@ -6,64 +6,14 @@ import (
 	"testing"
 )
 
-func TestInheritWith(t *testing.T) {
-	bottom := &Chamber{
-		Toggles: map[string]*OverrideableToggle{
-			"toggle2": {
-				Toggle: &Toggle{
-					Type:  "boolean",
-					Value: false,
-				},
-			},
-		},
-	}
-	middle := &Chamber{
-		Toggles: map[string]*OverrideableToggle{
-			"toggle1": {
-				Toggle: &Toggle{
-					Type:  "boolean",
-					Value: true,
-				},
-			},
-		},
-	}
-	top := &Chamber{
-		Toggles: map[string]*OverrideableToggle{
-			"toggle1": {
-				Toggle: &Toggle{
-					Type:  "boolean",
-					Value: false,
-				},
-			},
-		},
-	}
-
-	middle.InheritWith(top.Toggles)
-	bottom.InheritWith(middle.Toggles)
-
-	v1 := top.Toggles["toggle1"]
-	v2 := middle.Toggles["toggle1"]
-	v3 := bottom.Toggles["toggle1"]
-
-	// should not inherit top value as is
-	if v1 == v2 {
-		t.Errorf("middle did not inherit properly from top: value of toggle1 is: %v", v2)
-	}
-
-	// should inherit middle value as is
-	if v3 != v2 {
-		t.Errorf("bottom did not inherit properly from top: value of toggle1 is: %v", v3)
-	}
-}
-
 func BenchmarkChamberStringValue(b *testing.B) {
-	m := make(map[string]*OverrideableToggle, 100000)
+	m := make(map[string]*OverrideableRule, 100000)
 	for i := 1; i < 10000; i++ {
-		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "string", Value: "string"}}
+		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "string", Value: "string"}}
 	}
 
 	chamber := NewChamberEntry(&Chamber{
-		Toggles: m,
+		Rules: m,
 	}, "")
 
 	b.ResetTimer()
@@ -78,12 +28,12 @@ func BenchmarkChamberStringValue(b *testing.B) {
 }
 
 func BenchmarkChamberBoolValue(b *testing.B) {
-	m := make(map[string]*OverrideableToggle, 100000)
+	m := make(map[string]*OverrideableRule, 100000)
 	for i := 1; i < 100000; i++ {
-		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "boolean", Value: false}}
+		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "boolean", Value: false}}
 	}
 	chamber := NewChamberEntry(&Chamber{
-		Toggles: m,
+		Rules: m,
 	}, "")
 
 	b.ResetTimer()
@@ -98,12 +48,12 @@ func BenchmarkChamberBoolValue(b *testing.B) {
 }
 
 func BenchmarkChamberFloat64Value(b *testing.B) {
-	m := make(map[string]*OverrideableToggle, 100000)
+	m := make(map[string]*OverrideableRule, 100000)
 	for i := 1; i < 100000; i++ {
-		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "number", Value: float64(10)}}
+		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "number", Value: float64(10)}}
 	}
 	chamber := NewChamberEntry(&Chamber{
-		Toggles: m,
+		Rules: m,
 	}, "")
 
 	b.ResetTimer()
@@ -122,14 +72,14 @@ func BenchmarkChamberCustomValue(b *testing.B) {
 		Test string
 	}
 
-	m := make(map[string]*OverrideableToggle, 100000)
+	m := make(map[string]*OverrideableRule, 100000)
 	for i := 0; i < 100000; i++ {
 		raw := json.RawMessage(`{"Test":"test"}`)
-		m[strconv.Itoa(i)] = &OverrideableToggle{Toggle: &Toggle{Type: "custom", Value: &raw}}
+		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "custom", Value: &raw}}
 	}
 
 	chamber := NewChamberEntry(&Chamber{
-		Toggles: m,
+		Rules: m,
 	}, "")
 
 	b.ResetTimer()

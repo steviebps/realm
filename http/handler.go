@@ -20,6 +20,8 @@ import (
 
 const DefaultHandlerTimeout = 10 * time.Second
 
+var uiExists = true
+
 type HandlerConfig struct {
 	Logger         hclog.Logger
 	Storage        storage.Storage
@@ -50,7 +52,11 @@ func handle(hc HandlerConfig) http.Handler {
 	logger := hc.Logger.Named("http")
 	mux := http.NewServeMux()
 
-	mux.Handle("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))))
+	if uiExists {
+		mux.Handle("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))))
+	} else {
+		mux.Handle("/ui/", handleUIEmpty())
+	}
 
 	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, logger))
 
@@ -214,5 +220,18 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			handleError(w, http.StatusMethodNotAllowed, createResponseWithErrors(nil, []string{http.StatusText(http.StatusMethodNotAllowed)}))
 		}
 	})
+}
 
+func handleUIEmpty() http.Handler {
+	stubHTML := `
+	<!DOCTYPE html>
+	<html>
+	<body>
+	<h1>Realm UI is not available</h1>
+	</body>
+	</html>
+	`
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Write([]byte(stubHTML))
+	})
 }

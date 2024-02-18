@@ -2,7 +2,7 @@
     "name": "root",
     "isBuildable": false,
     "isApp": false,
-    "toggles": {
+    "rules": {
         "port": {
             "type": "number",
             "value": 80,

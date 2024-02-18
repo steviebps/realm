@@ -1,15 +1,18 @@
 import { useState } from 'react';
 import { Breadcrumb, Button, Label, TextInput } from 'flowbite-react';
+import { HiHome } from 'react-icons/hi';
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from 'react-query';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { trimPrefix, trimSuffix } from './utils/strings';
+import { SideNav } from './components/side-nav';
+import { ChamberResponse, ListResponse } from './models/response';
 
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: false,
-      refetchOnMount: false,
-      refetchOnReconnect: false,
+      refetchOnWindowFocus: 'always',
+      refetchOnMount: 'always',
+      refetchOnReconnect: 'always',
       retry: false,
       staleTime: Infinity,
     },
@@ -37,24 +40,6 @@ export const App = () => {
   );
 };
 
-type ListResponse = {
-  data?: Array<string>;
-};
-
-type ChamberResponse = {
-  data?: {
-    toggles: Toggles;
-  };
-};
-
-type Toggles = Record<string, Toggle>;
-
-type Toggle = {
-  type: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  value: any;
-};
-
 const Content = () => {
   const [chamberName, setChamberName] = useState('');
   const location = useLocation();
@@ -70,6 +55,7 @@ const Content = () => {
       return res.json();
     });
   });
+  const directories = (listResponse?.data || []).filter((curChamber) => curChamber !== '.');
 
   const { data: chamber, isLoading: isLoadingChamber } = useQuery<ChamberResponse>(
     location.pathname + '_chamber',
@@ -115,86 +101,77 @@ const Content = () => {
   };
 
   const { data: chamberData } = chamber || {};
-  const { toggles } = chamberData || {};
+  const { rules } = chamberData || {};
 
   const trimmed = trimSuffix(trimPrefix(location.pathname, '/'), '/');
   const up = trimmed !== '' ? trimmed.split('/') : [];
   return (
-    <div>
+    <div className="flex flex-col items-center">
       <h1>Realm</h1>
-      <Breadcrumb aria-label="chamber crumbs" className="bg-gray-50 px-5 py-3 dark:bg-gray-800">
-        <Breadcrumb.Item href="#">
-          <Link to="/" relative="path">
-            Home
-          </Link>
-        </Breadcrumb.Item>
-        {up.map((path, index) => (
-          <Breadcrumb.Item key={index} href="">
-            <Link to={up.slice(0, index).join('/') + '/' + path} relative="route">
-              {path}
+      <div className="max-w-screen-2xl min-w-max">
+        <Breadcrumb aria-label="directory crumbs" className="px-5 py-3">
+          <Breadcrumb.Item icon={HiHome}>
+            <Link to="/" relative="path">
+              Home
             </Link>
           </Breadcrumb.Item>
-        ))}
-      </Breadcrumb>
-      <div className="grid gap-5">
-        <ul>
-          {listResponse?.data
-            ?.filter((curChamber) => curChamber !== '.')
-            .map((curChamber) => {
-              return (
-                <li key={curChamber}>
-                  <Link to={curChamber} relative="path">
-                    {curChamber}
-                  </Link>
-                </li>
-              );
-            })}
-        </ul>
+          {up.map((path, index) => (
+            <Breadcrumb.Item key={index}>
+              <Link to={up.slice(0, index).join('/') + '/' + path} relative="route">
+                {path}
+              </Link>
+            </Breadcrumb.Item>
+          ))}
+        </Breadcrumb>
+        <div className="grid grid-cols-12 gap-5">
+          <div className="col-span-3">{directories.length > 0 && <SideNav directories={directories} />}</div>
+          <div className="col-span-9">
+            {!isLoadingChamber && !rules && (
+              <form className="flex max-w-md flex-col gap-4" onSubmit={onCreateNewChamber}>
+                <div>
+                  <div className="mb-2 block">
+                    <Label htmlFor="chamber" value="Chamber" />
+                  </div>
+                  <TextInput
+                    id="chamber"
+                    type="input"
+                    required
+                    value={chamberName}
+                    onChange={(event) => {
+                      setChamberName(event.target.value);
+                    }}
+                  />
+                </div>
+                <Button type="submit">Create New Chamber</Button>
+              </form>
+            )}
 
-        {!isLoadingChamber && !toggles && (
-          <form className="flex max-w-md flex-col gap-4" onSubmit={onCreateNewChamber}>
-            <div>
-              <div className="mb-2 block">
-                <Label htmlFor="chamber" value="Chamber" />
-              </div>
-              <TextInput
-                id="chamber"
-                type="input"
-                required
-                value={chamberName}
-                onChange={(event) => {
-                  setChamberName(event.target.value);
-                }}
-              />
-            </div>
-            <Button type="submit">Create New Chamber</Button>
-          </form>
-        )}
-
-        {!!toggles && (
-          <ul className="grid gap-3 list-none">
-            {Object.keys(toggles).map((toggleName) => {
-              const toggle = toggles[toggleName];
-              if (!toggle) {
-                return null;
-              }
-              return (
-                <li key={toggleName}>
-                  <h2>{toggleName}</h2>
-                  <h3>
-                    {toggle.type} : {String(toggle.value)}
-                  </h3>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+            {!!rules && (
+              <ul className="grid gap-3 list-none">
+                {Object.keys(rules).map((ruleName) => {
+                  const rule = rules[ruleName];
+                  if (!rule) {
+                    return null;
+                  }
+                  return (
+                    <li key={ruleName}>
+                      <h2>{ruleName}</h2>
+                      <h3>
+                        {rule.type} : {String(rule.value)}
+                      </h3>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
 };
 
-const testData = `{  "toggles": {
+const testData = `{  "rules": {
   "feature switch one": {
     "type": "number",
     "value": 10.6,

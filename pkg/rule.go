@@ -7,24 +7,24 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// Toggle is a feature switch/toggle structure for holding
+// Rule is a feature definition structure for holding
 // its name, value, type and any overrides to be parsed by the applicable realm sdk
-type Toggle struct {
+type Rule struct {
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
 }
 
-type toggleAlias Toggle
+type ruleAlias Rule
 
-func (t *Toggle) UnmarshalJSON(b []byte) error {
+func (t *Rule) UnmarshalJSON(b []byte) error {
 	var raw json.RawMessage
-	alias := toggleAlias{
+	alias := ruleAlias{
 		Value: &raw,
 	}
 	if err := json.Unmarshal(b, &alias); err != nil {
 		return err
 	}
-	*t = Toggle(alias)
+	*t = Rule(alias)
 
 	if t.Value == nil || len(raw) == 0 {
 		return fmt.Errorf("value cannot be empty/nil with type specified as: %q", t.Type)
@@ -37,7 +37,7 @@ func (t *Toggle) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-func (t *Toggle) assertType(data json.RawMessage) error {
+func (t *Rule) assertType(data json.RawMessage) error {
 	var err error
 	switch t.Type {
 	case "string":
@@ -69,27 +69,27 @@ func (t *Toggle) assertType(data json.RawMessage) error {
 	return &UnsupportedTypeError{t.Type}
 }
 
-type OverrideableToggle struct {
-	*Toggle
+type OverrideableRule struct {
+	*Rule
 	Overrides []*Override `json:"overrides,omitempty"`
 }
 
 type UnsupportedTypeError struct {
-	ToggleType string
+	RuleType string
 }
 
 func (ut *UnsupportedTypeError) Error() string {
-	return fmt.Sprintf("type %q is currently not supported", ut.ToggleType)
+	return fmt.Sprintf("type %q is currently not supported", ut.RuleType)
 }
 
-// UnmarshalJSON Custom UnmarshalJSON method for validating toggle Value to the ToggleType
-func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
-	var toggle Toggle
-	err := json.Unmarshal(b, &toggle)
+// UnmarshalJSON Custom UnmarshalJSON method for validating rule Value to the RuleType
+func (t *OverrideableRule) UnmarshalJSON(b []byte) error {
+	var rule Rule
+	err := json.Unmarshal(b, &rule)
 	if err != nil {
 		return err
 	}
-	t.Toggle = &toggle
+	t.Rule = &rule
 
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
@@ -118,7 +118,7 @@ func (t *OverrideableToggle) UnmarshalJSON(b []byte) error {
 
 // GetValueAt returns the value at the given version.
 // Will return default value if version is empty string or no override is present for the specified version
-func (t *OverrideableToggle) GetValueAt(version string) interface{} {
+func (t *OverrideableRule) GetValueAt(version string) interface{} {
 	v := t.Value
 	if version != "" {
 		for _, override := range t.Overrides {
@@ -132,9 +132,9 @@ func (t *OverrideableToggle) GetValueAt(version string) interface{} {
 	return v
 }
 
-// StringValue retrieves a string value of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (t *OverrideableToggle) StringValue(version string, defaultValue string) (string, bool) {
+// StringValue retrieves a string value of the rule
+// and returns the default value if it does not exist and a bool on whether or not the rule exists
+func (t *OverrideableRule) StringValue(version string, defaultValue string) (string, bool) {
 	v, ok := t.GetValueAt(version).(string)
 	if !ok {
 		return defaultValue, ok
@@ -142,9 +142,9 @@ func (t *OverrideableToggle) StringValue(version string, defaultValue string) (s
 	return v, ok
 }
 
-// BoolValue retrieves a bool value of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (t *OverrideableToggle) BoolValue(version string, defaultValue bool) (bool, bool) {
+// BoolValue retrieves a bool value of the rule
+// and returns the default value if it does not exist and a bool on whether or not the rule exists
+func (t *OverrideableRule) BoolValue(version string, defaultValue bool) (bool, bool) {
 	v, ok := t.GetValueAt(version).(bool)
 	if !ok {
 		return defaultValue, ok
@@ -152,9 +152,9 @@ func (t *OverrideableToggle) BoolValue(version string, defaultValue bool) (bool,
 	return v, ok
 }
 
-// Float64Value retrieves a float64 value of the toggle
-// and returns the default value if it does not exist and a bool on whether or not the toggle exists
-func (t *OverrideableToggle) Float64Value(version string, defaultValue float64) (float64, bool) {
+// Float64Value retrieves a float64 value of the rule
+// and returns the default value if it does not exist and a bool on whether or not the rule exists
+func (t *OverrideableRule) Float64Value(version string, defaultValue float64) (float64, bool) {
 	v, ok := t.GetValueAt(version).(float64)
 	if !ok {
 		return defaultValue, ok
@@ -162,11 +162,11 @@ func (t *OverrideableToggle) Float64Value(version string, defaultValue float64) 
 	return v, ok
 }
 
-// CustomValue unmarshals v into the value of the toggle
-func (t *OverrideableToggle) CustomValue(version string, v any) error {
+// CustomValue unmarshals v into the value of the rule
+func (t *OverrideableRule) CustomValue(version string, v any) error {
 	raw, ok := t.GetValueAt(version).(*json.RawMessage)
 	if !ok {
-		return fmt.Errorf("toggle with type %q could not be converted for unmarshalling", t.Type)
+		return fmt.Errorf("rule with type %q could not be converted for unmarshalling", t.Type)
 	}
 	return json.Unmarshal(*raw, v)
 }
