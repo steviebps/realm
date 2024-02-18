@@ -4,19 +4,9 @@ import (
 	"encoding/json"
 )
 
-// Chamber is a struct that holds metadata and toggles
+// Chamber is a struct that holds metadata and rules
 type Chamber struct {
-	Toggles map[string]*OverrideableToggle `json:"toggles"`
-}
-
-// InheritWith will take a map of toggles to inherit from
-// so that any toggles that do not exist in this chamber will be written to the map
-func (c *Chamber) InheritWith(inherited map[string]*OverrideableToggle) {
-	for key := range inherited {
-		if _, ok := c.Toggles[key]; !ok {
-			c.Toggles[key] = inherited[key]
-		}
-	}
+	Rules map[string]*OverrideableRule `json:"rules"`
 }
 
 type chamberAlias Chamber
@@ -28,52 +18,37 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 	}
 
 	*c = Chamber(alias)
-	if c.Toggles == nil {
-		c.Toggles = make(map[string]*OverrideableToggle)
+	if c.Rules == nil {
+		c.Rules = make(map[string]*OverrideableRule)
 	}
 
 	return nil
 }
 
-// TraverseAndBuild will traverse all Chambers while inheriting their parent Toggles and executes a callback on each Chamber node.
-// Traversing will stop if callback returns true.
-// func (c *Chamber) TraverseAndBuild(callback func(Chamber) bool, children []*Chamber) {
-
-// 	// if callback returns true, stop traversing
-// 	// consumer was only looking to build up to this point
-// 	if callback(*c) {
-// 		return
-// 	}
-
-// 	for _, v := range children {
-// 		v.InheritWith(c.Toggles)
-// 	}
-// }
-
 // ChamberEntry is a read-only version of Chamber
 // it is specifically used for realm clients
 type ChamberEntry struct {
-	toggles map[string]*OverrideableToggle
+	rules   map[string]*OverrideableRule
 	version string
 }
 
 // NewChamberEntry creates a new ChamberEntry with the specified version
 func NewChamberEntry(c *Chamber, version string) *ChamberEntry {
-	m := make(map[string]*OverrideableToggle)
-	for k, v := range c.Toggles {
+	m := make(map[string]*OverrideableRule)
+	for k, v := range c.Rules {
 		m[k] = v
 	}
 
 	return &ChamberEntry{
-		toggles: m,
+		rules:   m,
 		version: version,
 	}
 }
 
-// Get returns the toggle with the specified toggleName.
-// Will return nil if the toggle does not exist
-func (c *ChamberEntry) Get(toggleName string) *OverrideableToggle {
-	t, ok := c.toggles[toggleName]
+// Get returns the rule with the specified ruleKey.
+// Will return nil if the rule does not exist
+func (c *ChamberEntry) Get(ruleKey string) *OverrideableRule {
+	t, ok := c.rules[ruleKey]
 	if !ok {
 		return nil
 	}
@@ -81,58 +56,58 @@ func (c *ChamberEntry) Get(toggleName string) *OverrideableToggle {
 	return t
 }
 
-// StringValue retrieves a string by the key of the toggle
+// StringValue retrieves a string by the key of the rule
 // and returns the default value if it does not exist and an error if it is not found or could not be converted
-func (c *ChamberEntry) StringValue(toggleKey string, defaultValue string) (string, error) {
-	t := c.Get(toggleKey)
+func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string, error) {
+	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrToggleNotFound{toggleKey}
+		return defaultValue, &ErrRuleNotFound{ruleKey}
 	}
 	v, ok := t.StringValue(c.version, defaultValue)
 	if !ok {
-		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+		return defaultValue, &ErrCouldNotConvertRule{ruleKey, t.Type}
 	}
 	return v, nil
 }
 
-// BoolValue retrieves a bool by the key of the toggle
+// BoolValue retrieves a bool by the key of the rule
 // and returns the default value if it does not exist and an error if it is not found or could not be converted
-func (c *ChamberEntry) BoolValue(toggleKey string, defaultValue bool) (bool, error) {
-	t := c.Get(toggleKey)
+func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error) {
+	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrToggleNotFound{toggleKey}
+		return defaultValue, &ErrRuleNotFound{ruleKey}
 	}
 	v, ok := t.BoolValue(c.version, defaultValue)
 	if !ok {
-		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+		return defaultValue, &ErrCouldNotConvertRule{ruleKey, t.Type}
 	}
 	return v, nil
 }
 
-// Float64Value retrieves a float64 by the key of the toggle
+// Float64Value retrieves a float64 by the key of the rule
 // and returns the default value if it does not exist and an error if it is not found or could not be converted
-func (c *ChamberEntry) Float64Value(toggleKey string, defaultValue float64) (float64, error) {
-	t := c.Get(toggleKey)
+func (c *ChamberEntry) Float64Value(ruleKey string, defaultValue float64) (float64, error) {
+	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrToggleNotFound{toggleKey}
+		return defaultValue, &ErrRuleNotFound{ruleKey}
 	}
 	v, ok := t.Float64Value(c.version, defaultValue)
 	if !ok {
-		return defaultValue, &ErrCouldNotConvertToggle{toggleKey, t.Type}
+		return defaultValue, &ErrCouldNotConvertRule{ruleKey, t.Type}
 	}
 	return v, nil
 }
 
-// CustomValue retrieves a json.RawMessage by the key of the toggle
+// CustomValue retrieves a json.RawMessage by the key of the rule
 // and returns an error if it is not found or could not be converted
-func (c *ChamberEntry) CustomValue(toggleKey string, v any) error {
-	t := c.Get(toggleKey)
+func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
+	t := c.Get(ruleKey)
 	if t == nil {
-		return &ErrToggleNotFound{toggleKey}
+		return &ErrRuleNotFound{ruleKey}
 	}
 	err := t.CustomValue(c.version, v)
 	if err != nil {
-		return &ErrCouldNotConvertToggle{toggleKey, t.Type}
+		return &ErrCouldNotConvertRule{ruleKey, t.Type}
 	}
 	return nil
 }

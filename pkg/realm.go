@@ -47,7 +47,7 @@ type contextKey struct {
 
 var (
 	// RequestContextKey is the context key to use with a WithValue function to associate a root chamber value with a context
-	// such that toggle retrievals will be consistent throughout the client's request
+	// such that rule retrievals will be consistent throughout the client's request
 	RequestContextKey = &contextKey{"realm"}
 )
 
@@ -188,46 +188,46 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 	return ctx
 }
 
-// Bool retrieves a bool by the key of the toggle.
-// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
-func (rlm *Realm) Bool(ctx context.Context, toggleKey string, defaultValue bool) (bool, error) {
+// Bool retrieves a bool by the key of the rule.
+// Returns the default value if it does not exist and a bool on whether or not the rule exists with that type
+func (rlm *Realm) Bool(ctx context.Context, ruleKey string, defaultValue bool) (bool, error) {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	return c.BoolValue(toggleKey, defaultValue)
+	return c.BoolValue(ruleKey, defaultValue)
 }
 
-// String retrieves a string by the key of the toggle.
-// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
-func (rlm *Realm) String(ctx context.Context, toggleKey string, defaultValue string) (string, error) {
+// String retrieves a string by the key of the rule.
+// Returns the default value if it does not exist and a bool on whether or not the rule exists with that type
+func (rlm *Realm) String(ctx context.Context, ruleKey string, defaultValue string) (string, error) {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	return c.StringValue(toggleKey, defaultValue)
+	return c.StringValue(ruleKey, defaultValue)
 }
 
-// Float64 retrieves a float64 by the key of the toggle.
-// Returns the default value if it does not exist and a bool on whether or not the toggle exists with that type
-func (rlm *Realm) Float64(ctx context.Context, toggleKey string, defaultValue float64) (float64, error) {
+// Float64 retrieves a float64 by the key of the rule.
+// Returns the default value if it does not exist and a bool on whether or not the rule exists with that type
+func (rlm *Realm) Float64(ctx context.Context, ruleKey string, defaultValue float64) (float64, error) {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	return c.Float64Value(toggleKey, defaultValue)
+	return c.Float64Value(ruleKey, defaultValue)
 }
 
-// CustomValue retrieves an arbitrary value by the key of the toggle
+// CustomValue retrieves an arbitrary value by the key of the rule
 // and unmarshals the value into the custom value v
-func (rlm *Realm) CustomValue(ctx context.Context, toggleKey string, v any) error {
+func (rlm *Realm) CustomValue(ctx context.Context, ruleKey string, v any) error {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {
 		return ErrChamberEmpty
 	}
-	err := c.CustomValue(toggleKey, v)
+	err := c.CustomValue(ruleKey, v)
 	if err != nil {
-		return fmt.Errorf("could not convert custom toggle %q: %w", toggleKey, err)
+		return fmt.Errorf("could not convert custom rule %q: %w", ruleKey, err)
 	}
 	return nil
 }

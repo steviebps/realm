@@ -54,7 +54,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		cur := "/"
 		pathChunks := strings.Split(strings.TrimPrefix(dir, "/"), "/")
 
-		c := &realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
+		c := &realm.Chamber{Rules: map[string]*realm.OverrideableRule{}}
 		for _, v := range pathChunks {
 			cur += utils.EnsureTrailingSlash(v)
 			entry, err := s.source.Get(ctx, cur)
@@ -62,16 +62,16 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 				continue
 			}
 
-			curChamber := &realm.Chamber{Toggles: map[string]*realm.OverrideableToggle{}}
+			curChamber := &realm.Chamber{Rules: map[string]*realm.OverrideableRule{}}
 			if err := json.Unmarshal([]byte(entry.Value), curChamber); err != nil {
 				continue
 			}
-			curChamber.InheritWith(c.Toggles)
+			inheritWith(curChamber, c)
 			c = curChamber
 		}
 
 		// inherit all of the parents
-		leaf.InheritWith(c.Toggles)
+		inheritWith(leaf, c)
 	}
 
 	select {
@@ -150,4 +150,12 @@ func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string,
 	}
 
 	return names, nil
+}
+
+func inheritWith(base *realm.Chamber, inheritedFrom *realm.Chamber) {
+	for key := range inheritedFrom.Rules {
+		if _, ok := base.Rules[key]; !ok {
+			base.Rules[key] = inheritedFrom.Rules[key]
+		}
+	}
 }

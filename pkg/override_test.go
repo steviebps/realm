@@ -17,7 +17,7 @@ func TestEmptyMinAndMaxVersion(t *testing.T) {
 	o := &Override{
 		MinimumVersion: "",
 		MaximumVersion: "",
-		Toggle:         &Toggle{Type: "boolean", Value: false},
+		Rule:           &Rule{Type: "boolean", Value: false},
 	}
 
 	err := o.UnmarshalJSON(convertToBytes(o))
@@ -31,7 +31,7 @@ func TestMinGreaterThanMaxVersion(t *testing.T) {
 	o := &Override{
 		MinimumVersion: "v1.0.0",
 		MaximumVersion: "v0.0.1",
-		Toggle:         &Toggle{Type: "boolean", Value: false},
+		Rule:           &Rule{Type: "boolean", Value: false},
 	}
 
 	err := o.UnmarshalJSON(convertToBytes(o))
@@ -45,7 +45,7 @@ func TestValidMinAndMaxVersion(t *testing.T) {
 	o := &Override{
 		MinimumVersion: "v1.0.0",
 		MaximumVersion: "v2.0.0",
-		Toggle:         &Toggle{Type: "boolean", Value: false},
+		Rule:           &Rule{Type: "boolean", Value: false},
 	}
 
 	err := o.UnmarshalJSON(convertToBytes(o))

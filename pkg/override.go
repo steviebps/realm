@@ -8,21 +8,21 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-// Override is a Toggle value to be consumed by and restricted to a semantic version range
+// Override is a rule value to be consumed by and restricted to a semantic version range
 type Override struct {
-	*Toggle
+	*Rule
 	MinimumVersion string `json:"minimumVersion"`
 	MaximumVersion string `json:"maximumVersion"`
 }
 
 // UnmarshalJSON Custom UnmarshalJSON method for validating Override
 func (o *Override) UnmarshalJSON(b []byte) error {
-	var toggle Toggle
-	err := json.Unmarshal(b, &toggle)
+	var rule Rule
+	err := json.Unmarshal(b, &rule)
 	if err != nil {
 		return err
 	}
-	o.Toggle = &toggle
+	o.Rule = &rule
 
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
