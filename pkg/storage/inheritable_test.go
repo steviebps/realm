@@ -85,6 +85,6 @@ func TestListShouldForwardToSource(t *testing.T) {
 	entry, _ := s.List(context.TODO(), "test")
 	expected, _ := underlying.List(context.TODO(), "test")
 	if !slices.Equal(entry, expected) {
-		t.Errorf("did not correctly retrieve from source: %v, expected: %v", e, expected)
+		t.Errorf("did not correctly retrieve from source: %v, expected: %v", entry, expected)
 	}
 }
