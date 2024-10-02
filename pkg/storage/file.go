@@ -93,7 +93,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 		return err
 	}
 
-	return utils.WriteInterfaceWith(file, e.Value, true)
+	return utils.WriteInterfaceWith(file, e.Value, false)
 }
 
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {

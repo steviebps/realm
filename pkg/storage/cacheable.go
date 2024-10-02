@@ -6,6 +6,9 @@ import (
 	"fmt"
 
 	"github.com/hashicorp/go-hclog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // CacheableStorage is a wrapper storage used for providing a write-through cache.
@@ -14,6 +17,7 @@ import (
 type CacheableStorage struct {
 	cache  Storage
 	source Storage
+	tracer trace.Tracer
 }
 
 var (
@@ -29,6 +33,7 @@ func NewCacheableStorage(cache Storage, source Storage) (Storage, error) {
 	return &CacheableStorage{
 		cache:  cache,
 		source: source,
+		tracer: otel.Tracer("github.com/steviebps/realm"),
 	}, nil
 }
 
@@ -65,6 +70,8 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Get", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	entry, err := c.cache.Get(ctx, logicalPath)
@@ -72,6 +79,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
 		if errors.As(err, &nfError) {
+			span.SetAttributes(attribute.Bool("cache miss", true))
 			logger.Debug("cache", "miss", err.Error())
 		} else {
 			logger.Error("cache", "error", err.Error())
@@ -97,6 +105,8 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 
 func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Put", trace.WithAttributes(attribute.String("entry.key", e.Key)))
+	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	err := c.source.Put(ctx, e)
@@ -109,6 +119,8 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 
 func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Delete", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	err := c.source.Delete(ctx, logicalPath)
@@ -121,6 +133,8 @@ func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error
 
 func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage List", trace.WithAttributes(attribute.String("prefix", prefix)))
+	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 	return c.source.List(ctx, prefix)
 }

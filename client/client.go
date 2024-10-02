@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,7 +11,11 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
+	realmtrace "github.com/steviebps/realm/trace"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const DefaultClientTimeout = 15 * time.Second
@@ -25,9 +30,13 @@ type Client struct {
 	underlying *http.Client
 	logger     hclog.Logger
 	address    *url.URL
+	tracer     trace.Tracer
+	propagator propagation.TextMapPropagator
+	closeFn    func(ctx context.Context) error
 }
 
 func NewClient(c *ClientConfig) (*Client, error) {
+	ctx := context.Background()
 	if c.Address == "" {
 		return nil, errors.New("address must not be empty")
 	}
@@ -44,10 +53,20 @@ func NewClient(c *ClientConfig) (*Client, error) {
 		c.Timeout = DefaultClientTimeout
 	}
 
+	shutdownTracerProvider, err := realmtrace.SetupOtelInstrumentation(ctx, false)
+	if err != nil {
+		return nil, err
+	}
+
+	tracer := otel.Tracer("github.com/steviebps/realm")
+
 	return &Client{
 		underlying: &http.Client{Timeout: c.Timeout},
 		address:    u,
 		logger:     logger,
+		tracer:     tracer,
+		propagator: otel.GetTextMapPropagator(),
+		closeFn:    shutdownTracerProvider,
 	}, nil
 }
 
@@ -58,6 +77,10 @@ func (c *Client) NewRequest(method string, path string, body io.Reader) (*http.R
 
 func (c *Client) Do(r *http.Request) (*http.Response, error) {
 	c.logger.Debug("executing request", "method", r.Method, "path", r.URL.Path, "host", r.URL.Host)
+	ctx, span := c.tracer.Start(r.Context(), "realm/client Do")
+	defer span.End()
+
+	c.propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))
 	return c.underlying.Do(r)
 }
 
@@ -68,4 +91,10 @@ func (c *Client) PerformRequest(method string, path string, body io.Reader) (*ht
 		return nil, err
 	}
 	return c.Do(req)
+}
+
+func (c *Client) Close() {
+	if err := c.closeFn(context.Background()); err != nil {
+		c.logger.Error("failed to shutdown TracerProvider: %s", err)
+	}
 }

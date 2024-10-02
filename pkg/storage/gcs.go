@@ -1,10 +1,10 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"fmt"
+	"io"
 	"path"
 	"sort"
 	"strings"
@@ -53,16 +53,16 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 	p, key := s.expandPath(logicalPath + gcsEntryKey)
 
 	r, err := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewReader(ctx)
-	if err == gcs.ErrObjectNotExist {
-		return nil, &NotFoundError{logicalPath}
-	}
 	if err != nil {
+		if err == gcs.ErrObjectNotExist {
+			return nil, &NotFoundError{logicalPath}
+		}
 		return nil, err
 	}
 	defer r.Close()
 
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(r); err != nil {
+	value, err := io.ReadAll(r)
+	if err != nil {
 		return nil, err
 	}
 
@@ -72,7 +72,7 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 	default:
 	}
 
-	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
+	return &StorageEntry{Key: logicalPath, Value: value}, nil
 }
 
 func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
@@ -94,6 +94,7 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	w := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewWriter(ctx)
 	md5Array := md5.Sum(e.Value)
 	w.MD5 = md5Array[:]
+	w.ContentType = "application/json"
 
 	if _, err := w.Write(e.Value); err != nil {
 		return fmt.Errorf("failed to put: %w", err)
