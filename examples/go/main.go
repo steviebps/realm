@@ -24,6 +24,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer client.Close()
+
 	rlm, err := realm.NewRealm(realm.RealmOptions{Client: client, ApplicationVersion: "v1.0.0", Path: "root", RefreshInterval: 1 * time.Minute})
 	if err != nil {
 		log.Fatal(err)

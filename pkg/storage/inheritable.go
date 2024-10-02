@@ -10,10 +10,14 @@ import (
 	"github.com/hashicorp/go-hclog"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type InheritableStorage struct {
 	source Storage
+	tracer trace.Tracer
 }
 
 var (
@@ -24,25 +28,28 @@ var (
 func NewInheritableStorage(source Storage) (Storage, error) {
 	return &InheritableStorage{
 		source: source,
+		tracer: otel.Tracer("github.com/steviebps/realm"),
 	}, nil
 }
 
 func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
 		return nil, err
 	}
 
-	// ensure the leaf of the path exists before retrieving its parents
+	// ensure the last entry of the path exists before retrieving its parents
 	leafEntry, err := s.source.Get(ctx, logicalPath)
 	if err != nil {
 		return nil, err
 	}
 
 	leaf := &realm.Chamber{}
-	if err := json.Unmarshal([]byte(leafEntry.Value), leaf); err != nil {
+	if err := json.Unmarshal(leafEntry.Value, leaf); err != nil {
 		return nil, err
 	}
 
@@ -63,7 +70,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 			}
 
 			curChamber := &realm.Chamber{Rules: map[string]*realm.OverrideableRule{}}
-			if err := json.Unmarshal([]byte(entry.Value), curChamber); err != nil {
+			if err := json.Unmarshal(entry.Value, curChamber); err != nil {
 				continue
 			}
 			inheritWith(curChamber, c)
@@ -90,6 +97,8 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 
 func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Put", trace.WithAttributes(attribute.String("entry.key", e.Key)))
+	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
@@ -111,6 +120,8 @@ func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 
 func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Delete", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
@@ -132,6 +143,8 @@ func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) err
 
 func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage List", trace.WithAttributes(attribute.String("logicalPath", prefix)))
+	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
