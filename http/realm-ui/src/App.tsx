@@ -22,18 +22,23 @@ const queryClient = new QueryClient({
 function encodePath(path: string) {
   return path
     ? path
-        .split('/')
-        .map((segment) => encodeURIComponent(segment))
-        .join('/')
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/')
     : path;
 }
 
 export const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <Router basename="/ui">
+      <Router
+        basename="/ui"
+        future={{
+          v7_relativeSplatPath: true,
+        }}
+      >
         <Routes>
-          <Route path="*" element={<Content />}></Route>
+          <Route path="*" element={<Content />} />
         </Routes>
       </Router>
     </QueryClientProvider>
@@ -102,9 +107,9 @@ const Content = () => {
 
   const { data: chamberData } = chamber || {};
   const { rules } = chamberData || {};
-
   const trimmed = trimSuffix(trimPrefix(location.pathname, '/'), '/');
   const up = trimmed !== '' ? trimmed.split('/') : [];
+
   return (
     <div className="flex flex-col items-center">
       <h1>Realm</h1>
