@@ -1,16 +1,24 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
 	realmhttp "github.com/steviebps/realm/http"
 	storage "github.com/steviebps/realm/pkg/storage"
+	realmtrace "github.com/steviebps/realm/trace"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var serverCmd = &cobra.Command{
@@ -24,6 +32,7 @@ var serverCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		ctx := context.Background()
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")
 
@@ -40,6 +49,21 @@ var serverCmd = &cobra.Command{
 			ColorHeaderAndFields: true,
 			Color:                hclog.AutoColor,
 		})
+
+		shutdownTracerProvider, err := realmtrace.SetupOtelInstrumentation(ctx, false)
+		if err != nil {
+			logger.Error(err.Error())
+			os.Exit(1)
+		}
+		defer func() {
+			if err := shutdownTracerProvider(ctx); err != nil {
+				logger.Error("failed to shutdown TracerProvider: %s", err)
+			}
+		}()
+
+		tracer := otel.Tracer("github.com/steviebps/realm")
+		ctx, span := tracer.Start(ctx, "server life")
+		defer span.End()
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
@@ -122,23 +146,36 @@ var serverCmd = &cobra.Command{
 			}
 		}
 
-		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger})
+		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger, RequestTimeout: realmhttp.DefaultHandlerTimeout})
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
 
-		if certFileEmpty {
+		server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: handler}
+
+		go func() {
 			logger.Info("Listening on", "port", portStr)
-			if err := http.ListenAndServe(fmt.Sprintf(":%d", port), handler); err != nil {
+			span.AddEvent("started server", trace.WithAttributes(attribute.String("port", portStr)))
+			if certFileEmpty {
+				if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+					logger.Error(err.Error())
+					os.Exit(1)
+				}
+				return
+			}
+
+			if err := server.ListenAndServeTLS(certFile, keyFile); !errors.Is(err, http.ErrServerClosed) {
 				logger.Error(err.Error())
 				os.Exit(1)
 			}
-			return
-		}
+		}()
 
-		logger.Info("Listening on", "port", portStr)
-		if err := http.ListenAndServeTLS(fmt.Sprintf(":%d", port), certFile, keyFile, handler); err != nil {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+
+		if err := server.Shutdown(ctx); err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
