@@ -120,13 +120,13 @@ const Content = () => {
               Home
             </Link>
           </Breadcrumb.Item>
-          {up.map((path, index) => (
-            <Breadcrumb.Item key={index}>
-              <Link to={up.slice(0, index).join('/') + '/' + path} relative="route">
-                {path}
-              </Link>
-            </Breadcrumb.Item>
-          ))}
+          {up.map((path, index) => {
+            return (
+              <Breadcrumb.Item key={index}>
+                <Link to={'/' + [...up.slice(0, index), path].join('/')}>{path}</Link>
+              </Breadcrumb.Item>
+            );
+          })}
         </Breadcrumb>
         <div className="grid grid-cols-12 gap-5">
           <div className="col-span-3">{directories.length > 0 && <SideNav directories={directories} />}</div>
