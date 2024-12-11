@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/steviebps/realm/client"
@@ -24,7 +28,8 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	rlm, err := realm.NewRealm(realm.RealmOptions{Client: client, ApplicationVersion: "v1.0.0", Path: "root", RefreshInterval: 1 * time.Minute})
+
+	rlm, err := realm.NewRealm(realm.WithClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("root"), realm.WithRefreshInterval(1*time.Minute))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -55,9 +60,21 @@ func main() {
 
 	rlmHandler := realmhttp.RealmHandler(rlm, mux)
 
-	log.Println("Listening on :", port)
-	err = http.ListenAndServe(fmt.Sprintf(":%d", int(port)), rlmHandler)
-	if err != nil {
-		log.Fatal(err)
+	server := &http.Server{Addr: fmt.Sprintf(":%d", int(port)), Handler: rlmHandler}
+
+	go func() {
+		log.Println("Listening on :", port)
+		if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	<-sigChan
+
+	rlm.Stop()
+	if err := server.Shutdown(bootCtx); err != nil {
+		log.Fatal(err.Error())
 	}
 }
