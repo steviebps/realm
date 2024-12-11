@@ -34,7 +34,7 @@ func NewInheritableStorage(source Storage) (Storage, error) {
 
 func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
-	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
@@ -97,7 +97,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 
 func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
-	ctx, span := s.tracer.Start(ctx, "InheritableStorage Put", trace.WithAttributes(attribute.String("entry.key", e.Key)))
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Put", trace.WithAttributes(attribute.String("realm.inheritable.entry.key", e.Key)))
 	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
@@ -120,7 +120,7 @@ func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 
 func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
-	ctx, span := s.tracer.Start(ctx, "InheritableStorage Delete", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Delete", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
@@ -143,7 +143,7 @@ func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) err
 
 func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
-	ctx, span := s.tracer.Start(ctx, "InheritableStorage List", trace.WithAttributes(attribute.String("logicalPath", prefix)))
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage List", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", prefix)))
 	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 

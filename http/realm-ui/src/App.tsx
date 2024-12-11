@@ -60,7 +60,6 @@ const Content = () => {
       return res.json();
     });
   });
-  const directories = (listResponse?.data || []).filter((curChamber) => curChamber !== '.');
 
   const { data: chamber, isLoading: isLoadingChamber } = useQuery<ChamberResponse>(
     location.pathname + '_chamber',
@@ -105,15 +104,16 @@ const Content = () => {
     mutate(chamberName);
   };
 
+  const directories = (listResponse?.data || []).filter((curChamber) => curChamber !== '.');
   const { data: chamberData } = chamber || {};
   const { rules } = chamberData || {};
   const trimmed = trimSuffix(trimPrefix(location.pathname, '/'), '/');
   const up = trimmed !== '' ? trimmed.split('/') : [];
 
   return (
-    <div className="flex flex-col items-center">
+    <div className="flex flex-col items-center my-5">
       <h1>Realm</h1>
-      <div className="max-w-screen-2xl min-w-max">
+      <div className="w-[1280px]">
         <Breadcrumb aria-label="directory crumbs" className="px-5 py-3">
           <Breadcrumb.Item icon={HiHome}>
             <Link to="/" relative="path">

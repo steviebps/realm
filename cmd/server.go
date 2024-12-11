@@ -62,7 +62,7 @@ var serverCmd = &cobra.Command{
 		}()
 
 		tracer := otel.Tracer("github.com/steviebps/realm")
-		ctx, span := tracer.Start(ctx, "server life")
+		ctx, span := tracer.Start(ctx, "realm server")
 		defer span.End()
 
 		configPath, err := flags.GetString("config")
@@ -156,7 +156,7 @@ var serverCmd = &cobra.Command{
 
 		go func() {
 			logger.Info("Listening on", "port", portStr)
-			span.AddEvent("started server", trace.WithAttributes(attribute.String("port", portStr)))
+			span.AddEvent("started server", trace.WithAttributes(attribute.String("realm.server.port", portStr)))
 			if certFileEmpty {
 				if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 					logger.Error(err.Error())

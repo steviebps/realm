@@ -14,6 +14,7 @@ import (
 	realmtrace "github.com/steviebps/realm/trace"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -72,12 +73,12 @@ func NewClient(c *ClientConfig) (*Client, error) {
 
 func (c *Client) NewRequest(method string, path string, body io.Reader) (*http.Request, error) {
 	c.logger.Debug("creating a new request", "method", method, "path", path)
-	return http.NewRequest(method, c.address.Scheme+"://"+c.address.Host+"/v1/"+strings.TrimPrefix(path, "/"), body)
+	return http.NewRequest(method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
 }
 
 func (c *Client) Do(r *http.Request) (*http.Response, error) {
 	c.logger.Debug("executing request", "method", r.Method, "path", r.URL.Path, "host", r.URL.Host)
-	ctx, span := c.tracer.Start(r.Context(), "realm/client Do")
+	ctx, span := c.tracer.Start(r.Context(), "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
 	defer span.End()
 
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))

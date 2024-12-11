@@ -64,7 +64,7 @@ var clientGet = &cobra.Command{
 		}
 		defer c.Close()
 
-		res, err := c.PerformRequest("GET", "chambers/"+strings.TrimPrefix(args[0], "/"), nil)
+		res, err := c.PerformRequest("GET", strings.TrimPrefix(args[0], "/"), nil)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)

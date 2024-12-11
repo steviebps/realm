@@ -1,5 +1,5 @@
-//go:build ui
-// +build ui
+//go:build !slim
+// +build !slim
 
 package http
 

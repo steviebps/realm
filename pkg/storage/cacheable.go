@@ -70,16 +70,16 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
-	ctx, span := c.tracer.Start(ctx, "CacheableStorage Get", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Get", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
+		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
 		if errors.As(err, &nfError) {
-			span.SetAttributes(attribute.Bool("cache miss", true))
 			logger.Debug("cache", "miss", err.Error())
 		} else {
 			logger.Error("cache", "error", err.Error())
@@ -90,8 +90,10 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		return entry, err
 	}
 
+	span.SetAttributes(attribute.Bool("realm.cacheable.cacheMiss", true))
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
+		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
 		logger.Error("source", "error", err.Error())
 		return nil, err
 	}
@@ -105,7 +107,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 
 func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
-	ctx, span := c.tracer.Start(ctx, "CacheableStorage Put", trace.WithAttributes(attribute.String("entry.key", e.Key)))
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Put", trace.WithAttributes(attribute.String("realm.cacheable.entry.key", e.Key)))
 	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
@@ -113,27 +115,30 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 	if err == nil {
 		c.cache.Put(ctx, e)
 	}
-
+	span.RecordError(err)
 	return err
 }
 
 func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
-	ctx, span := c.tracer.Start(ctx, "CacheableStorage Delete", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Delete", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
-	err := c.source.Delete(ctx, logicalPath)
-	if err == nil {
-		c.cache.Delete(ctx, logicalPath)
+	sourceErr := c.source.Delete(ctx, logicalPath)
+	if sourceErr != nil {
+		span.RecordError(sourceErr, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
 	}
-
-	return err
+	cacheErr := c.cache.Delete(ctx, logicalPath)
+	if cacheErr != nil {
+		span.RecordError(cacheErr, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
+	}
+	return errors.Join(sourceErr, cacheErr)
 }
 
 func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
-	ctx, span := c.tracer.Start(ctx, "CacheableStorage List", trace.WithAttributes(attribute.String("prefix", prefix)))
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage List", trace.WithAttributes(attribute.String("realm.cacheable.prefix", prefix)))
 	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 	return c.source.List(ctx, prefix)

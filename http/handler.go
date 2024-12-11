@@ -57,7 +57,7 @@ func handle(hc HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	if uiExists {
-		mux.Handle("/ui/", otelhttp.NewHandler(gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))), "/ui/"))
+		mux.Handle("/ui/", otelhttp.NewHandler(otelhttp.WithRouteTag("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS())))), "/ui/"))
 	} else {
 		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
 	}
@@ -131,7 +131,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 		span := trace.SpanFromContext(ctx)
 
 		req := buildAgentRequest(r)
-		span.SetAttributes(attribute.String("logicalPath", req.Path))
+		span.SetAttributes(attribute.String("realm.server.logicalPath", req.Path), attribute.String("realm.server.operation", string(req.Operation)))
 
 		switch req.Operation {
 		case GetOperation:

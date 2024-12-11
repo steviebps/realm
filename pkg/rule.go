@@ -116,9 +116,9 @@ func (t *OverrideableRule) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// GetValueAt returns the value at the given version.
+// ValueAtVersion returns the value at the given version.
 // Will return default value if version is empty string or no override is present for the specified version
-func (t *OverrideableRule) GetValueAt(version string) interface{} {
+func (t *OverrideableRule) ValueAtVersion(version string) interface{} {
 	v := t.Value
 	if version != "" {
 		for _, override := range t.Overrides {
@@ -135,7 +135,7 @@ func (t *OverrideableRule) GetValueAt(version string) interface{} {
 // StringValue retrieves a string value of the rule
 // and returns the default value if it does not exist and a bool on whether or not the rule exists
 func (t *OverrideableRule) StringValue(version string, defaultValue string) (string, bool) {
-	v, ok := t.GetValueAt(version).(string)
+	v, ok := t.ValueAtVersion(version).(string)
 	if !ok {
 		return defaultValue, ok
 	}
@@ -145,7 +145,7 @@ func (t *OverrideableRule) StringValue(version string, defaultValue string) (str
 // BoolValue retrieves a bool value of the rule
 // and returns the default value if it does not exist and a bool on whether or not the rule exists
 func (t *OverrideableRule) BoolValue(version string, defaultValue bool) (bool, bool) {
-	v, ok := t.GetValueAt(version).(bool)
+	v, ok := t.ValueAtVersion(version).(bool)
 	if !ok {
 		return defaultValue, ok
 	}
@@ -155,7 +155,7 @@ func (t *OverrideableRule) BoolValue(version string, defaultValue bool) (bool, b
 // Float64Value retrieves a float64 value of the rule
 // and returns the default value if it does not exist and a bool on whether or not the rule exists
 func (t *OverrideableRule) Float64Value(version string, defaultValue float64) (float64, bool) {
-	v, ok := t.GetValueAt(version).(float64)
+	v, ok := t.ValueAtVersion(version).(float64)
 	if !ok {
 		return defaultValue, ok
 	}
@@ -164,7 +164,7 @@ func (t *OverrideableRule) Float64Value(version string, defaultValue float64) (f
 
 // CustomValue unmarshals v into the value of the rule
 func (t *OverrideableRule) CustomValue(version string, v any) error {
-	raw, ok := t.GetValueAt(version).(*json.RawMessage)
+	raw, ok := t.ValueAtVersion(version).(*json.RawMessage)
 	if !ok {
 		return fmt.Errorf("rule with type %q could not be converted for unmarshalling", t.Type)
 	}

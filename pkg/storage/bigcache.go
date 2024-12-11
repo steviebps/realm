@@ -85,7 +85,7 @@ func NewBigCacheStorage(config map[string]string) (Storage, error) {
 
 func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
-	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Get", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Get", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
 	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
@@ -113,7 +113,7 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 
 func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
-	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Put", trace.WithAttributes(attribute.String("entry.key", e.Key)))
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Put", trace.WithAttributes(attribute.String("realm.bigcache.entry.key", e.Key)))
 	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
@@ -133,7 +133,7 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
-	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Delete", trace.WithAttributes(attribute.String("logicalPath", logicalPath)))
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Delete", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
 	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
@@ -153,7 +153,7 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
-	ctx, span := f.tracer.Start(ctx, "BigCacheStorage List", trace.WithAttributes(attribute.String("prefix", prefix)))
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage List", trace.WithAttributes(attribute.String("realm.bigcache.prefix", prefix)))
 	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 

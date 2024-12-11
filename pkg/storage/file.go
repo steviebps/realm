@@ -11,10 +11,14 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type FileStorage struct {
-	path string
+	path   string
+	tracer trace.Tracer
 }
 
 var (
@@ -27,12 +31,15 @@ func NewFileStorage(conf map[string]string) (Storage, error) {
 	}
 
 	return &FileStorage{
-		path: conf["path"],
+		path:   conf["path"],
+		tracer: otel.Tracer("github.com/steviebps/realm"),
 	}, nil
 }
 
 func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("file")
+	ctx, span := f.tracer.Start(ctx, "FileStorage Get", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
@@ -67,6 +74,8 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 
 func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("file")
+	ctx, span := f.tracer.Start(ctx, "FileStorage Put", trace.WithAttributes(attribute.String("realm.file.entry.key", e.Key)))
+	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
@@ -98,6 +107,8 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("file")
+	ctx, span := f.tracer.Start(ctx, "FileStorage Delete", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
@@ -123,6 +134,8 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("file")
+	ctx, span := f.tracer.Start(ctx, "FileStorage List", trace.WithAttributes(attribute.String("realm.file.prefix", prefix)))
+	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
