@@ -1,7 +1,6 @@
 package client
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-hclog"
-	realmtrace "github.com/steviebps/realm/trace"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -33,11 +31,9 @@ type Client struct {
 	address    *url.URL
 	tracer     trace.Tracer
 	propagator propagation.TextMapPropagator
-	closeFn    func(ctx context.Context) error
 }
 
 func NewClient(c *ClientConfig) (*Client, error) {
-	ctx := context.Background()
 	if c.Address == "" {
 		return nil, errors.New("address must not be empty")
 	}
@@ -54,11 +50,6 @@ func NewClient(c *ClientConfig) (*Client, error) {
 		c.Timeout = DefaultClientTimeout
 	}
 
-	shutdownTracerProvider, err := realmtrace.SetupOtelInstrumentation(ctx, false)
-	if err != nil {
-		return nil, err
-	}
-
 	tracer := otel.Tracer("github.com/steviebps/realm")
 
 	return &Client{
@@ -67,7 +58,6 @@ func NewClient(c *ClientConfig) (*Client, error) {
 		logger:     logger,
 		tracer:     tracer,
 		propagator: otel.GetTextMapPropagator(),
-		closeFn:    shutdownTracerProvider,
 	}, nil
 }
 
@@ -92,10 +82,4 @@ func (c *Client) PerformRequest(method string, path string, body io.Reader) (*ht
 		return nil, err
 	}
 	return c.Do(req)
-}
-
-func (c *Client) Close() {
-	if err := c.closeFn(context.Background()); err != nil {
-		c.logger.Error("failed to shutdown TracerProvider: %s", err)
-	}
 }

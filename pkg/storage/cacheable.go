@@ -114,8 +114,10 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 	err := c.source.Put(ctx, e)
 	if err == nil {
 		c.cache.Put(ctx, e)
+	} else {
+		span.RecordError(err)
 	}
-	span.RecordError(err)
+
 	return err
 }
 

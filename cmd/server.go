@@ -9,16 +9,11 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
-	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
 	realmhttp "github.com/steviebps/realm/http"
 	storage "github.com/steviebps/realm/pkg/storage"
-	realmtrace "github.com/steviebps/realm/trace"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 )
 
 var serverCmd = &cobra.Command{
@@ -33,37 +28,9 @@ var serverCmd = &cobra.Command{
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		ctx := context.Background()
+		logger := hclog.Default().Named("realm.server")
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")
-
-		level := hclog.Info
-		if debug {
-			level = hclog.Debug
-		}
-
-		logger := hclog.New(&hclog.LoggerOptions{
-			Name:                 "realm.server",
-			Level:                level,
-			Output:               cmd.ErrOrStderr(),
-			TimeFn:               time.Now,
-			ColorHeaderAndFields: true,
-			Color:                hclog.AutoColor,
-		})
-
-		shutdownTracerProvider, err := realmtrace.SetupOtelInstrumentation(ctx, false)
-		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
-		}
-		defer func() {
-			if err := shutdownTracerProvider(ctx); err != nil {
-				logger.Error("failed to shutdown TracerProvider: %s", err)
-			}
-		}()
-
-		tracer := otel.Tracer("github.com/steviebps/realm")
-		ctx, span := tracer.Start(ctx, "realm server")
-		defer span.End()
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
@@ -156,7 +123,6 @@ var serverCmd = &cobra.Command{
 
 		go func() {
 			logger.Info("Listening on", "port", portStr)
-			span.AddEvent("started server", trace.WithAttributes(attribute.String("realm.server.port", portStr)))
 			if certFileEmpty {
 				if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 					logger.Error(err.Error())

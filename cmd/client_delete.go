@@ -62,7 +62,6 @@ var clientDelete = &cobra.Command{
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
-		defer c.Close()
 
 		res, err := c.PerformRequest("DELETE", strings.TrimPrefix(args[0], "/"), nil)
 		if err != nil {

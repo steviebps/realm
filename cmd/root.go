@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
+	realmtrace "github.com/steviebps/realm/trace"
 )
 
 // Version the version of realm
@@ -17,10 +20,13 @@ var rootCmd = &cobra.Command{
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
 	PersistentPreRun:  persistentPreRun,
+	PersistentPostRun: persistentPostRun,
 	DisableAutoGenTag: true,
 	Version:           Version,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
 }
+
+var shutdownFn func(ctx context.Context) error
 
 func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
@@ -39,6 +45,8 @@ func Execute() {
 
 // sets up the config for all sub-commands
 func persistentPreRun(cmd *cobra.Command, args []string) {
+	var err error
+	ctx := cmd.Context()
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
 
@@ -51,10 +59,22 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 		Name:                 "realm",
 		Level:                level,
 		Output:               cmd.OutOrStderr(),
+		TimeFn:               time.Now,
 		ColorHeaderAndFields: true,
 		Color:                hclog.AutoColor,
-		DisableTime:          true,
 	})
 
 	hclog.SetDefault(logger)
+
+	shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, false)
+	if err != nil {
+		logger.Error(err.Error())
+		os.Exit(1)
+	}
+}
+
+func persistentPostRun(cmd *cobra.Command, args []string) {
+	if err := shutdownFn(context.Background()); err != nil {
+		fmt.Printf("failed to shutdown TracerProvider: %s\n", err)
+	}
 }

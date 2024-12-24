@@ -167,7 +167,6 @@ func (rlm *Realm) Start() error {
 
 // Stop stops realm and flushes any pending tasks
 func (rlm *Realm) Stop() {
-	rlm.client.Close()
 	close(rlm.stopCh)
 }
 

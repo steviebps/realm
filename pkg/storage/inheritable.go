@@ -39,17 +39,20 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
 	// ensure the last entry of the path exists before retrieving its parents
 	leafEntry, err := s.source.Get(ctx, logicalPath)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
 	leaf := &realm.Chamber{}
 	if err := json.Unmarshal(leafEntry.Value, leaf); err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
@@ -66,11 +69,13 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 			cur += utils.EnsureTrailingSlash(v)
 			entry, err := s.source.Get(ctx, cur)
 			if err != nil {
+				span.RecordError(err)
 				continue
 			}
 
 			curChamber := &realm.Chamber{Rules: map[string]*realm.OverrideableRule{}}
 			if err := json.Unmarshal(entry.Value, curChamber); err != nil {
+				span.RecordError(err)
 				continue
 			}
 			inheritWith(curChamber, c)
@@ -83,12 +88,14 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
 
 	buf := new(bytes.Buffer)
 	if err := utils.WriteInterfaceWith(buf, leaf, false); err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
@@ -102,15 +109,18 @@ func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
+		span.RecordError(err)
 		return err
 	}
 
 	if err := s.source.Put(ctx, e); err != nil {
+		span.RecordError(err)
 		return err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -125,15 +135,18 @@ func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) err
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
+		span.RecordError(err)
 		return err
 	}
 
 	if err := s.source.Delete(ctx, logicalPath); err != nil {
+		span.RecordError(err)
 		return err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -148,16 +161,19 @@ func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string,
 	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
+		span.RecordError((err))
 		return nil, err
 	}
 
 	names, err := s.source.List(ctx, prefix)
 	if err != nil {
+		span.RecordError((err))
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
