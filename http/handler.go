@@ -62,7 +62,7 @@ func handle(hc HandlerConfig) http.Handler {
 		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
 	}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, logger), "/v1/chambers/"))
+	mux.Handle("/v1/chambers/", otelhttp.NewHandler(otelhttp.WithRouteTag("/v1/chambers/", handleChambers(hc.Storage, logger)), "/v1/chambers/"))
 
 	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler)
