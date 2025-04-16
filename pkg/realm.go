@@ -27,13 +27,13 @@ type Realm struct {
 	interval           time.Duration
 }
 
-type RealmOptions struct {
-	Logger             hclog.Logger
-	Client             *client.Client
-	Path               string
-	ApplicationVersion string
-	// RefreshInterval is how often realm will refetch the chamber from the realm server
-	RefreshInterval time.Duration
+type RealmConfig struct {
+	logger             hclog.Logger
+	client             *client.Client
+	path               string
+	applicationVersion string
+	// refreshInterval is how often realm will refetch the chamber from the realm server
+	refreshInterval time.Duration
 }
 
 const (
@@ -51,28 +51,84 @@ var (
 	RequestContextKey = &contextKey{"realm"}
 )
 
+type RealmOption interface {
+	apply(RealmConfig) RealmConfig
+}
+
+type realmOptionFunc func(RealmConfig) RealmConfig
+
+func (fn realmOptionFunc) apply(cfg RealmConfig) RealmConfig {
+	return fn(cfg)
+}
+
+func WithClient(c *client.Client) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.client = c
+		return rc
+	})
+}
+
+func WithPath(path string) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.path = path
+		return rc
+	})
+}
+
+func WithLogger(logger hclog.Logger) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.logger = logger
+		return rc
+	})
+}
+
+func WithRefreshInterval(d time.Duration) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.refreshInterval = d
+		return rc
+	})
+}
+
+func WithVersion(version string) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.applicationVersion = version
+		return rc
+	})
+}
+
 // NewRealm returns a new Realm struct that carries out all of the core features
-func NewRealm(options RealmOptions) (*Realm, error) {
-	if options.Client == nil {
+func NewRealm(options ...RealmOption) (*Realm, error) {
+	cfg := RealmConfig{}
+
+	for _, opt := range options {
+		cfg = opt.apply(cfg)
+	}
+
+	// TODO: setup sane default
+	if cfg.client == nil {
 		return nil, errors.New("client option must not be nil")
 	}
-	if options.Path == "" {
+
+	// TODO: setup sane default
+	if cfg.path == "" {
 		return nil, errors.New("path must not be empty")
 	}
-	if options.Logger == nil {
-		options.Logger = hclog.Default().Named("realm")
+
+	if cfg.logger == nil {
+		cfg.logger = hclog.Default().Named("realm")
 	}
-	if options.RefreshInterval <= 0 {
-		options.RefreshInterval = DefaultRefreshInterval
+
+	if cfg.refreshInterval <= 0 {
+		cfg.refreshInterval = DefaultRefreshInterval
 	}
 
 	return &Realm{
-		logger:             options.Logger,
-		client:             options.Client,
-		path:               options.Path,
-		applicationVersion: options.ApplicationVersion,
+		logger:             cfg.logger,
+		client:             cfg.client,
+		path:               cfg.path,
+		applicationVersion: cfg.applicationVersion,
 		stopCh:             make(chan struct{}),
-		interval:           options.RefreshInterval,
+		interval:           cfg.refreshInterval,
 	}, nil
 }
 
@@ -125,7 +181,7 @@ func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	client := rlm.client
 	logger := rlm.logger
 
-	res, err := client.PerformRequest("GET", "chambers/"+strings.TrimPrefix(path, "/"), nil)
+	res, err := client.PerformRequest("GET", strings.TrimPrefix(path, "/"), nil)
 	if err != nil {
 		logger.Error(err.Error())
 		return nil, err
@@ -189,7 +245,7 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 }
 
 // Bool retrieves a bool by the key of the rule.
-// Returns the default value if it does not exist and a bool on whether or not the rule exists with that type
+// Returns the default value if it does not exist and an error if the chamber is empty or could not be converted
 func (rlm *Realm) Bool(ctx context.Context, ruleKey string, defaultValue bool) (bool, error) {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {
@@ -199,7 +255,7 @@ func (rlm *Realm) Bool(ctx context.Context, ruleKey string, defaultValue bool) (
 }
 
 // String retrieves a string by the key of the rule.
-// Returns the default value if it does not exist and a bool on whether or not the rule exists with that type
+// Returns the default value if it does not exist and an error if the chamber is empty or could not be converted
 func (rlm *Realm) String(ctx context.Context, ruleKey string, defaultValue string) (string, error) {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {
@@ -209,7 +265,7 @@ func (rlm *Realm) String(ctx context.Context, ruleKey string, defaultValue strin
 }
 
 // Float64 retrieves a float64 by the key of the rule.
-// Returns the default value if it does not exist and a bool on whether or not the rule exists with that type
+// Returns the default value if it does not exist and an error if the chamber is empty or could not be converted
 func (rlm *Realm) Float64(ctx context.Context, ruleKey string, defaultValue float64) (float64, error) {
 	c := rlm.chamberFromContext(ctx)
 	if c == nil {

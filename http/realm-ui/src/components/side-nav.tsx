@@ -8,7 +8,7 @@ export const SideNav = ({ directories }: { directories: string[] }) => {
       <Sidebar.Items>
         <Sidebar.ItemGroup>
           {directories.map((curChamber) => {
-            return <Item directory={curChamber} />;
+            return <Item key={curChamber} directory={curChamber} />;
           })}
         </Sidebar.ItemGroup>
       </Sidebar.Items>
@@ -17,9 +17,9 @@ export const SideNav = ({ directories }: { directories: string[] }) => {
 };
 
 const Item = ({ directory }: { directory: string }) => {
-  const to = useHref(directory, { relative: 'path' });
+  const href = useHref(directory, { relative: 'path' });
   return (
-    <Sidebar.Item key={directory} href={to} icon={HiFolder}>
+    <Sidebar.Item key={directory} href={href} icon={HiFolder}>
       {directory}
     </Sidebar.Item>
   );

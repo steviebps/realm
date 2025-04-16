@@ -1,22 +1,26 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"crypto/md5"
 	"fmt"
+	"io"
 	"path"
 	"sort"
 	"strings"
 
 	gcs "cloud.google.com/go/storage"
 	"github.com/hashicorp/go-hclog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/api/iterator"
 )
 
 type GCSStorage struct {
 	client *gcs.Client
 	bucket string
+	tracer trace.Tracer
 }
 
 var (
@@ -39,52 +43,63 @@ func NewGCSStorage(conf map[string]string) (Storage, error) {
 	return &GCSStorage{
 		client: client,
 		bucket: conf["bucket"],
+		tracer: otel.Tracer("github.com/steviebps/realm"),
 	}, nil
 }
 
 func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("gcs")
+	ctx, span := s.tracer.Start(ctx, "GCSStorage Get", trace.WithAttributes(attribute.String("realm.gcs.logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
+		span.RecordError((err))
 		return nil, err
 	}
 
 	p, key := s.expandPath(logicalPath + gcsEntryKey)
 
 	r, err := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewReader(ctx)
-	if err == gcs.ErrObjectNotExist {
-		return nil, &NotFoundError{logicalPath}
-	}
 	if err != nil {
+		span.RecordError((err))
+		if err == gcs.ErrObjectNotExist {
+			return nil, &NotFoundError{logicalPath}
+		}
 		return nil, err
 	}
 	defer r.Close()
 
-	buf := new(bytes.Buffer)
-	if _, err := buf.ReadFrom(r); err != nil {
+	value, err := io.ReadAll(r)
+	if err != nil {
+		span.RecordError((err))
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError((ctx.Err()))
 		return nil, ctx.Err()
 	default:
 	}
 
-	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
+	return &StorageEntry{Key: logicalPath, Value: value}, nil
 }
 
 func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	logger := hclog.FromContext(ctx).ResetNamed("gcs")
+	ctx, span := s.tracer.Start(ctx, "GCSStorage Put", trace.WithAttributes(attribute.String("realm.gcs.entry.key", e.Key)))
+	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
+		span.RecordError((err))
 		return err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError((ctx.Err()))
 		return ctx.Err()
 	default:
 	}
@@ -94,12 +109,15 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	w := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewWriter(ctx)
 	md5Array := md5.Sum(e.Value)
 	w.MD5 = md5Array[:]
+	w.ContentType = "application/json"
 
 	if _, err := w.Write(e.Value); err != nil {
+		span.RecordError((err))
 		return fmt.Errorf("failed to put: %w", err)
 	}
 
 	if err := w.Close(); err != nil {
+		span.RecordError((err))
 		return fmt.Errorf("failed to put: %w", err)
 	}
 
@@ -108,14 +126,18 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 
 func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("gcs")
+	ctx, span := s.tracer.Start(ctx, "GCSStorage Delete", trace.WithAttributes(attribute.String("realm.gcs.logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
+		span.RecordError((err))
 		return err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError((ctx.Err()))
 		return ctx.Err()
 	default:
 	}
@@ -131,14 +153,18 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 
 func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("gcs")
+	ctx, span := s.tracer.Start(ctx, "GCSStorage List", trace.WithAttributes(attribute.String("realm.gcs.prefix", prefix)))
+	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
+		span.RecordError((err))
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
+		span.RecordError((ctx.Err()))
 		return nil, ctx.Err()
 	default:
 	}
@@ -158,6 +184,7 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 			break
 		}
 		if err != nil {
+			span.RecordError(err)
 			return nil, fmt.Errorf("failed to read object: %w", err)
 		}
 
