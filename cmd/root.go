@@ -66,10 +66,13 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 
 	hclog.SetDefault(logger)
 
-	shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, false)
-	if err != nil {
-		logger.Error(err.Error())
-		os.Exit(1)
+	devMode, _ := cmd.Flags().GetBool("dev")
+	if !devMode {
+		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, false)
+		if err != nil {
+			logger.Error(err.Error())
+			os.Exit(1)
+		}
 	}
 }
 
