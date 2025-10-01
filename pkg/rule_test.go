@@ -44,7 +44,7 @@ func TestGetValueAt(t *testing.T) {
 	rule := &OverrideableRule{Rule: &Rule{Type: "string", Value: "default"}, Overrides: []*Override{{Rule: &Rule{Type: "string", Value: "override1"}, MinimumVersion: "v1.0.0", MaximumVersion: "v1.0.1"}, {Rule: &Rule{Type: "string", Value: "override2"}, MinimumVersion: "v1.0.1", MaximumVersion: "v1.0.2"}}}
 
 	for _, test := range tests {
-		val := rule.GetValueAt(test.version)
+		val := rule.ValueAtVersion(test.version)
 		if val != test.output {
 			t.Errorf("version: %q should return %q but returned %q", test.version, test.output, val)
 		}

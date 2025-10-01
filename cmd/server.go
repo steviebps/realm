@@ -1,11 +1,14 @@
 package cmd
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
-	"time"
+	"syscall"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
@@ -24,22 +27,10 @@ var serverCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		ctx := context.Background()
+		logger := hclog.Default().Named("realm.server")
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")
-
-		level := hclog.Info
-		if debug {
-			level = hclog.Debug
-		}
-
-		logger := hclog.New(&hclog.LoggerOptions{
-			Name:                 "realm.server",
-			Level:                level,
-			Output:               cmd.ErrOrStderr(),
-			TimeFn:               time.Now,
-			ColorHeaderAndFields: true,
-			Color:                hclog.AutoColor,
-		})
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
@@ -122,23 +113,35 @@ var serverCmd = &cobra.Command{
 			}
 		}
 
-		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger})
+		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger, RequestTimeout: realmhttp.DefaultHandlerTimeout})
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
 		}
 
-		if certFileEmpty {
+		server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: handler}
+
+		go func() {
 			logger.Info("Listening on", "port", portStr)
-			if err := http.ListenAndServe(fmt.Sprintf(":%d", port), handler); err != nil {
+			if certFileEmpty {
+				if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+					logger.Error(err.Error())
+					os.Exit(1)
+				}
+				return
+			}
+
+			if err := server.ListenAndServeTLS(certFile, keyFile); !errors.Is(err, http.ErrServerClosed) {
 				logger.Error(err.Error())
 				os.Exit(1)
 			}
-			return
-		}
+		}()
 
-		logger.Info("Listening on", "port", portStr)
-		if err := http.ListenAndServeTLS(fmt.Sprintf(":%d", port), certFile, keyFile, handler); err != nil {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+
+		if err := server.Shutdown(ctx); err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
 		}

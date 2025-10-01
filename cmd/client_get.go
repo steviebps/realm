@@ -30,7 +30,7 @@ var clientGet = &cobra.Command{
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		var err error
-		logger := hclog.Default().Named("client")
+		logger := hclog.Default().Named("realm.client")
 		flags := cmd.Flags()
 
 		configPath, err := flags.GetString("config")
@@ -63,7 +63,7 @@ var clientGet = &cobra.Command{
 			os.Exit(1)
 		}
 
-		res, err := c.PerformRequest("GET", "chambers/"+strings.TrimPrefix(args[0], "/"), nil)
+		res, err := c.PerformRequest("GET", strings.TrimPrefix(args[0], "/"), nil)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
