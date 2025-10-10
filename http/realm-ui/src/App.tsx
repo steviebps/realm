@@ -22,21 +22,16 @@ const queryClient = new QueryClient({
 function encodePath(path: string) {
   return path
     ? path
-      .split('/')
-      .map((segment) => encodeURIComponent(segment))
-      .join('/')
+        .split('/')
+        .map((segment) => encodeURIComponent(segment))
+        .join('/')
     : path;
 }
 
 export const App = () => {
   return (
     <QueryClientProvider client={queryClient}>
-      <Router
-        basename="/ui"
-        future={{
-          v7_relativeSplatPath: true,
-        }}
-      >
+      <Router basename="/ui">
         <Routes>
           <Route path="*" element={<Content />} />
         </Routes>
