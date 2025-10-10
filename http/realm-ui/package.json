@@ -22,7 +22,9 @@
     "react-router-dom": "^7.5.2"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.14",
     "@tailwindcss/typography": "^0.5.9",
+    "@tailwindcss/vite": "^4.1.14",
     "@types/node": "^20.4.5",
     "@types/react": "^18.2.14",
     "@types/react-dom": "^18.2.6",
