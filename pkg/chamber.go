@@ -61,11 +61,11 @@ func (c *ChamberEntry) Get(ruleKey string) *OverrideableRule {
 func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrRuleNotFound{ruleKey}
+		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
 	v, ok := t.StringValue(c.version, defaultValue)
 	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{ruleKey, t.Type}
+		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
 	return v, nil
 }
@@ -75,11 +75,11 @@ func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string,
 func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrRuleNotFound{ruleKey}
+		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
 	v, ok := t.BoolValue(c.version, defaultValue)
 	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{ruleKey, t.Type}
+		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
 	return v, nil
 }
@@ -89,11 +89,11 @@ func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error
 func (c *ChamberEntry) Float64Value(ruleKey string, defaultValue float64) (float64, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrRuleNotFound{ruleKey}
+		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
 	v, ok := t.Float64Value(c.version, defaultValue)
 	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{ruleKey, t.Type}
+		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
 	return v, nil
 }
@@ -103,11 +103,11 @@ func (c *ChamberEntry) Float64Value(ruleKey string, defaultValue float64) (float
 func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 	t := c.Get(ruleKey)
 	if t == nil {
-		return &ErrRuleNotFound{ruleKey}
+		return &ErrRuleNotFound{Key: ruleKey}
 	}
 	err := t.CustomValue(c.version, v)
 	if err != nil {
-		return &ErrCouldNotConvertRule{ruleKey, t.Type}
+		return &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
 	return nil
 }

@@ -12,10 +12,14 @@ import (
 
 	"github.com/allegro/bigcache/v3"
 	"github.com/hashicorp/go-hclog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type BigCacheStorage struct {
 	underlying *bigcache.BigCache
+	tracer     trace.Tracer
 }
 
 var (
@@ -71,23 +75,29 @@ func NewBigCacheStorage(config map[string]string) (Storage, error) {
 	if err != nil {
 		return nil, err
 	}
+	tracer := otel.Tracer("github.com/steviebps/realm")
 
 	return &BigCacheStorage{
 		underlying: cache,
+		tracer:     tracer,
 	}, nil
 }
 
 func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Get", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
 	path, key := f.expandPath(logicalPath + bigCacheEntryKey)
 	b, err := f.underlying.Get(filepath.Join(path, key))
 	if err != nil {
+		span.RecordError(err)
 		if errors.Is(err, bigcache.ErrEntryNotFound) {
 			return nil, &NotFoundError{logicalPath}
 		}
@@ -96,6 +106,7 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
@@ -105,15 +116,19 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 
 func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Put", trace.WithAttributes(attribute.String("realm.bigcache.entry.key", e.Key)))
+	defer span.End()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
+		span.RecordError(err)
 		return err
 	}
 	path, key := f.expandPath(e.Key + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -123,15 +138,19 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Delete", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
+	defer span.End()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
+		span.RecordError(err)
 		return err
 	}
 	path, key := f.expandPath(logicalPath + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -141,9 +160,12 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
+	ctx, span := f.tracer.Start(ctx, "BigCacheStorage List", trace.WithAttributes(attribute.String("realm.bigcache.prefix", prefix)))
+	defer span.End()
 	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
@@ -163,6 +185,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 
 	select {
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
