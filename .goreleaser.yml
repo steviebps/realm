@@ -24,28 +24,29 @@ archives:
       {{- else }}{{ .Arch }}{{ end }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: zip
     files:
       - configs/*
 checksum:
   name_template: 'checksums.txt'
 snapshot:
-  name_template: "{{ .Tag }}-next"
+  version_template: "{{ .Tag }}-next"
 changelog:
   sort: asc
   filters:
     exclude:
       - '^docs:'
       - '^test:'
-brews:
+homebrew_casks:
   - name: realm
     description: "Inheritable and overridable configuration management"
     repository:
       owner: steviebps
       name: homebrew-realm
       branch: main
-    download_strategy: CurlDownloadStrategy
     directory: Formula
-    url_template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
+    url: 
+      template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
+      using: ":homebrew_curl"
     homepage: "https://github.com/steviebps/realm"
     license: "Apache 2.0"
