@@ -32,6 +32,7 @@ func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
+	rootCmd.PersistentFlags().Bool("stdouttraces", false, "use stdout for trace exporter")
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -49,6 +50,7 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 	ctx := cmd.Context()
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
+	stdoutTraces, _ := flags.GetBool("stdouttraces")
 
 	level := hclog.Info
 	if debug {
@@ -66,9 +68,9 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 
 	hclog.SetDefault(logger)
 
-	devMode, _ := cmd.Flags().GetBool("dev")
+	devMode, _ := flags.GetBool("dev")
 	if !devMode {
-		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, false)
+		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
@@ -77,6 +79,10 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 }
 
 func persistentPostRun(cmd *cobra.Command, args []string) {
+	if shutdownFn == nil {
+		return
+	}
+
 	if err := shutdownFn(context.Background()); err != nil {
 		fmt.Printf("failed to shutdown TracerProvider: %s\n", err)
 	}

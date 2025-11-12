@@ -2,6 +2,7 @@ package trace
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -31,7 +32,7 @@ func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx co
 		exp, err = newHttpExporter(ctx)
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating exporter: %w", err)
 	}
 
 	prop := newPropagator()
@@ -39,7 +40,7 @@ func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx co
 
 	tp, err := newTraceProvider(exp)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating trace provider: %w", err)
 	}
 
 	otel.SetTracerProvider(tp)

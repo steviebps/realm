@@ -113,7 +113,7 @@ const Content = () => {
   return (
     <div className="flex flex-col items-center my-5">
       <h1>Realm</h1>
-      <div className="w-[1280px]">
+      <div className="w-full max-w-[1280px]">
         <Breadcrumb aria-label="directory crumbs" className="px-5 py-3">
           <BreadcrumbItem icon={HiHome}>
             <Link to="/" relative="path">
@@ -128,16 +128,18 @@ const Content = () => {
             );
           })}
         </Breadcrumb>
-        <div className="grid grid-cols-12 gap-5">
-          <div className="col-span-3">{directories.length > 0 && <SideNav directories={directories} />}</div>
-          <div className="col-span-9">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
+          <div className="p-3 col-span-1 md:col-span-3">
+            {directories.length > 0 && <SideNav directories={directories} />}
+          </div>
+          <div className="p-3 col-span-1 md:col-span-9">
             {isLoading && (
               <div className="text-left">
                 <Spinner aria-label="Loading Chambers" size="lg" />
               </div>
             )}
             {!isLoading && !rules && (
-              <form className="flex max-w-md flex-col gap-4" onSubmit={onCreateNewChamber}>
+              <form className="flex flex-col gap-4" onSubmit={onCreateNewChamber}>
                 <div>
                   <div className="mb-2 block">
                     <Label htmlFor="chamber">Chamber</Label>
