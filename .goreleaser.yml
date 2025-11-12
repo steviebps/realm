@@ -45,7 +45,7 @@ brews:
       name: homebrew-realm
       branch: main
     download_strategy: CurlDownloadStrategy
-    folder: Formula
+    directory: Formula
     url_template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
     homepage: "https://github.com/steviebps/realm"
     license: "Apache 2.0"
