@@ -13,11 +13,11 @@ import (
 	"github.com/steviebps/realm/utils"
 )
 
-// clientGet represents the client get command
-var clientGet = &cobra.Command{
-	Use:   "get [path]",
-	Short: "get a chamber",
-	Long:  "get retrieves the chamber at the specified path",
+// clientList represents the client list command
+var clientList = &cobra.Command{
+	Use:   "list [path]",
+	Short: "list chambers",
+	Long:  "list chambers at the specified path",
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
 			return err
@@ -63,7 +63,7 @@ var clientGet = &cobra.Command{
 			os.Exit(1)
 		}
 
-		res, err := c.PerformRequest("GET", strings.TrimPrefix(args[0], "/"), nil)
+		res, err := c.PerformRequest("GET", strings.TrimPrefix(args[0], "/")+"?list=true", nil)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
@@ -72,12 +72,12 @@ var clientGet = &cobra.Command{
 
 		var httpRes api.HTTPErrorAndDataResponse
 		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-			logger.Error(fmt.Sprintf("could not read response for getting: %q", args[0]), "error", err.Error())
+			logger.Error(fmt.Sprintf("could not read response for listing: %q", args[0]), "error", err.Error())
 			os.Exit(1)
 		}
 
 		if len(httpRes.Errors) > 0 {
-			logger.Error(fmt.Sprintf("could not get %q: %s", args[0], httpRes.Errors))
+			logger.Error(fmt.Sprintf("could not list %q: %s", args[0], httpRes.Errors))
 			os.Exit(1)
 		}
 
@@ -90,5 +90,5 @@ var clientGet = &cobra.Command{
 }
 
 func init() {
-	clientCmd.AddCommand(clientList)
+	clientCmd.AddCommand(clientGet)
 }

@@ -33,6 +33,7 @@ func init() {
 	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
 	rootCmd.PersistentFlags().Bool("stdouttraces", false, "use stdout for trace exporter")
+	rootCmd.PersistentFlags().Bool("notraces", false, "disable tracing")
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -51,6 +52,7 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
 	stdoutTraces, _ := flags.GetBool("stdouttraces")
+	noTraces, _ := flags.GetBool("notraces")
 
 	level := hclog.Info
 	if debug {
@@ -69,7 +71,7 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 	hclog.SetDefault(logger)
 
 	devMode, _ := flags.GetBool("dev")
-	if !devMode {
+	if !devMode && !noTraces {
 		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces)
 		if err != nil {
 			logger.Error(err.Error())
