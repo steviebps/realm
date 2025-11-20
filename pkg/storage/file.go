@@ -25,6 +25,8 @@ var (
 	_ Storage = (*FileStorage)(nil)
 )
 
+const fileEntryKey string = "entry"
+
 func NewFileStorage(conf map[string]string) (Storage, error) {
 	if conf["path"] == "" {
 		return nil, fmt.Errorf("'path' must be set")
@@ -47,7 +49,7 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 		return nil, err
 	}
 
-	path, key := f.expandPath(logicalPath + "entry")
+	path, key := f.expandPath(logicalPath + fileEntryKey)
 	file, err := os.OpenFile(filepath.Join(path, key), os.O_RDONLY, 0600)
 	if file != nil {
 		defer file.Close()
@@ -86,7 +88,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 		span.RecordError(err)
 		return err
 	}
-	path, key := f.expandPath(e.Key + "entry")
+	path, key := f.expandPath(e.Key + fileEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -122,7 +124,7 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 		span.RecordError(err)
 		return err
 	}
-	path, key := f.expandPath(logicalPath + "entry")
+	path, key := f.expandPath(logicalPath + fileEntryKey)
 
 	select {
 	case <-ctx.Done():
