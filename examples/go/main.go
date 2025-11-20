@@ -24,12 +24,12 @@ type CustomStruct struct {
 func main() {
 	var err error
 
-	client, err := client.NewClient(&client.ClientConfig{Address: "http://localhost:8080"})
+	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080"})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	rlm, err := realm.NewRealm(realm.WithClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("root"), realm.WithRefreshInterval(1*time.Minute))
+	rlm, err := realm.NewRealm(realm.WithHttpClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("/"), realm.WithRefreshInterval(1*time.Minute))
 	if err != nil {
 		log.Fatal(err)
 	}

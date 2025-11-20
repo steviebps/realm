@@ -23,13 +23,13 @@ type Realm struct {
 	mu                 sync.RWMutex
 	root               *ChamberEntry
 	logger             hclog.Logger
-	client             *client.Client
+	client             *client.HttpClient
 	interval           time.Duration
 }
 
 type RealmConfig struct {
 	logger             hclog.Logger
-	client             *client.Client
+	client             *client.HttpClient
 	path               string
 	applicationVersion string
 	// refreshInterval is how often realm will refetch the chamber from the realm server
@@ -61,7 +61,7 @@ func (fn realmOptionFunc) apply(cfg RealmConfig) RealmConfig {
 	return fn(cfg)
 }
 
-func WithClient(c *client.Client) RealmOption {
+func WithHttpClient(c *client.HttpClient) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.client = c
 		return rc

@@ -57,7 +57,7 @@ var clientGet = &cobra.Command{
 			addr = realmConfig.Client.Address
 		}
 
-		c, err := client.NewClient(&client.ClientConfig{Address: addr, Logger: logger})
+		c, err := client.NewHttpClient(&client.HttpClientConfig{Address: addr, Logger: logger})
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)

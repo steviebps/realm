@@ -19,13 +19,13 @@ import (
 
 const DefaultClientTimeout = 15 * time.Second
 
-type ClientConfig struct {
+type HttpClientConfig struct {
 	Logger  hclog.Logger
 	Address string
 	Timeout time.Duration
 }
 
-type Client struct {
+type HttpClient struct {
 	underlying *http.Client
 	logger     hclog.Logger
 	address    *url.URL
@@ -33,7 +33,7 @@ type Client struct {
 	propagator propagation.TextMapPropagator
 }
 
-func NewClient(c *ClientConfig) (*Client, error) {
+func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 	if c.Address == "" {
 		return nil, errors.New("address must not be empty")
 	}
@@ -52,7 +52,7 @@ func NewClient(c *ClientConfig) (*Client, error) {
 
 	tracer := otel.Tracer("github.com/steviebps/realm")
 
-	return &Client{
+	return &HttpClient{
 		underlying: &http.Client{Timeout: c.Timeout},
 		address:    u,
 		logger:     logger,
@@ -61,12 +61,12 @@ func NewClient(c *ClientConfig) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) NewRequest(method string, path string, body io.Reader) (*http.Request, error) {
+func (c *HttpClient) NewRequest(method string, path string, body io.Reader) (*http.Request, error) {
 	c.logger.Debug("creating a new request", "method", method, "path", path)
 	return http.NewRequest(method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
 }
 
-func (c *Client) Do(r *http.Request) (*http.Response, error) {
+func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
 	c.logger.Debug("executing request", "method", r.Method, "path", r.URL.Path, "host", r.URL.Host)
 	ctx, span := c.tracer.Start(r.Context(), "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
 	defer span.End()
@@ -75,7 +75,7 @@ func (c *Client) Do(r *http.Request) (*http.Response, error) {
 	return c.underlying.Do(r)
 }
 
-func (c *Client) PerformRequest(method string, path string, body io.Reader) (*http.Response, error) {
+func (c *HttpClient) PerformRequest(method string, path string, body io.Reader) (*http.Response, error) {
 	c.logger.Debug("performing a new request", "method", method, "path", path)
 	req, err := c.NewRequest(method, path, body)
 	if err != nil {
