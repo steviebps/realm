@@ -176,7 +176,7 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 		Versions:  false,
 	})
 
-	keys := []string{}
+	keys := make([]string, 0)
 
 	for {
 		objAttrs, err := iter.Next()

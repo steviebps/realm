@@ -169,7 +169,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 		return nil, err
 	}
 
-	var names []string
+	names := make([]string, 0)
 	iterator := f.underlying.Iterator()
 	for iterator.SetNext() {
 		record, err := iterator.Value()
