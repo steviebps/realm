@@ -11,6 +11,7 @@ import (
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
 )
 
 // clientDelete represents the client delete command
@@ -29,8 +30,12 @@ var clientDelete = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		tracer := otel.Tracer("github.com/steviebps/realm")
+		ctx, span := tracer.Start(cmd.Context(), "cmd client delete")
+		defer span.End()
+
 		var err error
-		logger := hclog.Default().Named("client")
+		logger := hclog.Default().Named("realm.client")
 		flags := cmd.Flags()
 
 		configPath, err := flags.GetString("config")
@@ -63,7 +68,7 @@ var clientDelete = &cobra.Command{
 			os.Exit(1)
 		}
 
-		res, err := c.PerformRequest("DELETE", strings.TrimPrefix(args[0], "/"), nil)
+		res, err := c.PerformRequest(ctx, "DELETE", strings.TrimPrefix(args[0], "/"), nil)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)

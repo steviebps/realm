@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -61,9 +62,9 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 	}, nil
 }
 
-func (c *HttpClient) NewRequest(method string, path string, body io.Reader) (*http.Request, error) {
+func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
 	c.logger.Debug("creating a new request", "method", method, "path", path)
-	return http.NewRequest(method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
+	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
 }
 
 func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
@@ -75,9 +76,9 @@ func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
 	return c.underlying.Do(r)
 }
 
-func (c *HttpClient) PerformRequest(method string, path string, body io.Reader) (*http.Response, error) {
+func (c *HttpClient) PerformRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Response, error) {
 	c.logger.Debug("performing a new request", "method", method, "path", path)
-	req, err := c.NewRequest(method, path, body)
+	req, err := c.NewRequest(ctx, method, path, body)
 	if err != nil {
 		return nil, err
 	}

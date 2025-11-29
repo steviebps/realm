@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,7 +26,7 @@ var serverCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		ctx := context.Background()
+		ctx := cmd.Context()
 		logger := hclog.Default().Named("realm.server")
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")

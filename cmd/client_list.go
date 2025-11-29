@@ -11,6 +11,7 @@ import (
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
 )
 
 // clientList represents the client list command
@@ -29,6 +30,10 @@ var clientList = &cobra.Command{
 		return nil
 	},
 	Run: func(cmd *cobra.Command, args []string) {
+		tracer := otel.Tracer("github.com/steviebps/realm")
+		ctx, span := tracer.Start(cmd.Context(), "cmd client get")
+		defer span.End()
+
 		var err error
 		logger := hclog.Default().Named("realm.client")
 		flags := cmd.Flags()
@@ -63,7 +68,7 @@ var clientList = &cobra.Command{
 			os.Exit(1)
 		}
 
-		res, err := c.PerformRequest("GET", strings.TrimPrefix(args[0], "/")+"?list=true", nil)
+		res, err := c.PerformRequest(ctx, "GET", strings.TrimPrefix(args[0], "/")+"?list=true", nil)
 		if err != nil {
 			logger.Error(err.Error())
 			os.Exit(1)
