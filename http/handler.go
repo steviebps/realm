@@ -17,8 +17,10 @@ import (
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -79,8 +81,15 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	})
 }
 func wrapCommonHandler(h http.Handler) http.Handler {
+	meter := otel.Meter("github.com/steviebps/realm")
+	apiCounter, _ := meter.Int64Counter(
+		"handler.counter",
+		metric.WithDescription("Number of API calls."),
+		metric.WithUnit("{call}"),
+	)
 	hostname, _ := os.Hostname()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCounter.Add(r.Context(), 1)
 		w.Header().Set("Cache-Control", "no-store")
 
 		if hostname != "" {
