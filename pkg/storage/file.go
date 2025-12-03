@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -165,6 +166,10 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		defer file.Close()
 	}
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Println("Path does not exist:", path)
+			return nil, nil
+		}
 		span.RecordError(err)
 		return nil, err
 	}
