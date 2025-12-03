@@ -167,7 +167,6 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			fmt.Println("Path does not exist:", path)
 			return nil, nil
 		}
 		span.RecordError(err)
