@@ -29,7 +29,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	rlm, err := realm.NewRealm(realm.WithHttpClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("/"), realm.WithRefreshInterval(1*time.Minute))
+	rlm, err := realm.NewRealm(realm.WithHttpClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("/"), realm.WithPollingInterval(1*time.Minute))
 	if err != nil {
 		log.Fatal(err)
 	}

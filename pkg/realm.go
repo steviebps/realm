@@ -24,7 +24,7 @@ type Realm struct {
 	root               *ChamberEntry
 	logger             hclog.Logger
 	client             *client.HttpClient
-	interval           time.Duration
+	pollingInterval    time.Duration
 }
 
 type RealmConfig struct {
@@ -32,13 +32,13 @@ type RealmConfig struct {
 	client             *client.HttpClient
 	path               string
 	applicationVersion string
-	// refreshInterval is how often realm will refetch the chamber from the realm server
-	refreshInterval time.Duration
+	// pollingInterval is how often realm will refetch the chamber from the realm server
+	pollingInterval time.Duration
 }
 
 const (
-	// DefaultRefreshInterval is used as the default refresh interval for realm
-	DefaultRefreshInterval time.Duration = 15 * time.Minute
+	// DefaultPollingInterval is used as the default polling interval for realm
+	DefaultPollingInterval time.Duration = 15 * time.Minute
 )
 
 type contextKey struct {
@@ -82,9 +82,9 @@ func WithLogger(logger hclog.Logger) RealmOption {
 	})
 }
 
-func WithRefreshInterval(d time.Duration) RealmOption {
+func WithPollingInterval(d time.Duration) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
-		rc.refreshInterval = d
+		rc.pollingInterval = d
 		return rc
 	})
 }
@@ -118,8 +118,8 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		cfg.logger = hclog.Default().Named("realm")
 	}
 
-	if cfg.refreshInterval <= 0 {
-		cfg.refreshInterval = DefaultRefreshInterval
+	if cfg.pollingInterval <= 0 {
+		cfg.pollingInterval = DefaultPollingInterval
 	}
 
 	return &Realm{
@@ -128,7 +128,7 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		path:               cfg.path,
 		applicationVersion: cfg.applicationVersion,
 		stopCh:             make(chan struct{}),
-		interval:           cfg.refreshInterval,
+		pollingInterval:    cfg.pollingInterval,
 	}, nil
 }
 
@@ -147,7 +147,7 @@ func (rlm *Realm) Start() error {
 	}
 
 	go func() {
-		ticker := time.NewTicker(rlm.interval)
+		ticker := time.NewTicker(rlm.pollingInterval)
 		defer ticker.Stop()
 		for {
 			select {
