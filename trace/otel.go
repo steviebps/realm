@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -21,11 +22,11 @@ import (
 )
 
 func newHttpTraceExporter(ctx context.Context) (trace.SpanExporter, error) {
-	return otlptracehttp.New(ctx, otlptracehttp.WithInsecure())
+	return otlptracehttp.New(ctx)
 }
 
 func newHttpMetricExporter(ctx context.Context) (metric.Exporter, error) {
-	return otlpmetrichttp.New(ctx, otlpmetrichttp.WithInsecure())
+	return otlpmetrichttp.New(ctx)
 }
 
 func newStdOutExporter() (trace.SpanExporter, error) {
@@ -56,12 +57,13 @@ func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx co
 	if err != nil {
 		return nil, fmt.Errorf("creating exporter: %w", err)
 	}
-
+	hostname, _ := os.Hostname()
 	res, err := resource.Merge(
 		resource.Default(),
 		resource.NewWithAttributes(
 			semconv.SchemaURL,
 			semconv.ServiceName("realm"),
+			semconv.HostName(hostname),
 		),
 	)
 	if err != nil {

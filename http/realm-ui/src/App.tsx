@@ -29,6 +29,10 @@ function encodePath(path: string) {
     : path;
 }
 
+function ensureTrailingSlash(path: string) {
+  return path.endsWith('/') ? path : path + '/';
+}
+
 export const App = () => {
   return (
     <>
@@ -77,7 +81,7 @@ const Content = () => {
 
   const { mutate } = useMutation(
     (c: string) => {
-      return fetch(`/v1/chambers${encodePath(location.pathname)}${encodeURI(c)}`, {
+      return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname) + c)}`, {
         method: 'POST',
         body: testData,
         mode: 'same-origin',
@@ -132,13 +136,13 @@ const Content = () => {
           <div className="p-3 col-span-1 md:col-span-3">
             {directories.length > 0 && <SideNav directories={directories} />}
           </div>
-          <div className="p-3 col-span-1 md:col-span-9">
+          <div className="grid gap-4 p-3 col-span-1 md:col-span-9">
             {isLoading && (
               <div className="text-left">
                 <Spinner aria-label="Loading Chambers" size="lg" />
               </div>
             )}
-            {!isLoading && !rules && (
+            {!isLoading && (
               <form className="flex flex-col gap-4" onSubmit={onCreateNewChamber}>
                 <div>
                   <div className="mb-2 block">
@@ -169,7 +173,7 @@ const Content = () => {
                     <li key={ruleName}>
                       <h2>{ruleName}</h2>
                       <h3>
-                        {rule.type} : {String(rule.value)}
+                        {rule.type} : {JSON.stringify(rule.value)}
                       </h3>
                     </li>
                   );
