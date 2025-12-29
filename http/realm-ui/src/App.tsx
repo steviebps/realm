@@ -83,7 +83,7 @@ const Content = () => {
     (c: string) => {
       return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname) + c)}`, {
         method: 'POST',
-        body: testData,
+        body: JSON.stringify({ rules: {} }),
         mode: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
@@ -186,43 +186,3 @@ const Content = () => {
     </div>
   );
 };
-
-const testData = `{  "rules": {
-  "feature switch one": {
-    "type": "number",
-    "value": 10.6,
-    "overrides": [
-      {
-        "type": "number",
-        "value": 10.2,
-        "minimumVersion": "v0.0.1",
-        "maximumVersion": "v2.0.0"
-      },
-      {
-        "type": "number",
-        "value": 10.4,
-        "minimumVersion": "v2.0.0",
-        "maximumVersion": "v3.0.0"
-      },
-      {
-        "type": "number",
-        "value": 10.6,
-        "minimumVersion": "v3.0.0",
-        "maximumVersion": "v4.0.0"
-      },
-      {
-        "type": "number",
-        "value": 10.8,
-        "minimumVersion": "v4.0.0",
-        "maximumVersion": "v5.0.0"
-      },
-      {
-        "type": "number",
-        "value": 11.0,
-        "minimumVersion": "v5.0.0",
-        "maximumVersion": "v6.0.0"
-      }
-    ]
-  }
-}
-}`;

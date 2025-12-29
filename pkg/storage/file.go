@@ -26,7 +26,7 @@ var (
 	_ Storage = (*FileStorage)(nil)
 )
 
-const fileEntryKey string = "entry"
+const fileEntryKey string = "entry.json"
 
 func NewFileStorage(conf map[string]string) (Storage, error) {
 	if conf["path"] == "" {
