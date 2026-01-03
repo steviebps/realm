@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/hashicorp/go-hclog"
@@ -19,11 +18,13 @@ import (
 
 // clientPut represents the client put command
 var clientPut = &cobra.Command{
-	Use:   "put [path]",
-	Short: "put a chamber",
-	Long:  "put creates or updates the chamber at the specified path",
+	Use:          "put [path]",
+	Short:        "put a chamber",
+	Long:         "put creates or updates the chamber at the specified path",
+	SilenceUsage: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			cmd.SilenceUsage = false
 			return err
 		}
 		if err := storage.ValidatePath(args[0]); err != nil {
@@ -32,7 +33,7 @@ var clientPut = &cobra.Command{
 
 		return nil
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		tracer := otel.Tracer("github.com/steviebps/realm")
 		ctx, span := tracer.Start(cmd.Context(), "cmd client put")
 		defer span.End()
@@ -44,7 +45,7 @@ var clientPut = &cobra.Command{
 		configPath, err := flags.GetString("config")
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		var realmConfig RealmConfig
@@ -52,7 +53,7 @@ var clientPut = &cobra.Command{
 			realmConfig, err = parseConfig(configPath)
 			if err != nil {
 				logger.Error(err.Error())
-				os.Exit(1)
+				return err
 			}
 		}
 
@@ -60,7 +61,7 @@ var clientPut = &cobra.Command{
 		if addr == "" {
 			if realmConfig.Client.Address == "" {
 				logger.Error("must specify an address for the realm server")
-				os.Exit(1)
+				return err
 			}
 			addr = realmConfig.Client.Address
 		}
@@ -68,37 +69,39 @@ var clientPut = &cobra.Command{
 		c, err := client.NewHttpClient(&client.HttpClientConfig{Address: addr, Logger: logger})
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		emptyChamber, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.OverrideableRule{}})
 		if err != nil {
 			logger.Error(fmt.Sprintf("could not marshal empty chamber for putting: %q", args[0]), "error", err.Error())
-			os.Exit(1)
+			return err
 		}
+
 		res, err := c.PerformRequest(ctx, "POST", strings.TrimPrefix(args[0], "/"), bytes.NewReader(emptyChamber))
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 		defer res.Body.Close()
 
 		var httpRes api.HTTPErrorAndDataResponse
 		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
 			logger.Error(fmt.Sprintf("could not read response for putting: %q", args[0]), "error", err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		if len(httpRes.Errors) > 0 {
 			logger.Error(fmt.Sprintf("could not put %q: %s", args[0], httpRes.Errors))
-			os.Exit(1)
+			return err
 		}
 
 		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
+		return nil
 	},
 }
 

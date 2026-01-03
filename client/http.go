@@ -12,6 +12,7 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
@@ -54,7 +55,7 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 	tracer := otel.Tracer("github.com/steviebps/realm")
 
 	return &HttpClient{
-		underlying: &http.Client{Timeout: c.Timeout},
+		underlying: &http.Client{Timeout: c.Timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		address:    u,
 		logger:     logger,
 		tracer:     tracer,

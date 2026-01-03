@@ -28,6 +28,13 @@ const DefaultHandlerTimeout = 10 * time.Second
 
 var uiExists = true
 
+var meter = otel.Meter("github.com/steviebps/realm")
+
+var errorCounter, _ = meter.Int64Counter(
+	"handler.error.counter",
+	metric.WithDescription("Number of Error Responses."),
+	metric.WithUnit("{call}"))
+
 type HandlerConfig struct {
 	Logger         hclog.Logger
 	Storage        storage.Storage
@@ -59,12 +66,12 @@ func handle(hc HandlerConfig) http.Handler {
 	mux := http.NewServeMux()
 
 	if uiExists {
-		mux.Handle("/ui/", otelhttp.NewHandler(otelhttp.WithRouteTag("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS())))), "/ui/"))
+		mux.Handle("/ui/", otelhttp.NewHandler(gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))), "/ui/"))
 	} else {
 		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
 	}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(otelhttp.WithRouteTag("/v1/chambers/", handleChambers(hc.Storage, logger)), "/v1/chambers/"))
+	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, logger), "/v1/chambers/"))
 
 	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler)
@@ -87,6 +94,7 @@ func wrapCommonHandler(h http.Handler) http.Handler {
 		metric.WithDescription("Number of API calls."),
 		metric.WithUnit("{call}"),
 	)
+
 	hostname, _ := os.Hostname()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiCounter.Add(r.Context(), 1)
@@ -127,7 +135,8 @@ func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
 	utils.WriteInterfaceWith(w, body, true)
 }
 
-func handleError(w http.ResponseWriter, status int, resp api.HTTPErrorAndDataResponse) {
+func handleError(ctx context.Context, w http.ResponseWriter, status int, resp api.HTTPErrorAndDataResponse) {
+	errorCounter.Add(ctx, 1, metric.WithAttributes(attribute.Int("http.status_code", status)))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	utils.WriteInterfaceWith(w, resp, true)
@@ -154,7 +163,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 					err = nfError
 				}
 
-				handleError(w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -173,7 +182,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 				} else {
 					err = errors.New(http.StatusText(http.StatusBadRequest))
 				}
-				handleError(w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -182,7 +191,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 				span.SetStatus(codes.Error, err.Error())
 				requestLogger.Error(err.Error())
 				err = errors.New(http.StatusText(http.StatusInternalServerError))
-				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -191,7 +200,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			if err := strg.Put(ctx, entry); err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				requestLogger.Error(err.Error())
-				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -205,11 +214,11 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
-					handleError(w, http.StatusNotFound, createResponseWithErrors(nil, []string{nfError.Error()}))
+					handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{nfError.Error()}))
 					return
 				}
 
-				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 			handleOk(w, nil)
@@ -221,15 +230,15 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 				span.SetStatus(codes.Error, err.Error())
 				requestLogger.Error(err.Error())
 				if errors.Is(err, os.ErrNotExist) {
-					handleError(w, http.StatusNotFound, createResponseWithErrors(nil, []string{http.StatusText(http.StatusNotFound)}))
+					handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{http.StatusText(http.StatusNotFound)}))
 					return
 				}
-				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 			raw, err := json.Marshal(names)
 			if err != nil {
-				handleError(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -238,7 +247,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 
 		default:
 			span.SetStatus(codes.Error, "method not allowed")
-			handleError(w, http.StatusMethodNotAllowed, createResponseWithErrors(nil, []string{http.StatusText(http.StatusMethodNotAllowed)}))
+			handleError(ctx, w, http.StatusMethodNotAllowed, createResponseWithErrors(nil, []string{http.StatusText(http.StatusMethodNotAllowed)}))
 		}
 	})
 }

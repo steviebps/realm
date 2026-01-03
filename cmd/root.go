@@ -19,8 +19,7 @@ var rootCmd = &cobra.Command{
 	Use:               "realm",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
-	PersistentPreRun:  persistentPreRun,
-	PersistentPostRun: persistentPostRun,
+	PersistentPreRunE: persistentPreRunE,
 	DisableAutoGenTag: true,
 	Version:           Version,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -39,14 +38,21 @@ func init() {
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Printf("Error while starting realm: %v\n", err)
+	err := rootCmd.Execute()
+
+	if shutdownFn != nil {
+		if shutdownErr := shutdownFn(context.Background()); shutdownErr != nil {
+			fmt.Printf("failed to shutdown TracerProvider: %s\n", shutdownErr)
+		}
+	}
+
+	if err != nil {
 		os.Exit(1)
 	}
 }
 
 // sets up the config for all sub-commands
-func persistentPreRun(cmd *cobra.Command, args []string) {
+func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	var err error
 	ctx := cmd.Context()
 	flags := cmd.Flags()
@@ -74,18 +80,8 @@ func persistentPreRun(cmd *cobra.Command, args []string) {
 	if !devMode && !noTraces {
 		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces)
 		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 	}
-}
-
-func persistentPostRun(cmd *cobra.Command, args []string) {
-	if shutdownFn == nil {
-		return
-	}
-
-	if err := shutdownFn(context.Background()); err != nil {
-		fmt.Printf("failed to shutdown TracerProvider: %s\n", err)
-	}
+	return nil
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/utils"
@@ -18,6 +19,7 @@ import (
 )
 
 type FileStorage struct {
+	sync.RWMutex
 	path   string
 	tracer trace.Tracer
 }
@@ -43,6 +45,9 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage Get", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
 	defer span.End()
+
+	f.RLock()
+	defer f.RUnlock()
 	logger.Debug("get operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
@@ -83,6 +88,9 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage Put", trace.WithAttributes(attribute.String("realm.file.entry.key", e.Key)))
 	defer span.End()
+
+	f.Lock()
+	defer f.Unlock()
 	logger.Debug("put operation", "logicalPath", e.Key)
 
 	if err := ValidatePath(e.Key); err != nil {
@@ -119,6 +127,9 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage Delete", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
 	defer span.End()
+
+	f.Lock()
+	defer f.Unlock()
 	logger.Debug("delete operation", "logicalPath", logicalPath)
 
 	if err := ValidatePath(logicalPath); err != nil {
@@ -149,6 +160,9 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage List", trace.WithAttributes(attribute.String("realm.file.prefix", prefix)))
 	defer span.End()
+
+	f.RLock()
+	defer f.RUnlock()
 	logger.Debug("list operation", "prefix", prefix)
 
 	if err := ValidatePath(prefix); err != nil {

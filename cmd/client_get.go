@@ -1,8 +1,8 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/hashicorp/go-hclog"
@@ -16,11 +16,13 @@ import (
 
 // clientGet represents the client get command
 var clientGet = &cobra.Command{
-	Use:   "get [path]",
-	Short: "get a chamber",
-	Long:  "get retrieves the chamber at the specified path",
+	Use:          "get [path]",
+	Short:        "get a chamber",
+	Long:         "get retrieves the chamber at the specified path",
+	SilenceUsage: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			cmd.SilenceUsage = false
 			return err
 		}
 		if err := storage.ValidatePath(args[0]); err != nil {
@@ -29,7 +31,7 @@ var clientGet = &cobra.Command{
 
 		return nil
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		tracer := otel.Tracer("github.com/steviebps/realm")
 		ctx, span := tracer.Start(cmd.Context(), "cmd client get")
 		defer span.End()
@@ -41,7 +43,7 @@ var clientGet = &cobra.Command{
 		configPath, err := flags.GetString("config")
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		var realmConfig RealmConfig
@@ -49,7 +51,7 @@ var clientGet = &cobra.Command{
 			realmConfig, err = parseConfig(configPath)
 			if err != nil {
 				logger.Error(err.Error())
-				os.Exit(1)
+				return err
 			}
 		}
 
@@ -57,7 +59,7 @@ var clientGet = &cobra.Command{
 		if addr == "" {
 			if realmConfig.Client.Address == "" {
 				logger.Error("must specify an address for the realm server")
-				os.Exit(1)
+				return errors.New("must specify an address for the realm server")
 			}
 			addr = realmConfig.Client.Address
 		}
@@ -65,35 +67,36 @@ var clientGet = &cobra.Command{
 		c, err := client.NewHttpClient(&client.HttpClientConfig{Address: addr, Logger: logger})
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		res, err := c.PerformRequest(ctx, "GET", strings.TrimPrefix(args[0], "/"), nil)
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 		defer res.Body.Close()
 
 		var httpRes api.HTTPErrorAndDataResponse
 		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
 			logger.Error(fmt.Sprintf("could not read response for getting: %q", args[0]), "error", err.Error())
-			os.Exit(1)
+			return err
 		}
 
 		if len(httpRes.Errors) > 0 {
 			logger.Error(fmt.Sprintf("could not get %q: %s", args[0], httpRes.Errors))
-			os.Exit(1)
+			return errors.New(strings.Join(httpRes.Errors, "; "))
 		}
 
 		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)
 		if err != nil {
 			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
+		return nil
 	},
 }
 
 func init() {
-	clientCmd.AddCommand(clientList)
+	clientCmd.AddCommand(clientGet)
 }
