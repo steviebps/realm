@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog/log"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -22,14 +22,12 @@ import (
 const DefaultClientTimeout = 15 * time.Second
 
 type HttpClientConfig struct {
-	Logger  hclog.Logger
 	Address string
 	Timeout time.Duration
 }
 
 type HttpClient struct {
 	underlying *http.Client
-	logger     hclog.Logger
 	address    *url.URL
 	tracer     trace.Tracer
 	propagator propagation.TextMapPropagator
@@ -43,11 +41,6 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not parse address %q: %w", c.Address, err)
 	}
-	logger := c.Logger
-
-	if logger == nil {
-		logger = hclog.Default().Named("client")
-	}
 	if c.Timeout <= 0 {
 		c.Timeout = DefaultClientTimeout
 	}
@@ -57,19 +50,18 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 	return &HttpClient{
 		underlying: &http.Client{Timeout: c.Timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		address:    u,
-		logger:     logger,
 		tracer:     tracer,
 		propagator: otel.GetTextMapPropagator(),
 	}, nil
 }
 
 func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
-	c.logger.Debug("creating a new request", "method", method, "path", path)
+	log.Debug().Str("method", method).Str("path", path).Msg("creating a new request")
 	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
 }
 
 func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
-	c.logger.Debug("executing request", "method", r.Method, "path", r.URL.Path, "host", r.URL.Host)
+	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("host", r.URL.Host).Msg("executing request")
 	ctx, span := c.tracer.Start(r.Context(), "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
 	defer span.End()
 
@@ -78,7 +70,7 @@ func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
 }
 
 func (c *HttpClient) PerformRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Response, error) {
-	c.logger.Debug("performing a new request", "method", method, "path", path)
+	log.Debug().Str("method", method).Str("path", path).Msg("performing a new request")
 	req, err := c.NewRequest(ctx, method, path, body)
 	if err != nil {
 		return nil, err

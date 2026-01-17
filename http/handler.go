@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/NYTimes/gziphandler"
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog/log"
 	"github.com/steviebps/realm/api"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
@@ -36,7 +36,6 @@ var errorCounter, _ = meter.Int64Counter(
 	metric.WithUnit("{call}"))
 
 type HandlerConfig struct {
-	Logger         hclog.Logger
 	Storage        storage.Storage
 	RequestTimeout time.Duration
 }
@@ -52,9 +51,6 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 	if config.Storage == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
 	}
-	if config.Logger == nil {
-		config.Logger = hclog.Default().Named("realm")
-	}
 	if config.RequestTimeout == 0 {
 		config.RequestTimeout = DefaultHandlerTimeout
 	}
@@ -62,7 +58,6 @@ func NewHandler(config HandlerConfig) (http.Handler, error) {
 }
 
 func handle(hc HandlerConfig) http.Handler {
-	logger := hc.Logger.Named("http")
 	mux := http.NewServeMux()
 
 	if uiExists {
@@ -71,7 +66,7 @@ func handle(hc HandlerConfig) http.Handler {
 		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
 	}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, logger), "/v1/chambers/"))
+	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage), "/v1/chambers/"))
 
 	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler)
@@ -142,10 +137,10 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 	utils.WriteInterfaceWith(w, resp, true)
 }
 
-func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
+func handleChambers(strg storage.Storage) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestLogger := logger.With("method", r.Method, "path", r.URL.Path)
-		ctx := hclog.WithContext(r.Context(), requestLogger)
+		ctx := r.Context()
+		errorEvent := log.Error().Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
 		req := buildAgentRequest(r)
@@ -156,7 +151,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			entry, err := strg.Get(ctx, req.Path)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				requestLogger.Error(err.Error())
+				errorEvent.Msg(err.Error())
 
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
@@ -176,7 +171,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			// ensure data is in correct format
 			if err := utils.ReadInterfaceWith(r.Body, &c); err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				requestLogger.Error(err.Error())
+				errorEvent.Msg(err.Error())
 				if errors.Is(err, io.EOF) {
 					err = errors.New("request body must not be empty")
 				} else {
@@ -189,7 +184,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			b, err := json.Marshal(&c)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				requestLogger.Error(err.Error())
+				errorEvent.Msg(err.Error())
 				err = errors.New(http.StatusText(http.StatusInternalServerError))
 				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
@@ -199,7 +194,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			entry := storage.StorageEntry{Key: req.Path, Value: b}
 			if err := strg.Put(ctx, entry); err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				requestLogger.Error(err.Error())
+				errorEvent.Msg(err.Error())
 				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
@@ -210,7 +205,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 		case DeleteOperation:
 			if err := strg.Delete(ctx, req.Path); err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				requestLogger.Error(err.Error())
+				errorEvent.Msg(err.Error())
 
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
@@ -228,7 +223,7 @@ func handleChambers(strg storage.Storage, logger hclog.Logger) http.Handler {
 			names, err := strg.List(ctx, req.Path)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				requestLogger.Error(err.Error())
+				errorEvent.Msg(err.Error())
 				if errors.Is(err, os.ErrNotExist) {
 					handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{http.StatusText(http.StatusNotFound)}))
 					return

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	realmtrace "github.com/steviebps/realm/trace"
 )
@@ -60,21 +60,15 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	stdoutTraces, _ := flags.GetBool("stdouttraces")
 	noTraces, _ := flags.GetBool("notraces")
 
-	level := hclog.Info
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if debug {
-		level = hclog.Debug
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
 
-	logger := hclog.New(&hclog.LoggerOptions{
-		Name:                 "realm",
-		Level:                level,
-		Output:               cmd.OutOrStderr(),
-		TimeFn:               time.Now,
-		ColorHeaderAndFields: true,
-		Color:                hclog.AutoColor,
-	})
-
-	hclog.SetDefault(logger)
+	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
+	multi := zerolog.MultiLevelWriter(consoleWriter, os.Stderr)
+	log.Logger = zerolog.New(multi).With().Timestamp().Logger()
 
 	devMode, _ := flags.GetBool("dev")
 	if !devMode && !noTraces {
@@ -83,5 +77,6 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
+
 	return nil
 }
