@@ -1,5 +1,3 @@
-// bolt "go.etcd.io/bbolt"
-
 package storage
 
 import (
