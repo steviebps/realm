@@ -140,7 +140,7 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 func handleChambers(strg storage.Storage) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		errorEvent := log.Error().Str("method", r.Method).Str("path", r.URL.Path)
+		errorLog := log.Error().Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
 		req := buildAgentRequest(r)
@@ -151,7 +151,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 			entry, err := strg.Get(ctx, req.Path)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				errorEvent.Msg(err.Error())
+				errorLog.Msg(err.Error())
 
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
@@ -171,7 +171,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 			// ensure data is in correct format
 			if err := utils.ReadInterfaceWith(r.Body, &c); err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				errorEvent.Msg(err.Error())
+				errorLog.Msg(err.Error())
 				if errors.Is(err, io.EOF) {
 					err = errors.New("request body must not be empty")
 				} else {
@@ -184,7 +184,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 			b, err := json.Marshal(&c)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				errorEvent.Msg(err.Error())
+				errorLog.Msg(err.Error())
 				err = errors.New(http.StatusText(http.StatusInternalServerError))
 				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
@@ -194,7 +194,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 			entry := storage.StorageEntry{Key: req.Path, Value: b}
 			if err := strg.Put(ctx, entry); err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				errorEvent.Msg(err.Error())
+				errorLog.Msg(err.Error())
 				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
@@ -205,7 +205,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 		case DeleteOperation:
 			if err := strg.Delete(ctx, req.Path); err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				errorEvent.Msg(err.Error())
+				errorLog.Msg(err.Error())
 
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
@@ -223,7 +223,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 			names, err := strg.List(ctx, req.Path)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
-				errorEvent.Msg(err.Error())
+				errorLog.Msg(err.Error())
 				if errors.Is(err, os.ErrNotExist) {
 					handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{http.StatusText(http.StatusNotFound)}))
 					return

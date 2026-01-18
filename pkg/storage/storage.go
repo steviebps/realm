@@ -12,6 +12,7 @@ type StorageEntry struct {
 	Value json.RawMessage
 }
 
+// Storage is the interface for all storage backends
 type Storage interface {
 	// Get retrieves the entry by key from the underlying storage
 	Get(ctx context.Context, key string) (*StorageEntry, error)
@@ -32,15 +33,18 @@ var StorageOptions = map[string]StorageCreator{
 	"bigcache":  NewBigCacheStorage,
 	"cacheable": NewCacheableStorageWithConf,
 	"gcs":       NewGCSStorage,
+	"boltdb":    NewBoltStorage,
 }
 
-// CacheableStorageOptions is a map of available storage options specified at the server.options.cache config path
-var CacheableStorageOptions = map[string]StorageCreator{
+// SourcableStorageOptions is a map of available storage options specified at the server.options.cache config path
+var SourcableStorageOptions = map[string]StorageCreator{
 	"file":     NewFileStorage,
 	"bigcache": NewBigCacheStorage,
 	"gcs":      NewGCSStorage,
+	"boltdb":   NewBoltStorage,
 }
 
+// ValidatePath ensures the provided path is valid. no parent references allowed.
 func ValidatePath(path string) error {
 	if strings.Contains(path, "..") {
 		return errors.New("path cannot reference parents")

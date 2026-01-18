@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog/log"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
@@ -33,10 +33,9 @@ func NewInheritableStorage(source Storage) (Storage, error) {
 }
 
 func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("get operation", "logicalPath", logicalPath)
+	log.Debug().Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -103,10 +102,9 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 }
 
 func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
-	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Put", trace.WithAttributes(attribute.String("realm.inheritable.entry.key", e.Key)))
 	defer span.End()
-	logger.Debug("put operation", "logicalPath", e.Key)
+	log.Debug().Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError(err)
@@ -129,10 +127,9 @@ func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) error {
-	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Delete", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("delete operation", "logicalPath", logicalPath)
+	log.Debug().Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -155,10 +152,9 @@ func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) err
 }
 
 func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("inheritable")
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage List", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", prefix)))
 	defer span.End()
-	logger.Debug("list operation", "prefix", prefix)
+	log.Debug().Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError((err))

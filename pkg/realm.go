@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog/log"
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/utils"
@@ -22,13 +22,11 @@ type Realm struct {
 	stopCh             chan struct{}
 	mu                 sync.RWMutex
 	root               *ChamberEntry
-	logger             hclog.Logger
 	client             *client.HttpClient
 	pollingInterval    time.Duration
 }
 
 type RealmConfig struct {
-	logger             hclog.Logger
 	client             *client.HttpClient
 	path               string
 	applicationVersion string
@@ -75,13 +73,6 @@ func WithPath(path string) RealmOption {
 	})
 }
 
-func WithLogger(logger hclog.Logger) RealmOption {
-	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
-		rc.logger = logger
-		return rc
-	})
-}
-
 func WithPollingInterval(d time.Duration) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.pollingInterval = d
@@ -114,16 +105,11 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		return nil, errors.New("path must not be empty")
 	}
 
-	if cfg.logger == nil {
-		cfg.logger = hclog.Default().Named("realm")
-	}
-
 	if cfg.pollingInterval <= 0 {
 		cfg.pollingInterval = DefaultPollingInterval
 	}
 
 	return &Realm{
-		logger:             cfg.logger,
 		client:             cfg.client,
 		path:               cfg.path,
 		applicationVersion: cfg.applicationVersion,
@@ -152,7 +138,7 @@ func (rlm *Realm) Start() error {
 		for {
 			select {
 			case <-rlm.stopCh:
-				rlm.logger.Info("shutting down realm")
+				log.Info().Msg("shutting down realm")
 				return
 			case <-ticker.C:
 				if chamber, err := rlm.retrieveChamber(rlm.path); err == nil {
@@ -170,39 +156,31 @@ func (rlm *Realm) Stop() {
 	close(rlm.stopCh)
 }
 
-// Logger retrieves the underlying logger for realm
-func (rlm *Realm) Logger() hclog.Logger {
-	rlm.mu.RLock()
-	defer rlm.mu.RUnlock()
-	return rlm.logger
-}
-
 func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
 	client := rlm.client
-	logger := rlm.logger
 
 	res, err := client.PerformRequest(context.Background(), "GET", strings.TrimPrefix(path, "/"), nil)
 	if err != nil {
-		logger.Error(err.Error())
+		log.Error().Msg(fmt.Sprintf("could not perform request for getting: %q, %s", path, err.Error()))
 		return nil, err
 	}
 	defer res.Body.Close()
 
 	var httpRes api.HTTPErrorAndDataResponse
 	if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-		logger.Error(fmt.Sprintf("could not read response for getting: %q", path), "error", err.Error())
+		log.Error().Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for getting: %q", path))
 		return nil, err
 	}
 
 	if len(httpRes.Errors) > 0 {
-		logger.Error(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
+		log.Error().Msg(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
 		return nil, fmt.Errorf("%s", httpRes.Errors)
 	}
 
 	var c Chamber
 	err = json.Unmarshal(httpRes.Data, &c)
 	if err != nil {
-		rlm.logger.Error(err.Error())
+		log.Error().Str("error", err.Error()).Msg(fmt.Sprintf("could not unmarshal chamber from response for getting: %q", path))
 		return nil, err
 	}
 

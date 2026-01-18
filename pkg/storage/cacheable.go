@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog/log"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -47,7 +47,7 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 		return nil, fmt.Errorf("'source' option for cacheable must be set")
 	}
 
-	sourceCreator, exists := CacheableStorageOptions[source]
+	sourceCreator, exists := SourcableStorageOptions[source]
 	if !exists {
 		return nil, fmt.Errorf("storage type %q does not exist", source)
 	}
@@ -56,7 +56,7 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 		return nil, err
 	}
 
-	cacheCreator, exists := CacheableStorageOptions[cache]
+	cacheCreator, exists := SourcableStorageOptions[cache]
 	if !exists {
 		return nil, fmt.Errorf("storage type %q does not exist", cache)
 	}
@@ -69,10 +69,9 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 }
 
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Get", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("get operation", "logicalPath", logicalPath)
+	log.Debug().Str("logicalPath", logicalPath).Msg("get operation")
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
@@ -80,9 +79,9 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
 		if errors.As(err, &nfError) {
-			logger.Debug("cache", "miss", err.Error())
+			log.Debug().Str("error", err.Error()).Msg("cache miss")
 		} else {
-			logger.Error("cache", "error", err.Error())
+			log.Debug().Str("error", err.Error()).Msg("cache error")
 		}
 	}
 
@@ -94,7 +93,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
 		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
-		logger.Error("source", "error", err.Error())
+		log.Error().Str("error", err.Error()).Msg("source error")
 		return nil, err
 	}
 
@@ -106,10 +105,9 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 }
 
 func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
-	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Put", trace.WithAttributes(attribute.String("realm.cacheable.entry.key", e.Key)))
 	defer span.End()
-	logger.Debug("put operation", "logicalPath", e.Key)
+	log.Debug().Str("logicalPath", e.Key).Msg("put operation")
 
 	err := c.source.Put(ctx, e)
 	if err == nil {
@@ -122,10 +120,9 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error {
-	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Delete", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("delete operation", "logicalPath", logicalPath)
+	log.Debug().Str("logicalPath", logicalPath).Msg("delete operation")
 
 	sourceErr := c.source.Delete(ctx, logicalPath)
 	if sourceErr != nil {
@@ -139,9 +136,8 @@ func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error
 }
 
 func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("cacheable")
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage List", trace.WithAttributes(attribute.String("realm.cacheable.prefix", prefix)))
 	defer span.End()
-	logger.Debug("list operation", "prefix", prefix)
+	log.Debug().Str("prefix", prefix).Msg("list operation")
 	return c.source.List(ctx, prefix)
 }
