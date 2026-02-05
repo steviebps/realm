@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/rs/zerolog/log"
+	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -71,7 +71,9 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Get", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
-	log.Debug().Str("logicalPath", logicalPath).Msg("get operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
@@ -79,9 +81,9 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		var nfError *NotFoundError
 		// cache layer is expected to have missing records so let's only log other errors
 		if errors.As(err, &nfError) {
-			log.Debug().Str("error", err.Error()).Msg("cache miss")
+			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache miss")
 		} else {
-			log.Debug().Str("error", err.Error()).Msg("cache error")
+			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache error")
 		}
 	}
 
@@ -93,7 +95,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
 		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
-		log.Error().Str("error", err.Error()).Msg("source error")
+		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("source error")
 		return nil, err
 	}
 
@@ -107,7 +109,9 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Put", trace.WithAttributes(attribute.String("realm.cacheable.entry.key", e.Key)))
 	defer span.End()
-	log.Debug().Str("logicalPath", e.Key).Msg("put operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	err := c.source.Put(ctx, e)
 	if err == nil {
@@ -122,7 +126,9 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error {
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Delete", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
-	log.Debug().Str("logicalPath", logicalPath).Msg("delete operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	sourceErr := c.source.Delete(ctx, logicalPath)
 	if sourceErr != nil {
@@ -138,6 +144,8 @@ func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error
 func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage List", trace.WithAttributes(attribute.String("realm.cacheable.prefix", prefix)))
 	defer span.End()
-	log.Debug().Str("prefix", prefix).Msg("list operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 	return c.source.List(ctx, prefix)
 }

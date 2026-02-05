@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/NYTimes/gziphandler"
-	"github.com/rs/zerolog/log"
 	"github.com/steviebps/realm/api"
+	"github.com/steviebps/realm/helper/logging"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
@@ -91,7 +91,9 @@ func wrapCommonHandler(h http.Handler) http.Handler {
 	)
 
 	hostname, _ := os.Hostname()
+	logger := logging.NewTracedLogger()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(logger.WithContext(r.Context()))
 		apiCounter.Add(r.Context(), 1)
 		w.Header().Set("Cache-Control", "no-store")
 
@@ -140,7 +142,8 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 func handleChambers(strg storage.Storage) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		errorLog := log.Error().Str("method", r.Method).Str("path", r.URL.Path)
+		logger := logging.Ctx(ctx)
+		errorLog := logger.ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
 		req := buildAgentRequest(r)

@@ -6,9 +6,10 @@ import (
 	"os"
 
 	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/steviebps/realm/helper/logging"
 	realmtrace "github.com/steviebps/realm/trace"
+	"go.opentelemetry.io/otel"
 )
 
 // Version the version of realm
@@ -38,7 +39,13 @@ func init() {
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	err := rootCmd.Execute()
+	ctx := context.Background()
+	tracer := otel.Tracer("github.com/steviebps/realm")
+	ctx, _ = tracer.Start(ctx, "realm")
+
+	logger := logging.NewTracedLogger()
+	ctx = logger.WithContext(ctx)
+	err := rootCmd.ExecuteContext(ctx)
 
 	if shutdownFn != nil {
 		if shutdownErr := shutdownFn(context.Background()); shutdownErr != nil {
@@ -65,10 +72,6 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	if debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-
-	consoleWriter := zerolog.ConsoleWriter{Out: os.Stdout}
-	multi := zerolog.MultiLevelWriter(consoleWriter, os.Stderr)
-	log.Logger = zerolog.New(multi).With().Timestamp().Logger()
 
 	devMode, _ := flags.GetBool("dev")
 	if !devMode && !noTraces {

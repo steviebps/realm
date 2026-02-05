@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
+	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/utils"
 )
 
@@ -24,6 +24,7 @@ type Realm struct {
 	root               *ChamberEntry
 	client             *client.HttpClient
 	pollingInterval    time.Duration
+	logger             *logging.TracedLogger
 }
 
 type RealmConfig struct {
@@ -110,6 +111,7 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 	}
 
 	return &Realm{
+		logger:             logging.NewTracedLogger(),
 		client:             cfg.client,
 		path:               cfg.path,
 		applicationVersion: cfg.applicationVersion,
@@ -133,12 +135,13 @@ func (rlm *Realm) Start() error {
 	}
 
 	go func() {
+		ctx := rlm.logger.WithContext(context.Background())
 		ticker := time.NewTicker(rlm.pollingInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-rlm.stopCh:
-				log.Info().Msg("shutting down realm")
+				rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
 				return
 			case <-ticker.C:
 				if chamber, err := rlm.retrieveChamber(rlm.path); err == nil {
@@ -157,30 +160,32 @@ func (rlm *Realm) Stop() {
 }
 
 func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
+	logger := rlm.logger
+	ctx := logger.WithContext(context.Background())
 	client := rlm.client
 
-	res, err := client.PerformRequest(context.Background(), "GET", strings.TrimPrefix(path, "/"), nil)
+	res, err := client.PerformRequest(ctx, "GET", strings.TrimPrefix(path, "/"), nil)
 	if err != nil {
-		log.Error().Msg(fmt.Sprintf("could not perform request for getting: %q, %s", path, err.Error()))
+		logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not perform request for getting: %q, %s", path, err.Error()))
 		return nil, err
 	}
 	defer res.Body.Close()
 
 	var httpRes api.HTTPErrorAndDataResponse
 	if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-		log.Error().Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for getting: %q", path))
+		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for getting: %q", path))
 		return nil, err
 	}
 
 	if len(httpRes.Errors) > 0 {
-		log.Error().Msg(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
+		logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
 		return nil, fmt.Errorf("%s", httpRes.Errors)
 	}
 
 	var c Chamber
 	err = json.Unmarshal(httpRes.Data, &c)
 	if err != nil {
-		log.Error().Str("error", err.Error()).Msg(fmt.Sprintf("could not unmarshal chamber from response for getting: %q", path))
+		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not unmarshal chamber from response for getting: %q", path))
 		return nil, err
 	}
 

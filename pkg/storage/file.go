@@ -11,7 +11,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/rs/zerolog/log"
+	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -48,7 +48,8 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	f.RLock()
 	defer f.RUnlock()
 
-	log.Debug().Str("logicalPath", logicalPath).Msg("get operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -91,7 +92,8 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	f.Lock()
 	defer f.Unlock()
 
-	log.Debug().Str("logicalPath", e.Key).Msg("put operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError(err)
@@ -130,7 +132,8 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	f.Lock()
 	defer f.Unlock()
 
-	log.Debug().Str("logicalPath", logicalPath).Msg("delete operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -163,7 +166,8 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	f.RLock()
 	defer f.RUnlock()
 
-	log.Debug().Str("prefix", prefix).Msg("list operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError(err)

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog/log"
+	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
@@ -27,6 +27,7 @@ type HttpClientConfig struct {
 }
 
 type HttpClient struct {
+	logger     *logging.TracedLogger
 	underlying *http.Client
 	address    *url.URL
 	tracer     trace.Tracer
@@ -56,21 +57,26 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 }
 
 func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
-	log.Debug().Str("method", method).Str("path", path).Msg("creating a new request")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("method", method).Str("path", path).Msg("creating a new request")
 	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
 }
 
 func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
-	log.Debug().Str("method", r.Method).Str("path", r.URL.Path).Str("host", r.URL.Host).Msg("executing request")
-	ctx, span := c.tracer.Start(r.Context(), "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
+	ctx := r.Context()
+	ctx, span := c.tracer.Start(ctx, "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
 	defer span.End()
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path).Str("host", r.URL.Host).Msg("executing request")
 
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))
 	return c.underlying.Do(r)
 }
 
 func (c *HttpClient) PerformRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Response, error) {
-	log.Debug().Str("method", method).Str("path", path).Msg("performing a new request")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("method", method).Str("path", path).Msg("performing a new request")
 	req, err := c.NewRequest(ctx, method, path, body)
 	if err != nil {
 		return nil, err

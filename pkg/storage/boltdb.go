@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/boltdb/bolt"
-	"github.com/rs/zerolog/log"
+	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -57,7 +57,8 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	ctx, span := b.tracer.Start(ctx, "BoltStorage Get", trace.WithAttributes(attribute.String("realm.bolt.logicalPath", logicalPath)))
 	defer span.End()
 
-	log.Debug().Str("logicalPath", logicalPath).Msg("get operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -96,7 +97,8 @@ func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
 	ctx, span := b.tracer.Start(ctx, "BoltStorage Put", trace.WithAttributes(attribute.String("realm.bolt.entry.key", e.Key)))
 	defer span.End()
 
-	log.Debug().Str("logicalPath", e.Key).Msg("put operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError(err)
@@ -129,7 +131,8 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 	ctx, span := b.tracer.Start(ctx, "BoltStorage Delete", trace.WithAttributes(attribute.String("realm.bolt.logicalPath", logicalPath)))
 	defer span.End()
 
-	log.Debug().Str("logicalPath", logicalPath).Msg("delete operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -163,7 +166,8 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	ctx, span := b.tracer.Start(ctx, "BoltStorage List", trace.WithAttributes(attribute.String("realm.bolt.prefix", prefix)))
 	defer span.End()
 
-	log.Debug().Str("prefix", prefix).Msg("list operation")
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError(err)

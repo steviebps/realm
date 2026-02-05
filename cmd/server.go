@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
+	"github.com/steviebps/realm/helper/logging"
 	realmhttp "github.com/steviebps/realm/http"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
@@ -29,16 +29,17 @@ var serverCmd = &cobra.Command{
 		ctx := cmd.Context()
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")
+		logger := logging.Ctx(ctx)
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
-			log.Error().Msg(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
 		devMode, _ := flags.GetBool("dev")
 		if !devMode && configPath == "" {
-			log.Error().Msg("config must be specified")
+			logger.ErrorCtx(ctx).Msg("config must be specified")
 			os.Exit(1)
 		}
 		var realmConfig RealmConfig
@@ -48,7 +49,7 @@ var serverCmd = &cobra.Command{
 		} else {
 			realmConfig, err = parseConfig(configPath)
 			if err != nil {
-				log.Error().Msg(err.Error())
+				logger.ErrorCtx(ctx).Msg(err.Error())
 				os.Exit(1)
 			}
 		}
@@ -57,7 +58,7 @@ var serverCmd = &cobra.Command{
 
 		portStr, err := flags.GetString("port")
 		if err != nil {
-			log.Error().Msg(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
@@ -67,7 +68,7 @@ var serverCmd = &cobra.Command{
 
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
-			log.Error().Msg(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 		certFile := serverConfig.CertFile
@@ -77,15 +78,15 @@ var serverCmd = &cobra.Command{
 		certFileEmpty := certFile == ""
 		keyFileEmpty := keyFile == ""
 		if certFileEmpty != keyFileEmpty {
-			log.Error().Msg("certFile must be used in conjuction with keyFile")
+			logger.ErrorCtx(ctx).Msg("certFile must be used in conjuction with keyFile")
 			os.Exit(1)
 		}
 
-		log.Info().Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
+		logger.Info().Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
 
 		strgCreator, exists := storage.StorageOptions[storageType]
 		if !exists {
-			log.Error().Msg(fmt.Sprintf("storage type %q does not exist", storageType))
+			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("storage type %q does not exist", storageType))
 			os.Exit(1)
 		}
 
@@ -94,43 +95,43 @@ var serverCmd = &cobra.Command{
 			options = append(options, k, v)
 		}
 		if len(options) > 0 {
-			log.Debug().Any("options", options).Msg("storage options")
+			logger.DebugCtx(ctx).Any("options", options).Msg("storage options")
 		}
 
 		stg, err := strgCreator(serverConfig.StorageOptions)
 		if err != nil {
-			log.Error().Msg(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
 		if serverConfig.Inheritable {
 			stg, err = storage.NewInheritableStorage(stg)
 			if err != nil {
-				log.Error().Msg(err.Error())
+				logger.ErrorCtx(ctx).Msg(err.Error())
 				os.Exit(1)
 			}
 		}
 
 		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout})
 		if err != nil {
-			log.Error().Msg(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
 		server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: handler}
 
 		go func() {
-			log.Info().Msg(fmt.Sprintf("Listening on port %s", portStr))
+			logger.InfoCtx(ctx).Msg(fmt.Sprintf("Listening on port %s", portStr))
 			if certFileEmpty {
 				if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-					log.Error().Msg(err.Error())
+					logger.ErrorCtx(ctx).Msg(err.Error())
 					os.Exit(1)
 				}
 				return
 			}
 
 			if err := server.ListenAndServeTLS(certFile, keyFile); !errors.Is(err, http.ErrServerClosed) {
-				log.Error().Msg(err.Error())
+				logger.ErrorCtx(ctx).Msg(err.Error())
 				os.Exit(1)
 			}
 		}()
@@ -140,7 +141,7 @@ var serverCmd = &cobra.Command{
 		<-sigChan
 
 		if err := server.Shutdown(ctx); err != nil {
-			log.Error().Msg(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 	},

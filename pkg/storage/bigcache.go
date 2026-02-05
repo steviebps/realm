@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/allegro/bigcache/v3"
-	"github.com/rs/zerolog/log"
+	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -94,7 +94,9 @@ func NewBigCacheStorage(config map[string]string) (Storage, error) {
 func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Get", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
 	defer span.End()
-	log.Debug().Str("logicalPath", logicalPath).Msg("get operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -124,7 +126,9 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Put", trace.WithAttributes(attribute.String("realm.bigcache.entry.key", e.Key)))
 	defer span.End()
-	log.Debug().Str("logicalPath", e.Key).Msg("put operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError(err)
@@ -145,7 +149,9 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Delete", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
 	defer span.End()
-	log.Debug().Str("logicalPath", logicalPath).Msg("delete operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -166,7 +172,9 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage List", trace.WithAttributes(attribute.String("realm.bigcache.prefix", prefix)))
 	defer span.End()
-	log.Debug().Str("prefix", prefix).Msg("list operation")
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError(err)
