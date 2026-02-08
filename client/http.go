@@ -27,7 +27,6 @@ type HttpClientConfig struct {
 }
 
 type HttpClient struct {
-	logger     *logging.TracedLogger
 	underlying *http.Client
 	address    *url.URL
 	tracer     trace.Tracer
@@ -63,8 +62,7 @@ func (c *HttpClient) NewRequest(ctx context.Context, method string, path string,
 }
 
 func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
-	ctx := r.Context()
-	ctx, span := c.tracer.Start(ctx, "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
+	ctx, span := c.tracer.Start(r.Context(), "client Do", trace.WithAttributes(attribute.String("realm.client.path", r.URL.Path), attribute.String("realm.client.method", r.Method), attribute.String("realm.client.host", r.URL.Host)))
 	defer span.End()
 
 	logger := logging.Ctx(ctx)

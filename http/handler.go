@@ -47,17 +47,18 @@ func RealmHandler(rlm *realm.Realm, h http.Handler) http.Handler {
 	})
 }
 
-func NewHandler(config HandlerConfig) (http.Handler, error) {
+func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error) {
 	if config.Storage == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
 	}
 	if config.RequestTimeout == 0 {
 		config.RequestTimeout = DefaultHandlerTimeout
 	}
-	return handle(config), nil
+	return handle(ctx, config), nil
 }
 
-func handle(hc HandlerConfig) http.Handler {
+func handle(ctx context.Context, hc HandlerConfig) http.Handler {
+	logger := logging.Ctx(ctx)
 	mux := http.NewServeMux()
 
 	if uiExists {
@@ -69,7 +70,7 @@ func handle(hc HandlerConfig) http.Handler {
 	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage), "/v1/chambers/"))
 
 	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
-	return wrapCommonHandler(timeoutHandler)
+	return wrapCommonHandler(timeoutHandler, logger)
 }
 
 func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
@@ -82,7 +83,7 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 		cancelFunc()
 	})
 }
-func wrapCommonHandler(h http.Handler) http.Handler {
+func wrapCommonHandler(h http.Handler, logger *logging.TracedLogger) http.Handler {
 	meter := otel.Meter("github.com/steviebps/realm")
 	apiCounter, _ := meter.Int64Counter(
 		"handler.counter",
@@ -91,7 +92,6 @@ func wrapCommonHandler(h http.Handler) http.Handler {
 	)
 
 	hostname, _ := os.Hostname()
-	logger := logging.NewTracedLogger()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(logger.WithContext(r.Context()))
 		apiCounter.Add(r.Context(), 1)
