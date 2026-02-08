@@ -82,7 +82,7 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		logger.Info().Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
+		logger.InfoCtx(ctx).Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
 
 		strgCreator, exists := storage.StorageOptions[storageType]
 		if !exists {
@@ -112,7 +112,7 @@ var serverCmd = &cobra.Command{
 			}
 		}
 
-		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout})
+		handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout})
 		if err != nil {
 			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
