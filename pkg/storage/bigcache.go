@@ -208,6 +208,10 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 	return names, nil
 }
 
+func (f *BigCacheStorage) Close(ctx context.Context) error {
+	return f.underlying.Close()
+}
+
 func (f *BigCacheStorage) expandPath(k string) (string, string) {
 	key := filepath.Base(k)
 	path := filepath.Dir(k)

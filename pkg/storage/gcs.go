@@ -212,6 +212,10 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 	return keys, nil
 }
 
+func (s *GCSStorage) Close(ctx context.Context) error {
+	return s.client.Close()
+}
+
 func (s *GCSStorage) expandPath(k string) (string, string) {
 	key := path.Base(k)
 	p := path.Dir(k)

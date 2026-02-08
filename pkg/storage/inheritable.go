@@ -185,6 +185,10 @@ func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string,
 	return names, nil
 }
 
+func (s *InheritableStorage) Close(ctx context.Context) error {
+	return s.source.Close(ctx)
+}
+
 func inheritWith(base *realm.Chamber, inheritedFrom *realm.Chamber) {
 	for key := range inheritedFrom.Rules {
 		if _, ok := base.Rules[key]; !ok {

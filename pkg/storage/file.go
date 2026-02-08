@@ -223,6 +223,10 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	return names, nil
 }
 
+func (f *FileStorage) Close(ctx context.Context) error {
+	return nil
+}
+
 func (f *FileStorage) expandPath(k string) (string, string) {
 	path := filepath.Join(f.path, k)
 	key := filepath.Base(path)

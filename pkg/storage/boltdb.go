@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 
-	"github.com/boltdb/bolt"
 	"github.com/steviebps/realm/helper/logging"
+	bolt "go.etcd.io/bbolt"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -65,7 +65,7 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 		return nil, err
 	}
 
-	path := filepath.Clean(logicalPath)
+	path := path.Clean(logicalPath)
 
 	var file []byte
 	err := b.db.View(func(tx *bolt.Tx) error {
@@ -105,7 +105,7 @@ func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
 		return err
 	}
 
-	path := filepath.Clean(e.Key)
+	path := path.Clean(e.Key)
 
 	select {
 	case <-ctx.Done():
@@ -139,7 +139,7 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 		return err
 	}
 
-	path := filepath.Clean(logicalPath)
+	path := path.Clean(logicalPath)
 
 	select {
 	case <-ctx.Done():
@@ -174,7 +174,7 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 		return nil, err
 	}
 
-	path := filepath.Clean(prefix)
+	path := path.Clean(prefix)
 	if !strings.HasSuffix(path, "/") {
 		path += "/"
 	}
@@ -209,4 +209,8 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	return names, nil
+}
+
+func (b *BoltStorage) Close(ctx context.Context) error {
+	return b.db.Close()
 }

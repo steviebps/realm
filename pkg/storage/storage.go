@@ -22,6 +22,8 @@ type Storage interface {
 	Delete(ctx context.Context, key string) error
 	// List returns a slice of paths at the specified prefix
 	List(ctx context.Context, prefix string) ([]string, error)
+	// Close releases any resources held by the storage backend
+	Close(ctx context.Context) error
 }
 
 // StorageCreator is a factory function to be used for all storage types

@@ -29,6 +29,10 @@ func (f *testStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (f *testStorage) Close(ctx context.Context) error {
+	return nil
+}
+
 func TestInheritWith(t *testing.T) {
 	bottom := &realm.Chamber{
 		Rules: map[string]*realm.OverrideableRule{
