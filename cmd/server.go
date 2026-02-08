@@ -103,6 +103,7 @@ var serverCmd = &cobra.Command{
 			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
+		defer stg.Close(ctx)
 
 		if serverConfig.Inheritable {
 			stg, err = storage.NewInheritableStorage(stg)

@@ -6,10 +6,10 @@ require (
 	cloud.google.com/go/storage v1.59.2
 	github.com/NYTimes/gziphandler v1.1.1
 	github.com/allegro/bigcache/v3 v3.1.0
-	github.com/boltdb/bolt v1.3.1
 	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.34.0
 	github.com/spf13/cobra v1.10.2
+	go.etcd.io/bbolt v1.4.3
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0
 	go.opentelemetry.io/otel v1.40.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.40.0

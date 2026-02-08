@@ -149,3 +149,10 @@ func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, e
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 	return c.source.List(ctx, prefix)
 }
+
+func (c *CacheableStorage) Close(ctx context.Context) error {
+	if err := c.cache.Close(ctx); err != nil {
+		return err
+	}
+	return c.source.Close(ctx)
+}
