@@ -73,7 +73,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	defer span.End()
 
 	logger := logging.Ctx(ctx)
-	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msgf("get operation with cache layer %T", c.cache)
 
 	entry, err := c.cache.Get(ctx, logicalPath)
 	if err != nil {
@@ -82,16 +82,18 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		// cache layer is expected to have missing records so let's only log other errors
 		if errors.As(err, &nfError) {
 			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache miss")
+			span.AddEvent("realm.cacheable.cacheMiss")
 		} else {
 			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache error")
 		}
 	}
 
 	if entry != nil {
+		span.AddEvent("realm.cacheable.cacheHit")
 		return entry, err
 	}
 
-	span.SetAttributes(attribute.Bool("realm.cacheable.cacheMiss", true))
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msgf("get operation with source layer: %T", c.source)
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
 		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
@@ -100,7 +102,17 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	}
 
 	if entry != nil {
-		c.cache.Put(ctx, *entry)
+		logger.DebugCtx(ctx).Str("entry.Key", entry.Key).Msgf("value exists in source, inserting value into cache layer")
+		err := c.cache.Put(ctx, *entry)
+
+		// if cache put fails, we log the error but do not return as value has been successfully retrieved from source
+		if err != nil {
+			span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
+			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("failed to write to cache")
+		} else {
+			span.AddEvent("realm.cacheable.cacheWrite")
+		}
+
 	}
 
 	return entry, nil

@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steviebps/realm/helper/logging"
 	realmtrace "github.com/steviebps/realm/trace"
-	"go.opentelemetry.io/otel"
 )
 
 // Version the version of realm
@@ -39,16 +38,13 @@ func init() {
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	ctx := context.Background()
-	tracer := otel.Tracer("github.com/steviebps/realm")
-	ctx, _ = tracer.Start(ctx, "realm")
-
 	logger := logging.NewTracedLogger()
-	ctx = logger.WithContext(ctx)
+	ctx := logger.WithContext(context.Background())
+
 	err := rootCmd.ExecuteContext(ctx)
 
 	if shutdownFn != nil {
-		if shutdownErr := shutdownFn(context.Background()); shutdownErr != nil {
+		if shutdownErr := shutdownFn(ctx); shutdownErr != nil {
 			fmt.Printf("failed to shutdown TracerProvider: %s\n", shutdownErr)
 		}
 	}
@@ -62,12 +58,12 @@ func Execute() {
 func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	var err error
 	ctx := cmd.Context()
+	logger := logging.Ctx(ctx)
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
 	stdoutTraces, _ := flags.GetBool("stdouttraces")
 	noTraces, _ := flags.GetBool("notraces")
 
-	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
@@ -80,6 +76,7 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
+	logger.DebugCtx(ctx).Msgf("realm version: %s", Version)
 
 	return nil
 }

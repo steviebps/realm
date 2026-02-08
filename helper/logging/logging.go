@@ -14,7 +14,10 @@ type contextKey struct {
 }
 
 var (
+	// loggerContextKey is the context key used to store the logger in the context
 	loggerContextKey = &contextKey{"realm-logger"}
+	// nopLogger is a no-op logger used when no logger is found in the context
+	nopLogger = &TracedLogger{Logger: zerolog.Nop()}
 )
 
 // TracedLogger wraps zerolog.Logger with context-aware methods
@@ -87,5 +90,5 @@ func Ctx(ctx context.Context) *TracedLogger {
 	if l, ok := ctx.Value(loggerContextKey).(*TracedLogger); ok {
 		return l
 	}
-	return nil
+	return nopLogger
 }
