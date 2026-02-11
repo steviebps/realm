@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,8 +9,8 @@ import (
 	"strconv"
 	"syscall"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
+	"github.com/steviebps/realm/helper/logging"
 	realmhttp "github.com/steviebps/realm/http"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
@@ -27,20 +26,20 @@ var serverCmd = &cobra.Command{
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
-		ctx := context.Background()
-		logger := hclog.Default().Named("realm.server")
+		ctx := cmd.Context()
 		flags := cmd.Flags()
 		debug, _ := flags.GetBool("debug")
+		logger := logging.Ctx(ctx)
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
-			logger.Error(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
 		devMode, _ := flags.GetBool("dev")
 		if !devMode && configPath == "" {
-			logger.Error("config must be specified")
+			logger.ErrorCtx(ctx).Msg("config must be specified")
 			os.Exit(1)
 		}
 		var realmConfig RealmConfig
@@ -50,7 +49,7 @@ var serverCmd = &cobra.Command{
 		} else {
 			realmConfig, err = parseConfig(configPath)
 			if err != nil {
-				logger.Error(err.Error())
+				logger.ErrorCtx(ctx).Msg(err.Error())
 				os.Exit(1)
 			}
 		}
@@ -59,7 +58,7 @@ var serverCmd = &cobra.Command{
 
 		portStr, err := flags.GetString("port")
 		if err != nil {
-			logger.Error(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
@@ -69,7 +68,7 @@ var serverCmd = &cobra.Command{
 
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
-			logger.Error(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 		certFile := serverConfig.CertFile
@@ -79,15 +78,15 @@ var serverCmd = &cobra.Command{
 		certFileEmpty := certFile == ""
 		keyFileEmpty := keyFile == ""
 		if certFileEmpty != keyFileEmpty {
-			logger.Error("certFile must be used in conjuction with keyFile")
+			logger.ErrorCtx(ctx).Msg("certFile must be used in conjuction with keyFile")
 			os.Exit(1)
 		}
 
-		logger.Info("Server options", "port", portStr, "certFile", certFile, "keyFile", keyFile, "storage", storageType, "inheritable", serverConfig.Inheritable, "debug", debug)
+		logger.InfoCtx(ctx).Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
 
 		strgCreator, exists := storage.StorageOptions[storageType]
 		if !exists {
-			logger.Error(fmt.Sprintf("storage type %q does not exist", storageType))
+			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("storage type %q does not exist", storageType))
 			os.Exit(1)
 		}
 
@@ -96,43 +95,44 @@ var serverCmd = &cobra.Command{
 			options = append(options, k, v)
 		}
 		if len(options) > 0 {
-			logger.Debug("Storage options", options...)
+			logger.DebugCtx(ctx).Any("options", options).Msg("storage options")
 		}
 
 		stg, err := strgCreator(serverConfig.StorageOptions)
 		if err != nil {
-			logger.Error(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
+		defer stg.Close(ctx)
 
 		if serverConfig.Inheritable {
 			stg, err = storage.NewInheritableStorage(stg)
 			if err != nil {
-				logger.Error(err.Error())
+				logger.ErrorCtx(ctx).Msg(err.Error())
 				os.Exit(1)
 			}
 		}
 
-		handler, err := realmhttp.NewHandler(realmhttp.HandlerConfig{Storage: stg, Logger: logger, RequestTimeout: realmhttp.DefaultHandlerTimeout})
+		handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout})
 		if err != nil {
-			logger.Error(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 
 		server := &http.Server{Addr: fmt.Sprintf(":%d", port), Handler: handler}
 
 		go func() {
-			logger.Info("Listening on", "port", portStr)
+			logger.InfoCtx(ctx).Msg(fmt.Sprintf("Listening on port %s", portStr))
 			if certFileEmpty {
 				if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
-					logger.Error(err.Error())
+					logger.ErrorCtx(ctx).Msg(err.Error())
 					os.Exit(1)
 				}
 				return
 			}
 
 			if err := server.ListenAndServeTLS(certFile, keyFile); !errors.Is(err, http.ErrServerClosed) {
-				logger.Error(err.Error())
+				logger.ErrorCtx(ctx).Msg(err.Error())
 				os.Exit(1)
 			}
 		}()
@@ -142,7 +142,7 @@ var serverCmd = &cobra.Command{
 		<-sigChan
 
 		if err := server.Shutdown(ctx); err != nil {
-			logger.Error(err.Error())
+			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
 		}
 	},

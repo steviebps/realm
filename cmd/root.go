@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"github.com/steviebps/realm/helper/logging"
 	realmtrace "github.com/steviebps/realm/trace"
 )
 
@@ -19,8 +19,7 @@ var rootCmd = &cobra.Command{
 	Use:               "realm",
 	Short:             "Local and remote configuration management",
 	Long:              `CLI for managing application configuration of local and remote JSON files`,
-	PersistentPreRun:  persistentPreRun,
-	PersistentPostRun: persistentPostRun,
+	PersistentPreRunE: persistentPreRunE,
 	DisableAutoGenTag: true,
 	Version:           Version,
 	CompletionOptions: cobra.CompletionOptions{DisableDefaultCmd: true},
@@ -33,57 +32,51 @@ func init() {
 	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
 	rootCmd.PersistentFlags().Bool("stdouttraces", false, "use stdout for trace exporter")
+	rootCmd.PersistentFlags().Bool("notraces", false, "disable tracing")
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Printf("Error while starting realm: %v\n", err)
+	logger := logging.NewTracedLogger()
+	ctx := logger.WithContext(context.Background())
+
+	err := rootCmd.ExecuteContext(ctx)
+
+	if shutdownFn != nil {
+		if shutdownErr := shutdownFn(ctx); shutdownErr != nil {
+			fmt.Printf("failed to shutdown TracerProvider: %s\n", shutdownErr)
+		}
+	}
+
+	if err != nil {
 		os.Exit(1)
 	}
 }
 
 // sets up the config for all sub-commands
-func persistentPreRun(cmd *cobra.Command, args []string) {
+func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	var err error
 	ctx := cmd.Context()
+	logger := logging.Ctx(ctx)
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
 	stdoutTraces, _ := flags.GetBool("stdouttraces")
+	noTraces, _ := flags.GetBool("notraces")
 
-	level := hclog.Info
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if debug {
-		level = hclog.Debug
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-
-	logger := hclog.New(&hclog.LoggerOptions{
-		Name:                 "realm",
-		Level:                level,
-		Output:               cmd.OutOrStderr(),
-		TimeFn:               time.Now,
-		ColorHeaderAndFields: true,
-		Color:                hclog.AutoColor,
-	})
-
-	hclog.SetDefault(logger)
 
 	devMode, _ := flags.GetBool("dev")
-	if !devMode {
+	if !devMode && !noTraces {
 		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces)
 		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+			return err
 		}
 	}
-}
+	logger.DebugCtx(ctx).Msgf("realm version: %s", Version)
 
-func persistentPostRun(cmd *cobra.Command, args []string) {
-	if shutdownFn == nil {
-		return
-	}
-
-	if err := shutdownFn(context.Background()); err != nil {
-		fmt.Printf("failed to shutdown TracerProvider: %s\n", err)
-	}
+	return nil
 }

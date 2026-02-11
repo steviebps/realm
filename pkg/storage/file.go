@@ -5,11 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
+	"sync"
 
-	"github.com/hashicorp/go-hclog"
+	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -17,6 +19,7 @@ import (
 )
 
 type FileStorage struct {
+	sync.RWMutex
 	path   string
 	tracer trace.Tracer
 }
@@ -24,6 +27,8 @@ type FileStorage struct {
 var (
 	_ Storage = (*FileStorage)(nil)
 )
+
+const fileEntryKey string = "entry.json"
 
 func NewFileStorage(conf map[string]string) (Storage, error) {
 	if conf["path"] == "" {
@@ -37,17 +42,21 @@ func NewFileStorage(conf map[string]string) (Storage, error) {
 }
 
 func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage Get", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("get operation", "logicalPath", logicalPath)
+
+	f.RLock()
+	defer f.RUnlock()
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
 		return nil, err
 	}
 
-	path, key := f.expandPath(logicalPath + "entry")
+	path, key := f.expandPath(logicalPath + fileEntryKey)
 	file, err := os.OpenFile(filepath.Join(path, key), os.O_RDONLY, 0600)
 	if file != nil {
 		defer file.Close()
@@ -77,16 +86,20 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 }
 
 func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
-	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage Put", trace.WithAttributes(attribute.String("realm.file.entry.key", e.Key)))
 	defer span.End()
-	logger.Debug("put operation", "logicalPath", e.Key)
+
+	f.Lock()
+	defer f.Unlock()
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError(err)
 		return err
 	}
-	path, key := f.expandPath(e.Key + "entry")
+	path, key := f.expandPath(e.Key + fileEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -113,16 +126,20 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
-	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage Delete", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("delete operation", "logicalPath", logicalPath)
+
+	f.Lock()
+	defer f.Unlock()
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
 		return err
 	}
-	path, key := f.expandPath(logicalPath + "entry")
+	path, key := f.expandPath(logicalPath + fileEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -143,10 +160,14 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 }
 
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("file")
 	ctx, span := f.tracer.Start(ctx, "FileStorage List", trace.WithAttributes(attribute.String("realm.file.prefix", prefix)))
 	defer span.End()
-	logger.Debug("list operation", "prefix", prefix)
+
+	f.RLock()
+	defer f.RUnlock()
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError(err)
@@ -163,6 +184,9 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		defer file.Close()
 	}
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
 		span.RecordError(err)
 		return nil, err
 	}
@@ -193,10 +217,14 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	if len(names) > 0 {
-		sort.Strings(names)
+		slices.Sort(names)
 	}
 
 	return names, nil
+}
+
+func (f *FileStorage) Close(ctx context.Context) error {
+	return nil
 }
 
 func (f *FileStorage) expandPath(k string) (string, string) {

@@ -1,25 +1,28 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"strings"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/spf13/cobra"
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
+	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
 )
 
-// client represents the client command
+// clientGet represents the client get command
 var clientGet = &cobra.Command{
-	Use:   "get [path]",
-	Short: "get a chamber",
-	Long:  "get retrieves the chamber at the specified path",
+	Use:          "get [path]",
+	Short:        "get a chamber",
+	Long:         "get retrieves the chamber at the specified path",
+	SilenceUsage: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
+			cmd.SilenceUsage = false
 			return err
 		}
 		if err := storage.ValidatePath(args[0]); err != nil {
@@ -28,64 +31,70 @@ var clientGet = &cobra.Command{
 
 		return nil
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		tracer := otel.Tracer("github.com/steviebps/realm")
+		ctx, span := tracer.Start(cmd.Context(), "cmd client get")
+		defer span.End()
+		logger := logging.Ctx(ctx)
+
 		var err error
-		logger := hclog.Default().Named("realm.client")
 		flags := cmd.Flags()
 
 		configPath, err := flags.GetString("config")
 		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+			logger.ErrorCtx(ctx).Msg(err.Error())
+			return err
 		}
 
 		var realmConfig RealmConfig
 		if configPath != "" {
 			realmConfig, err = parseConfig(configPath)
 			if err != nil {
-				logger.Error(err.Error())
-				os.Exit(1)
+				logger.ErrorCtx(ctx).Msg(err.Error())
+				return err
 			}
 		}
 
 		addr, _ := cmd.Flags().GetString("address")
 		if addr == "" {
 			if realmConfig.Client.Address == "" {
-				logger.Error("must specify an address for the realm server")
-				os.Exit(1)
+				err = errors.New("must specify an address for the realm server")
+				logger.ErrorCtx(ctx).Msg(err.Error())
+				return err
 			}
 			addr = realmConfig.Client.Address
 		}
 
-		c, err := client.NewClient(&client.ClientConfig{Address: addr, Logger: logger})
+		c, err := client.NewHttpClient(&client.HttpClientConfig{Address: addr})
 		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+			logger.ErrorCtx(ctx).Msg(err.Error())
+			return err
 		}
 
-		res, err := c.PerformRequest("GET", strings.TrimPrefix(args[0], "/"), nil)
+		res, err := c.PerformRequest(ctx, "GET", strings.TrimPrefix(args[0], "/"), nil)
 		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+			logger.ErrorCtx(ctx).Msg(err.Error())
+			return err
 		}
 		defer res.Body.Close()
 
 		var httpRes api.HTTPErrorAndDataResponse
 		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-			logger.Error(fmt.Sprintf("could not read response for getting: %q", args[0]), "error", err.Error())
-			os.Exit(1)
+			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for getting: %q", args[0]))
+			return err
 		}
 
 		if len(httpRes.Errors) > 0 {
-			logger.Error(fmt.Sprintf("could not get %q: %s", args[0], httpRes.Errors))
-			os.Exit(1)
+			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not get %q: %s", args[0], httpRes.Errors))
+			return errors.New(strings.Join(httpRes.Errors, "; "))
 		}
 
 		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)
 		if err != nil {
-			logger.Error(err.Error())
-			os.Exit(1)
+			logger.ErrorCtx(ctx).Msg(err.Error())
+			return err
 		}
+		return nil
 	},
 }
 

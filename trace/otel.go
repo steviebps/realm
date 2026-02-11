@@ -2,20 +2,28 @@ package trace
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 )
 
-func newHttpExporter(ctx context.Context) (trace.SpanExporter, error) {
-	return otlptracehttp.New(ctx, otlptracehttp.WithInsecure())
+func newHttpTraceExporter(ctx context.Context) (trace.SpanExporter, error) {
+	return otlptracehttp.New(ctx)
+}
+
+func newHttpMetricExporter(ctx context.Context) (metric.Exporter, error) {
+	return otlpmetrichttp.New(ctx)
 }
 
 func newStdOutExporter() (trace.SpanExporter, error) {
@@ -24,27 +32,61 @@ func newStdOutExporter() (trace.SpanExporter, error) {
 }
 
 func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx context.Context) error, error) {
-	var exp trace.SpanExporter
+	var shutdownFuncs []func(context.Context) error
 	var err error
+
+	shutdown := func(ctx context.Context) error {
+		var err error
+		for _, fn := range shutdownFuncs {
+			err = errors.Join(err, fn(ctx))
+		}
+		shutdownFuncs = nil
+		return err
+	}
+
+	var exp trace.SpanExporter
+
 	if withStdOut {
 		exp, err = newStdOutExporter()
 	} else {
-		exp, err = newHttpExporter(ctx)
+		exp, err = newHttpTraceExporter(ctx)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("creating exporter: %w", err)
+	}
+	hostname, _ := os.Hostname()
+	res, err := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceName("realm"),
+			semconv.HostName(hostname),
+		),
+	)
+	if err != nil {
+		return nil, err
 	}
 
 	prop := newPropagator()
 	otel.SetTextMapPropagator(prop)
 
-	tp, err := newTraceProvider(exp)
+	tp, err := newTraceProvider(exp, res)
 	if err != nil {
-		return nil, fmt.Errorf("creating trace provider: %w", err)
+		return shutdown, fmt.Errorf("creating trace provider: %w", err)
 	}
 
+	shutdownFuncs = append(shutdownFuncs, tp.Shutdown)
 	otel.SetTracerProvider(tp)
-	return tp.Shutdown, nil
+
+	meterProvider, err := newMeterProvider(ctx, res)
+	if err != nil {
+		return shutdown, fmt.Errorf("creating meter provider: %w", err)
+	}
+
+	shutdownFuncs = append(shutdownFuncs, meterProvider.Shutdown)
+	otel.SetMeterProvider(meterProvider)
+
+	return shutdown, nil
 }
 
 func newPropagator() propagation.TextMapPropagator {
@@ -54,23 +96,25 @@ func newPropagator() propagation.TextMapPropagator {
 	)
 }
 
-func newTraceProvider(traceExporter trace.SpanExporter) (*trace.TracerProvider, error) {
-	r, err := resource.Merge(
-		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
-			semconv.ServiceName("realm"),
-		),
+func newTraceProvider(traceExporter trace.SpanExporter, res *resource.Resource) (*trace.TracerProvider, error) {
+	traceProvider := trace.NewTracerProvider(
+		trace.WithBatcher(traceExporter,
+			trace.WithBatchTimeout(5*time.Second)),
+		trace.WithResource(res),
 	)
+	return traceProvider, nil
+}
+
+func newMeterProvider(ctx context.Context, res *resource.Resource) (*metric.MeterProvider, error) {
+	metricExporter, err := newHttpMetricExporter(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	traceProvider := trace.NewTracerProvider(
-		trace.WithBatcher(traceExporter,
-			// Default is 5s. Set to 1s for demonstrative purposes.
-			trace.WithBatchTimeout(5*time.Second)),
-		trace.WithResource(r),
+	meterProvider := metric.NewMeterProvider(
+		metric.WithResource(res),
+		metric.WithReader(metric.NewPeriodicReader(metricExporter,
+			metric.WithInterval(1*time.Minute))),
 	)
-	return traceProvider, nil
+	return meterProvider, nil
 }
