@@ -232,18 +232,18 @@ func handleChambers(strg storage.Storage) http.Handler {
 				span.SetStatus(codes.Error, err.Error())
 				errorLog.Msg(err.Error())
 
-				handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
 			current := realm.Chamber{}
 			if err := json.Unmarshal(entry.Value, &current); err != nil {
-				err = fmt.Errorf("could not patch while retrieving existing chamber: %w", err)
+				err = fmt.Errorf("could not unmarshal current chamber while patching: %w", err)
 
 				span.SetStatus(codes.Error, err.Error())
 				errorLog.Msg(err.Error())
 
-				handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 				return
 			}
 
@@ -268,7 +268,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 				return
 			}
 
-			handleWithStatus(w, http.StatusCreated, nil)
+			handleOk(w, nil)
 			return
 
 		case DeleteOperation:
