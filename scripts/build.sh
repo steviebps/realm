@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -x
 
-go build -ldflags "-s -w" -tags=ui
+cd http/realm-ui &&
 
-./realm server --stdouttraces -c ./configs/realm.json 
+npm i && npm run build &&
+
+cd ../..
+
+go build -ldflags "-s -w" -tags=ui &&
+
+./realm server --notraces -c ./configs/realm.json 2> ./server.log
