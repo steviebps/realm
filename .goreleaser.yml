@@ -44,7 +44,7 @@ homebrew_casks:
       owner: steviebps
       name: homebrew-realm
       branch: main
-    directory: Formula
+    directory: Casks
     url: 
       template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
       using: ":homebrew_curl"
