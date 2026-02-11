@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	gcs "cloud.google.com/go/storage"
@@ -207,7 +207,7 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 
 	}
 
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	return keys, nil
 }

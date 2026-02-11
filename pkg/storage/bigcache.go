@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -202,7 +202,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 	}
 
 	if len(names) > 0 {
-		sort.Strings(names)
+		slices.Sort(names)
 	}
 
 	return names, nil

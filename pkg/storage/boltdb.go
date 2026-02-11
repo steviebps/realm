@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/steviebps/realm/helper/logging"
@@ -178,20 +178,24 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	if !strings.HasSuffix(path, "/") {
 		path += "/"
 	}
-	names := make([]string, 0)
 
+	names := make([]string, 0)
 	b.db.View(func(tx *bolt.Tx) error {
 		// Assume bucket exists and has keys
 		c := tx.Bucket([]byte("chambers")).Cursor()
 
 		cleanPrefix := []byte(path)
+		set := make(map[string]struct{})
 		for k, _ := c.Seek(cleanPrefix); k != nil && bytes.HasPrefix(k, cleanPrefix); k, _ = c.Next() {
-			key := strings.TrimPrefix(string(k), path)
-			before, after, _ := strings.Cut(key, "/")
-			if before != "" && after == "" {
-				names = append(names, key)
+			key := bytes.TrimPrefix(k, cleanPrefix)
+			before, _, _ := bytes.Cut(key, []byte("/"))
+			if len(before) > 0 {
+				set[string(before)] = struct{}{}
 			}
+		}
 
+		for key := range set {
+			names = append(names, string(key))
 		}
 
 		return nil
@@ -205,7 +209,7 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	if len(names) > 0 {
-		sort.Strings(names)
+		slices.Sort(names)
 	}
 
 	return names, nil

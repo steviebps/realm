@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/steviebps/realm/helper/logging"
@@ -217,7 +217,7 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	if len(names) > 0 {
-		sort.Strings(names)
+		slices.Sort(names)
 	}
 
 	return names, nil
