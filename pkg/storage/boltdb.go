@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -27,11 +28,12 @@ var (
 // NewBoltStorage creates a new BoltDB storage backend
 func NewBoltStorage(conf map[string]string) (Storage, error) {
 	var err error
-	if conf["path"] == "" {
+	path := conf["path"]
+	if path == "" {
 		return nil, fmt.Errorf("'path' must be set")
 	}
 
-	db, err := bolt.Open("realm.db", 0600, nil)
+	db, err := bolt.Open(filepath.Join(path, "realm.db"), 0600, nil)
 	if err != nil {
 		return nil, err
 	}
