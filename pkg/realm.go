@@ -13,6 +13,9 @@ import (
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Realm struct {
@@ -25,6 +28,7 @@ type Realm struct {
 	client             *client.HttpClient
 	pollingInterval    time.Duration
 	logger             *logging.TracedLogger
+	tracer             trace.Tracer
 }
 
 type RealmConfig struct {
@@ -111,6 +115,7 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 	}
 
 	return &Realm{
+		tracer:             otel.Tracer("github.com/steviebps/realm"),
 		logger:             logging.NewTracedLogger(),
 		client:             cfg.client,
 		path:               cfg.path,
@@ -123,9 +128,10 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 // Start starts realm and initializes the underlying chamber
 func (rlm *Realm) Start() error {
 	var err error
+	ctx := rlm.logger.WithContext(context.Background())
 	rlm.initSync.Do(func() {
 		var chamber *Chamber
-		if chamber, err = rlm.retrieveChamber(rlm.path); err == nil {
+		if chamber, err = rlm.retrieveChamber(ctx, rlm.path); err == nil {
 			rlm.setChamber(chamber)
 		}
 	})
@@ -135,7 +141,6 @@ func (rlm *Realm) Start() error {
 	}
 
 	go func() {
-		ctx := rlm.logger.WithContext(context.Background())
 		ticker := time.NewTicker(rlm.pollingInterval)
 		defer ticker.Stop()
 		for {
@@ -144,7 +149,7 @@ func (rlm *Realm) Start() error {
 				rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
 				return
 			case <-ticker.C:
-				if chamber, err := rlm.retrieveChamber(rlm.path); err == nil {
+				if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
 					rlm.setChamber(chamber)
 				}
 			}
@@ -159,9 +164,11 @@ func (rlm *Realm) Stop() {
 	close(rlm.stopCh)
 }
 
-func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
+func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, error) {
+	ctx, span := rlm.tracer.Start(ctx, "retrieveChamber", trace.WithAttributes(attribute.String("realm.path", path)))
+	defer span.End()
+
 	logger := rlm.logger
-	ctx := logger.WithContext(context.Background())
 	client := rlm.client
 
 	res, err := client.PerformRequest(ctx, "GET", strings.TrimPrefix(path, "/"), nil)

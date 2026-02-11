@@ -79,12 +79,12 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 				span.RecordError(err)
 				continue
 			}
-			inheritWith(curChamber, c)
+			InheritWith(curChamber, c)
 			c = curChamber
 		}
 
 		// inherit all of the parents
-		inheritWith(leaf, c)
+		InheritWith(leaf, c)
 	}
 
 	select {
@@ -189,7 +189,7 @@ func (s *InheritableStorage) Close(ctx context.Context) error {
 	return s.source.Close(ctx)
 }
 
-func inheritWith(base *realm.Chamber, inheritedFrom *realm.Chamber) {
+func InheritWith(base *realm.Chamber, inheritedFrom *realm.Chamber) {
 	for key := range inheritedFrom.Rules {
 		if _, ok := base.Rules[key]; !ok {
 			base.Rules[key] = inheritedFrom.Rules[key]

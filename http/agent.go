@@ -14,6 +14,7 @@ type Operation string
 
 const (
 	PutOperation    Operation = "put"
+	PatchOperation  Operation = "patch"
 	GetOperation    Operation = "get"
 	DeleteOperation Operation = "delete"
 	ListOperation   Operation = "list"
@@ -42,6 +43,8 @@ func buildAgentRequest(req *http.Request) *AgentRequest {
 		}
 	case http.MethodPost:
 		op = PutOperation
+	case http.MethodPatch:
+		op = PatchOperation
 	case http.MethodDelete:
 		op = DeleteOperation
 	case "LIST":

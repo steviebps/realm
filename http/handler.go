@@ -51,7 +51,7 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 	if config.Storage == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
 	}
-	if config.RequestTimeout == 0 {
+	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = DefaultHandlerTimeout
 	}
 	return handle(ctx, config), nil
@@ -141,6 +141,7 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 
 func handleChambers(strg storage.Storage) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
 		ctx := r.Context()
 		logger := logging.Ctx(ctx)
 		errorLog := logger.ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
@@ -196,6 +197,71 @@ func handleChambers(strg storage.Storage) http.Handler {
 			// store the entry if the format is correct
 			entry := storage.StorageEntry{Key: req.Path, Value: b}
 			if err := strg.Put(ctx, entry); err != nil {
+				span.SetStatus(codes.Error, err.Error())
+				errorLog.Msg(err.Error())
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				return
+			}
+
+			handleWithStatus(w, http.StatusCreated, nil)
+			return
+
+		case PatchOperation:
+			var c realm.Chamber
+
+			// ensure data is in correct format
+			if err := utils.ReadInterfaceWith(r.Body, &c); err != nil {
+				span.SetStatus(codes.Error, err.Error())
+				errorLog.Msg(err.Error())
+				if errors.Is(err, io.EOF) {
+					err = errors.New("request body must not be empty")
+				} else {
+					err = errors.New(http.StatusText(http.StatusBadRequest))
+				}
+				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
+				return
+			}
+
+			entry, err := strg.Get(ctx, req.Path)
+			if err != nil {
+				var nfError *storage.NotFoundError
+				if errors.As(err, &nfError) {
+					err = fmt.Errorf("cannot patch a resource that does not exist: %w", err)
+				}
+
+				span.SetStatus(codes.Error, err.Error())
+				errorLog.Msg(err.Error())
+
+				handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
+				return
+			}
+
+			current := realm.Chamber{}
+			if err := json.Unmarshal(entry.Value, &current); err != nil {
+				err = fmt.Errorf("could not patch while retrieving existing chamber: %w", err)
+
+				span.SetStatus(codes.Error, err.Error())
+				errorLog.Msg(err.Error())
+
+				handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
+				return
+			}
+
+			storage.InheritWith(&current, &c)
+			b, err := json.Marshal(&current)
+			if err != nil {
+				err = fmt.Errorf("could not patch while merging chambers: %w", err)
+
+				span.SetStatus(codes.Error, err.Error())
+				errorLog.Msg(err.Error())
+
+				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				return
+			}
+
+			// store the entry if the format is correct
+			patchEntry := storage.StorageEntry{Key: req.Path, Value: b}
+			if err := strg.Put(ctx, patchEntry); err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				errorLog.Msg(err.Error())
 				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))

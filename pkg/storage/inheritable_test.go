@@ -65,8 +65,8 @@ func TestInheritWith(t *testing.T) {
 		},
 	}
 
-	inheritWith(middle, top)
-	inheritWith(bottom, middle)
+	InheritWith(middle, top)
+	InheritWith(bottom, middle)
 
 	v1 := top.Rules["rule1"]
 	v2 := middle.Rules["rule1"]
