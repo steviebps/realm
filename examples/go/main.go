@@ -15,6 +15,7 @@ import (
 	"github.com/steviebps/realm/client"
 	realmhttp "github.com/steviebps/realm/http"
 	realm "github.com/steviebps/realm/pkg"
+	realmtrace "github.com/steviebps/realm/trace"
 )
 
 type CustomStruct struct {
@@ -23,13 +24,16 @@ type CustomStruct struct {
 
 func main() {
 	var err error
+	ctx := context.Background()
+	shutdownFn, err := realmtrace.SetupOtelInstrumentation(ctx, false)
+	defer shutdownFn(ctx)
 
-	client, err := client.NewClient(&client.ClientConfig{Address: "http://localhost:8080"})
+	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080"})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	rlm, err := realm.NewRealm(realm.WithClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("root"), realm.WithRefreshInterval(1*time.Minute))
+	rlm, err := realm.NewRealm(realm.WithHttpClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("/a new thing"), realm.WithPollingInterval(1*time.Minute))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -38,7 +42,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	bootCtx := rlm.NewContext(context.Background())
+	bootCtx := rlm.NewContext(ctx)
 	port, _ := rlm.Float64(bootCtx, "port", 3000)
 
 	mux := http.NewServeMux()

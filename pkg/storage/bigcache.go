@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/allegro/bigcache/v3"
-	"github.com/hashicorp/go-hclog"
+	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -26,13 +26,19 @@ var (
 	_ Storage = (*BigCacheStorage)(nil)
 )
 
-const bigCacheEntryKey string = "bc"
+const (
+	bigCacheEntryKey           string        = "bc"
+	DefaultBigCacheShards      int           = 1024
+	DefaultBigCacheLifeWindow  time.Duration = 5 * time.Minute
+	DefaultBigCacheCleanWindow time.Duration = 5 * time.Second
+)
 
+// NewBigCacheStorage creates a new BigCache storage backend
 func NewBigCacheStorage(config map[string]string) (Storage, error) {
 	// defaults
-	var shards int = 64
-	lifeWindow := int64(2 * time.Minute)
-	cleanWindow := int64(1 * time.Minute)
+	shards := DefaultBigCacheShards
+	lifeWindow := DefaultBigCacheLifeWindow
+	cleanWindow := DefaultBigCacheCleanWindow
 
 	var err error
 	shardsStr := config["shards"]
@@ -45,18 +51,20 @@ func NewBigCacheStorage(config map[string]string) (Storage, error) {
 
 	lifeStr := config["life_window"]
 	if lifeStr != "" {
-		lifeWindow, err = strconv.ParseInt(lifeStr, 10, 64)
+		parsedLife, err := strconv.ParseInt(lifeStr, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse life_window: %w", err)
 		}
+		lifeWindow = time.Duration(parsedLife)
 	}
 
 	cleanStr := config["clean_window"]
 	if cleanStr != "" {
-		cleanWindow, err = strconv.ParseInt(cleanStr, 10, 64)
+		parsedClean, err := strconv.ParseInt(cleanStr, 10, 64)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse clean_window: %w", err)
 		}
+		cleanWindow = time.Duration(parsedClean)
 	}
 
 	cConfig := bigcache.Config{
@@ -64,12 +72,12 @@ func NewBigCacheStorage(config map[string]string) (Storage, error) {
 		Shards: shards,
 
 		// time after which entry can be evicted
-		LifeWindow: time.Duration(lifeWindow),
+		LifeWindow: lifeWindow,
 
 		// Interval between removing expired entries (clean up).
 		// If set to <= 0 then no action is performed.
 		// Setting to < 1 second is counterproductive — bigcache has a one second resolution.
-		CleanWindow: time.Duration(cleanWindow),
+		CleanWindow: cleanWindow,
 	}
 	cache, err := bigcache.New(context.Background(), cConfig)
 	if err != nil {
@@ -84,10 +92,11 @@ func NewBigCacheStorage(config map[string]string) (Storage, error) {
 }
 
 func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Get", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("get operation", "logicalPath", logicalPath)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -115,10 +124,11 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 }
 
 func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
-	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Put", trace.WithAttributes(attribute.String("realm.bigcache.entry.key", e.Key)))
 	defer span.End()
-	logger.Debug("put operation", "logicalPath", e.Key)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError(err)
@@ -137,10 +147,11 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 }
 
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
-	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage Delete", trace.WithAttributes(attribute.String("realm.bigcache.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("delete operation", "logicalPath", logicalPath)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError(err)
@@ -159,22 +170,22 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 }
 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("bigcache")
 	ctx, span := f.tracer.Start(ctx, "BigCacheStorage List", trace.WithAttributes(attribute.String("realm.bigcache.prefix", prefix)))
 	defer span.End()
-	logger.Debug("list operation", "prefix", prefix)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError(err)
 		return nil, err
 	}
 
-	var names []string
+	names := make([]string, 0)
 	iterator := f.underlying.Iterator()
 	for iterator.SetNext() {
 		record, err := iterator.Value()
 		if err != nil {
-			logger.Error(err.Error())
 			return names, err
 		}
 		key := record.Key()
@@ -191,10 +202,14 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 	}
 
 	if len(names) > 0 {
-		sort.Strings(names)
+		slices.Sort(names)
 	}
 
 	return names, nil
+}
+
+func (f *BigCacheStorage) Close(ctx context.Context) error {
+	return f.underlying.Close()
 }
 
 func (f *BigCacheStorage) expandPath(k string) (string, string) {

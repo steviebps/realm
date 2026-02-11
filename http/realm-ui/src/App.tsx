@@ -29,6 +29,10 @@ function encodePath(path: string) {
     : path;
 }
 
+function ensureTrailingSlash(path: string) {
+  return path.endsWith('/') ? path : path + '/';
+}
+
 export const App = () => {
   return (
     <>
@@ -77,9 +81,9 @@ const Content = () => {
 
   const { mutate } = useMutation(
     (c: string) => {
-      return fetch(`/v1/chambers${encodePath(location.pathname)}${encodeURI(c)}`, {
+      return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname) + c)}`, {
         method: 'POST',
-        body: testData,
+        body: JSON.stringify({ rules: {} }),
         mode: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
@@ -132,13 +136,13 @@ const Content = () => {
           <div className="p-3 col-span-1 md:col-span-3">
             {directories.length > 0 && <SideNav directories={directories} />}
           </div>
-          <div className="p-3 col-span-1 md:col-span-9">
+          <div className="grid gap-4 p-3 col-span-1 md:col-span-9">
             {isLoading && (
               <div className="text-left">
                 <Spinner aria-label="Loading Chambers" size="lg" />
               </div>
             )}
-            {!isLoading && !rules && (
+            {!isLoading && (
               <form className="flex flex-col gap-4" onSubmit={onCreateNewChamber}>
                 <div>
                   <div className="mb-2 block">
@@ -169,7 +173,7 @@ const Content = () => {
                     <li key={ruleName}>
                       <h2>{ruleName}</h2>
                       <h3>
-                        {rule.type} : {String(rule.value)}
+                        {rule.type} : {JSON.stringify(rule.value)}
                       </h3>
                     </li>
                   );
@@ -182,43 +186,3 @@ const Content = () => {
     </div>
   );
 };
-
-const testData = `{  "rules": {
-  "feature switch one": {
-    "type": "number",
-    "value": 10.6,
-    "overrides": [
-      {
-        "type": "number",
-        "value": 10.2,
-        "minimumVersion": "v0.0.1",
-        "maximumVersion": "v2.0.0"
-      },
-      {
-        "type": "number",
-        "value": 10.4,
-        "minimumVersion": "v2.0.0",
-        "maximumVersion": "v3.0.0"
-      },
-      {
-        "type": "number",
-        "value": 10.6,
-        "minimumVersion": "v3.0.0",
-        "maximumVersion": "v4.0.0"
-      },
-      {
-        "type": "number",
-        "value": 10.8,
-        "minimumVersion": "v4.0.0",
-        "maximumVersion": "v5.0.0"
-      },
-      {
-        "type": "number",
-        "value": 11.0,
-        "minimumVersion": "v5.0.0",
-        "maximumVersion": "v6.0.0"
-      }
-    ]
-  }
-}
-}`;

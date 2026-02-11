@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,16 +11,17 @@ import (
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/helper/logging"
+	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 )
 
-// clientDelete represents the client delete command
-var clientDelete = &cobra.Command{
-	Use:          "delete [path]",
-	Short:        "delete a chamber",
-	Long:         "delete a chamber at the specified path",
+// clientPut represents the client put command
+var clientPut = &cobra.Command{
+	Use:          "put [path]",
+	Short:        "put a chamber",
+	Long:         "put creates or updates the chamber at the specified path",
 	SilenceUsage: true,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
@@ -33,7 +36,7 @@ var clientDelete = &cobra.Command{
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		tracer := otel.Tracer("github.com/steviebps/realm")
-		ctx, span := tracer.Start(cmd.Context(), "cmd client delete")
+		ctx, span := tracer.Start(cmd.Context(), "cmd client put")
 		defer span.End()
 		logger := logging.Ctx(ctx)
 
@@ -71,7 +74,13 @@ var clientDelete = &cobra.Command{
 			return err
 		}
 
-		res, err := c.PerformRequest(ctx, "DELETE", strings.TrimPrefix(args[0], "/"), nil)
+		emptyChamber, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.OverrideableRule{}})
+		if err != nil {
+			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not marshal empty chamber for putting: %q", args[0]))
+			return err
+		}
+
+		res, err := c.PerformRequest(ctx, "POST", strings.TrimPrefix(args[0], "/"), bytes.NewReader(emptyChamber))
 		if err != nil {
 			logger.ErrorCtx(ctx).Msg(err.Error())
 			return err
@@ -80,20 +89,24 @@ var clientDelete = &cobra.Command{
 
 		var httpRes api.HTTPErrorAndDataResponse
 		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for deleting: %q", args[0]))
+			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for putting: %q", args[0]))
 			return err
 		}
 
 		if len(httpRes.Errors) > 0 {
-			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not delete %q: %s", args[0], httpRes.Errors))
-			return errors.New(strings.Join(httpRes.Errors, "; "))
+			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not put %q: %s", args[0], httpRes.Errors))
+			return err
 		}
 
-		logger.InfoCtx(ctx).Msg(fmt.Sprintf("successfully deleted %q", args[0]))
+		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)
+		if err != nil {
+			logger.ErrorCtx(ctx).Msg(err.Error())
+			return err
+		}
 		return nil
 	},
 }
 
 func init() {
-	clientCmd.AddCommand(clientDelete)
+	clientCmd.AddCommand(clientPut)
 }

@@ -29,6 +29,10 @@ func (f *testStorage) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (f *testStorage) Close(ctx context.Context) error {
+	return nil
+}
+
 func TestInheritWith(t *testing.T) {
 	bottom := &realm.Chamber{
 		Rules: map[string]*realm.OverrideableRule{
@@ -61,8 +65,8 @@ func TestInheritWith(t *testing.T) {
 		},
 	}
 
-	inheritWith(middle, top)
-	inheritWith(bottom, middle)
+	InheritWith(middle, top)
+	InheritWith(bottom, middle)
 
 	v1 := top.Rules["rule1"]
 	v2 := middle.Rules["rule1"]

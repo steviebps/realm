@@ -12,10 +12,12 @@
         "options": {
             "path": "./.realm",
             "cache": "bigcache",
-            "source": "file",
-            "life_window": "",
+            "source": "boltdb",
             "shards": "",
-            "clean_window": ""
+            "life_window": "",
+            "clean_window": "",
+            "bucket": "",
+            "project_id": ""
         }
     }
 }

@@ -9,10 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
+	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Realm struct {
@@ -22,23 +25,23 @@ type Realm struct {
 	stopCh             chan struct{}
 	mu                 sync.RWMutex
 	root               *ChamberEntry
-	logger             hclog.Logger
-	client             *client.Client
-	interval           time.Duration
+	client             *client.HttpClient
+	pollingInterval    time.Duration
+	logger             *logging.TracedLogger
+	tracer             trace.Tracer
 }
 
 type RealmConfig struct {
-	logger             hclog.Logger
-	client             *client.Client
+	client             *client.HttpClient
 	path               string
 	applicationVersion string
-	// refreshInterval is how often realm will refetch the chamber from the realm server
-	refreshInterval time.Duration
+	// pollingInterval is how often realm will refetch the chamber from the realm server
+	pollingInterval time.Duration
 }
 
 const (
-	// DefaultRefreshInterval is used as the default refresh interval for realm
-	DefaultRefreshInterval time.Duration = 15 * time.Minute
+	// DefaultPollingInterval is used as the default polling interval for realm
+	DefaultPollingInterval time.Duration = 15 * time.Minute
 )
 
 type contextKey struct {
@@ -61,7 +64,7 @@ func (fn realmOptionFunc) apply(cfg RealmConfig) RealmConfig {
 	return fn(cfg)
 }
 
-func WithClient(c *client.Client) RealmOption {
+func WithHttpClient(c *client.HttpClient) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.client = c
 		return rc
@@ -75,16 +78,9 @@ func WithPath(path string) RealmOption {
 	})
 }
 
-func WithLogger(logger hclog.Logger) RealmOption {
+func WithPollingInterval(d time.Duration) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
-		rc.logger = logger
-		return rc
-	})
-}
-
-func WithRefreshInterval(d time.Duration) RealmOption {
-	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
-		rc.refreshInterval = d
+		rc.pollingInterval = d
 		return rc
 	})
 }
@@ -114,30 +110,28 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		return nil, errors.New("path must not be empty")
 	}
 
-	if cfg.logger == nil {
-		cfg.logger = hclog.Default().Named("realm")
-	}
-
-	if cfg.refreshInterval <= 0 {
-		cfg.refreshInterval = DefaultRefreshInterval
+	if cfg.pollingInterval <= 0 {
+		cfg.pollingInterval = DefaultPollingInterval
 	}
 
 	return &Realm{
-		logger:             cfg.logger,
+		tracer:             otel.Tracer("github.com/steviebps/realm"),
+		logger:             logging.NewTracedLogger(),
 		client:             cfg.client,
 		path:               cfg.path,
 		applicationVersion: cfg.applicationVersion,
 		stopCh:             make(chan struct{}),
-		interval:           cfg.refreshInterval,
+		pollingInterval:    cfg.pollingInterval,
 	}, nil
 }
 
 // Start starts realm and initializes the underlying chamber
 func (rlm *Realm) Start() error {
 	var err error
+	ctx := rlm.logger.WithContext(context.Background())
 	rlm.initSync.Do(func() {
 		var chamber *Chamber
-		if chamber, err = rlm.retrieveChamber(rlm.path); err == nil {
+		if chamber, err = rlm.retrieveChamber(ctx, rlm.path); err == nil {
 			rlm.setChamber(chamber)
 		}
 	})
@@ -147,15 +141,15 @@ func (rlm *Realm) Start() error {
 	}
 
 	go func() {
-		ticker := time.NewTicker(rlm.interval)
+		ticker := time.NewTicker(rlm.pollingInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-rlm.stopCh:
-				rlm.logger.Info("shutting down realm")
+				rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
 				return
 			case <-ticker.C:
-				if chamber, err := rlm.retrieveChamber(rlm.path); err == nil {
+				if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
 					rlm.setChamber(chamber)
 				}
 			}
@@ -170,39 +164,35 @@ func (rlm *Realm) Stop() {
 	close(rlm.stopCh)
 }
 
-// Logger retrieves the underlying logger for realm
-func (rlm *Realm) Logger() hclog.Logger {
-	rlm.mu.RLock()
-	defer rlm.mu.RUnlock()
-	return rlm.logger
-}
+func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, error) {
+	ctx, span := rlm.tracer.Start(ctx, "retrieveChamber", trace.WithAttributes(attribute.String("realm.path", path)))
+	defer span.End()
 
-func (rlm *Realm) retrieveChamber(path string) (*Chamber, error) {
-	client := rlm.client
 	logger := rlm.logger
+	client := rlm.client
 
-	res, err := client.PerformRequest("GET", strings.TrimPrefix(path, "/"), nil)
+	res, err := client.PerformRequest(ctx, "GET", strings.TrimPrefix(path, "/"), nil)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not perform request for getting: %q, %s", path, err.Error()))
 		return nil, err
 	}
 	defer res.Body.Close()
 
 	var httpRes api.HTTPErrorAndDataResponse
 	if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-		logger.Error(fmt.Sprintf("could not read response for getting: %q", path), "error", err.Error())
+		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for getting: %q", path))
 		return nil, err
 	}
 
 	if len(httpRes.Errors) > 0 {
-		logger.Error(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
+		logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
 		return nil, fmt.Errorf("%s", httpRes.Errors)
 	}
 
 	var c Chamber
 	err = json.Unmarshal(httpRes.Data, &c)
 	if err != nil {
-		rlm.logger.Error(err.Error())
+		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not unmarshal chamber from response for getting: %q", path))
 		return nil, err
 	}
 

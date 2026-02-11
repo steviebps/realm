@@ -22,72 +22,81 @@ realm server --config ./configs/realm.json
 package main
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
+ "context"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "log"
+ "net/http"
+ "os"
+ "os/signal"
+ "syscall"
+ "time"
 
-	"github.com/steviebps/realm/client"
-	realm "github.com/steviebps/realm/pkg"
+ "github.com/steviebps/realm/client"
+ realmhttp "github.com/steviebps/realm/http"
+ realm "github.com/steviebps/realm/pkg"
 )
 
 type CustomStruct struct {
-	Foo string `json:"foo,omitempty"`
+ Foo string `json:"foo,omitempty"`
 }
 
 func main() {
-	var err error
+ var err error
 
-	// create a realm client for retrieving your chamber from your local or remote host
-	client, err := client.NewClient(&client.ClientConfig{Address: "http://localhost"})
-	if err != nil {
-		log.Fatal(err)
-	}
+ client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080"})
+ if err != nil {
+  log.Fatal(err)
+ }
 
-	// initialize your realm 
-	rlm, err := realm.NewRealm(realm.RealmOptions{Client: client, ApplicationVersion: "v1.0.0", Path: "root"})
-	if err != nil {
-		log.Fatal(err)
-	}
+ rlm, err := realm.NewRealm(realm.WithHttpClient(client), realm.WithVersion("v1.0.0"), realm.WithPath("root"), realm.WithPollingInterval(1*time.Minute))
+ if err != nil {
+  log.Fatal(err)
+ }
+ err = rlm.Start()
+ if err != nil {
+  log.Fatal(err)
+ }
 
-	// start fetching your chamber from the local or remote host
-	err = rlm.Start()
-	if err != nil {
-		log.Fatal(err)
-	}
+ bootCtx := rlm.NewContext(context.Background())
+ port, _ := rlm.Float64(bootCtx, "port", 3000)
 
-	// create a realm context
-	bootCtx := rlm.NewContext(context.Background())
-	// retrieve your first config value
-	port, _ := rlm.Float64(bootCtx, "port", 3000)
+ mux := http.NewServeMux()
+ mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+  message, _ := rlm.String(r.Context(), "message", "DEFAULT")
+  w.Write([]byte(message))
+ })
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// retrieve the message value with a new context
-		// note: use the same context value throughout the request for consistency
-		message, _ := rlm.String(rlm.NewContext(r.Context()), "message", "DEFAULT")
-		w.Write([]byte(message))
-	})
+ mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
+  var custom *CustomStruct
+  if err := rlm.CustomValue(r.Context(), "custom", &custom); err != nil {
+   http.Error(w, err.Error(), http.StatusInternalServerError)
+   return
+  }
 
-	mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
-		var custom *CustomStruct
-		// retrieve a custom value and unmarshal it
-		if err := rlm.CustomValue(rlm.NewContext(r.Context()), "custom", &custom); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
+  w.Header().Set("Content-Type", "application/json")
+  json.NewEncoder(w).Encode(custom)
+ })
 
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(custom)
-	})
+ rlmHandler := realmhttp.RealmHandler(rlm, mux)
 
-	log.Println("Listening on :", port)
-	err = http.ListenAndServe(fmt.Sprintf(":%d", int(port)), mux)
-	if err != nil {
-		log.Fatal(err)
-	}
+ server := &http.Server{Addr: fmt.Sprintf(":%d", int(port)), Handler: rlmHandler}
+
+ go func() {
+  log.Println("Listening on :", port)
+  if err := server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+   log.Fatal(err)
+  }
+ }()
+
+ sigChan := make(chan os.Signal, 1)
+ signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+ <-sigChan
+
+ rlm.Stop()
+ if err := server.Shutdown(bootCtx); err != nil {
+  log.Fatal(err.Error())
+ }
 }
 ```
-
-

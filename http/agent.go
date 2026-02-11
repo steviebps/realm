@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,7 @@ type Operation string
 
 const (
 	PutOperation    Operation = "put"
+	PatchOperation  Operation = "patch"
 	GetOperation    Operation = "get"
 	DeleteOperation Operation = "delete"
 	ListOperation   Operation = "list"
@@ -26,7 +28,7 @@ type AgentRequest struct {
 }
 
 func buildAgentRequest(req *http.Request) *AgentRequest {
-	p := strings.TrimPrefix(req.URL.Path, "/v1/chambers")
+	p, _ := url.PathUnescape(strings.TrimPrefix(req.URL.Path, "/v1/chambers"))
 	var op Operation
 
 	switch req.Method {
@@ -41,16 +43,20 @@ func buildAgentRequest(req *http.Request) *AgentRequest {
 		}
 	case http.MethodPost:
 		op = PutOperation
+	case http.MethodPatch:
+		op = PatchOperation
 	case http.MethodDelete:
 		op = DeleteOperation
 	case "LIST":
 		op = ListOperation
 	}
 
+	Path := utils.EnsureTrailingSlash(p)
+
 	return &AgentRequest{
 		Request:   req,
 		ID:        uuid.New().String(),
 		Operation: op,
-		Path:      utils.EnsureTrailingSlash(p),
+		Path:      Path,
 	}
 }

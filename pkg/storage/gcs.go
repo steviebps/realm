@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"sort"
+	"slices"
 	"strings"
 
 	gcs "cloud.google.com/go/storage"
-	"github.com/hashicorp/go-hclog"
+	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -48,10 +48,11 @@ func NewGCSStorage(conf map[string]string) (Storage, error) {
 }
 
 func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("gcs")
 	ctx, span := s.tracer.Start(ctx, "GCSStorage Get", trace.WithAttributes(attribute.String("realm.gcs.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("get operation", "logicalPath", logicalPath)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError((err))
@@ -87,10 +88,11 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 }
 
 func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
-	logger := hclog.FromContext(ctx).ResetNamed("gcs")
 	ctx, span := s.tracer.Start(ctx, "GCSStorage Put", trace.WithAttributes(attribute.String("realm.gcs.entry.key", e.Key)))
 	defer span.End()
-	logger.Debug("put operation", "logicalPath", e.Key)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
 		span.RecordError((err))
@@ -125,10 +127,11 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 }
 
 func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
-	logger := hclog.FromContext(ctx).ResetNamed("gcs")
 	ctx, span := s.tracer.Start(ctx, "GCSStorage Delete", trace.WithAttributes(attribute.String("realm.gcs.logicalPath", logicalPath)))
 	defer span.End()
-	logger.Debug("delete operation", "logicalPath", logicalPath)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
 		span.RecordError((err))
@@ -152,10 +155,11 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 }
 
 func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) {
-	logger := hclog.FromContext(ctx).ResetNamed("gcs")
 	ctx, span := s.tracer.Start(ctx, "GCSStorage List", trace.WithAttributes(attribute.String("realm.gcs.prefix", prefix)))
 	defer span.End()
-	logger.Debug("list operation", "prefix", prefix)
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
 		span.RecordError((err))
@@ -176,7 +180,7 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 		Versions:  false,
 	})
 
-	keys := []string{}
+	keys := make([]string, 0)
 
 	for {
 		objAttrs, err := iter.Next()
@@ -203,9 +207,13 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 
 	}
 
-	sort.Strings(keys)
+	slices.Sort(keys)
 
 	return keys, nil
+}
+
+func (s *GCSStorage) Close(ctx context.Context) error {
+	return s.client.Close()
 }
 
 func (s *GCSStorage) expandPath(k string) (string, string) {
