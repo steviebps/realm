@@ -28,7 +28,7 @@ func main() {
 	shutdownFn, err := realmtrace.SetupOtelInstrumentation(ctx, false)
 	defer shutdownFn(ctx)
 
-	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "https://mbp.tail6488a.ts.net"})
+	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080"})
 	if err != nil {
 		log.Fatal(err)
 	}
