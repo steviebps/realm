@@ -247,7 +247,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 				return
 			}
 
-			storage.InheritWith(&current, &c)
+			storage.OverwriteWith(&current, &c)
 			b, err := json.Marshal(&current)
 			if err != nil {
 				err = fmt.Errorf("could not patch while merging chambers: %w", err)

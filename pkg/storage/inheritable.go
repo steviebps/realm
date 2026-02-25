@@ -196,3 +196,9 @@ func InheritWith(base *realm.Chamber, inheritedFrom *realm.Chamber) {
 		}
 	}
 }
+
+func OverwriteWith(base *realm.Chamber, overwrittenFrom *realm.Chamber) {
+	for key := range overwrittenFrom.Rules {
+		base.Rules[key] = overwrittenFrom.Rules[key]
+	}
+}
