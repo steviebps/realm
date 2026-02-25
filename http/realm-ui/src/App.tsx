@@ -7,6 +7,8 @@ import { ThemeInit } from '../.flowbite-react/init';
 import { trimPrefix, trimSuffix } from './utils/strings';
 import { SideNav } from './components/side-nav';
 import { ChamberResponse, ListResponse } from './models/response';
+import { RuleInput } from './components/RuleInput/RuleInput';
+import { encodePath, ensureTrailingSlash } from './utils/path';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,19 +21,6 @@ const queryClient = new QueryClient({
     },
   },
 });
-
-function encodePath(path: string) {
-  return path
-    ? path
-        .split('/')
-        .map((segment) => encodeURIComponent(segment))
-        .join('/')
-    : path;
-}
-
-function ensureTrailingSlash(path: string) {
-  return path.endsWith('/') ? path : path + '/';
-}
 
 export const App = () => {
   return (
@@ -79,18 +68,29 @@ const Content = () => {
     }
   );
 
-  const { mutate } = useMutation(
+  const { mutate } = useMutation<null, unknown, string>(
     (c: string) => {
       return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname) + c)}`, {
         method: 'POST',
-        body: JSON.stringify({ rules: {} }),
+        body: JSON.stringify({
+          rules: {
+            string: { type: 'string', value: 'hello, world' },
+            boolean: { type: 'boolean', value: true },
+            number: { type: 'number', value: 10.2 },
+          },
+        }),
         mode: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
         },
-      }).then((res) => {
-        return res.json();
-      });
+      })
+        .then((res) => {
+          return res.json();
+        })
+        .then((res: null) => {
+          setChamberName('');
+          return res;
+        });
     },
     {
       onSettled: () => {
@@ -136,7 +136,7 @@ const Content = () => {
           <div className="p-3 col-span-1 md:col-span-3">
             {directories.length > 0 && <SideNav directories={directories} />}
           </div>
-          <div className="grid gap-4 p-3 col-span-1 md:col-span-9">
+          <div className="grid gap-8 p-3 col-span-1 md:col-span-9">
             {isLoading && (
               <div className="text-left">
                 <Spinner aria-label="Loading Chambers" size="lg" />
@@ -163,20 +163,12 @@ const Content = () => {
             )}
 
             {!!rules && (
-              <ul className="grid gap-3 list-none">
-                {Object.keys(rules).map((ruleName) => {
-                  const rule = rules[ruleName];
+              <ul className="grid gap-5 list-none">
+                {Object.entries(rules).map(([ruleName, rule]) => {
                   if (!rule) {
                     return null;
                   }
-                  return (
-                    <li key={ruleName}>
-                      <h2>{ruleName}</h2>
-                      <h3>
-                        {rule.type} : {JSON.stringify(rule.value)}
-                      </h3>
-                    </li>
-                  );
+                  return <RuleInput key={ruleName} ruleName={ruleName} rule={rule} />;
                 })}
               </ul>
             )}
