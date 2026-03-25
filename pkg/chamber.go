@@ -34,6 +34,13 @@ func (c *Chamber) InheritFrom(from *Chamber) {
 	}
 }
 
+// OverwriteFrom overwrites rules from the provided chamber
+func (c *Chamber) OverwriteFrom(overwrittenFrom *Chamber) {
+	for key := range overwrittenFrom.Rules {
+		c.Rules[key] = overwrittenFrom.Rules[key]
+	}
+}
+
 // ChamberEntry is a read-only version of Chamber
 // it is specifically used for realm clients
 type ChamberEntry struct {
