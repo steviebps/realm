@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Label, TextInput, Button } from 'flowbite-react';
+import { HiTrash } from 'react-icons/hi';
 import { ChamberResponse, Rule } from '../../models/response';
 import { useMutation, useQueryClient } from 'react-query';
 import { encodePath, ensureTrailingSlash } from '../../utils/path';
-import { useLocation } from 'react-router-dom';
 import { BooleanRule } from '../BooleanRule/BooleanRule';
 
 const determineValue = (type: Rule['type'], value: string): Rule => {
@@ -64,15 +65,65 @@ export const RuleInput = ({ ruleName, rule }: { ruleName: string; rule: Rule }) 
     }
   );
 
+  const { mutate: deleteRule } = useMutation<null, unknown, string>(
+    (ruleName: string) => {
+      if (!res?.data) {
+        return Promise.reject(new Error('could not retrieve chamber'));
+      }
+
+      const rules = { ...res.data.rules };
+      delete rules[ruleName];
+      return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname))}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          ...res.data,
+          rules,
+        }),
+        mode: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }).then((res) => {
+        return res.json();
+      });
+    },
+    {
+      onSettled: () => {
+        return Promise.all([
+          queryClient.invalidateQueries(location.pathname + '_chamber'),
+          queryClient.invalidateQueries(location.pathname),
+        ]);
+      },
+    }
+  );
+
   const onUpdateRule: React.FormEventHandler<HTMLFormElement> = (event) => {
     event.preventDefault();
     mutate(determineValue(rule.type, value));
+  };
+
+  const onDelete: React.MouseEventHandler<HTMLButtonElement> = () => {
+    deleteRule(ruleName);
   };
 
   return (
     <li className="flex flex-col gap-3">
       <form onSubmit={onUpdateRule}>
         <div className="grid items-end gap-5 grid-cols-2">
+          {rule.type === 'number' && (
+            <div>
+              <Label htmlFor={ruleName}>{ruleName}</Label>
+              <TextInput
+                id={ruleName}
+                type="number"
+                sizing="md"
+                value={value}
+                onChange={(event) => {
+                  setValue(event.target.value);
+                }}
+              />
+            </div>
+          )}
           {rule.type === 'boolean' && (
             <BooleanRule onChange={(value) => setValue(value)} value={value.toLowerCase() === 'true'} />
           )}
@@ -90,9 +141,15 @@ export const RuleInput = ({ ruleName, rule }: { ruleName: string; rule: Rule }) 
               />
             </div>
           )}
-          <Button type="submit" size="md" color="alternative">
-            Update
-          </Button>
+          <div className="grid gap-2 grid-cols-2">
+            <Button type="submit" size="md" color="default">
+              Update
+            </Button>
+            <Button type="button" size="md" color="red" outline onClick={onDelete}>
+              Delete
+              <HiTrash />
+            </Button>
+          </div>
         </div>
       </form>
     </li>
