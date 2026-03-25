@@ -93,3 +93,53 @@ func BenchmarkChamberCustomValue(b *testing.B) {
 		}
 	})
 }
+
+func TestInheritWith(t *testing.T) {
+	bottom := &Chamber{
+		Rules: map[string]*OverrideableRule{
+			"rule2": {
+				Rule: &Rule{
+					Type:  "boolean",
+					Value: false,
+				},
+			},
+		},
+	}
+	middle := &Chamber{
+		Rules: map[string]*OverrideableRule{
+			"rule1": {
+				Rule: &Rule{
+					Type:  "boolean",
+					Value: true,
+				},
+			},
+		},
+	}
+	top := &Chamber{
+		Rules: map[string]*OverrideableRule{
+			"rule1": {
+				Rule: &Rule{
+					Type:  "boolean",
+					Value: false,
+				},
+			},
+		},
+	}
+
+	middle.InheritFrom(top)
+	bottom.InheritFrom(middle)
+
+	v1 := top.Rules["rule1"]
+	v2 := middle.Rules["rule1"]
+	v3 := bottom.Rules["rule1"]
+
+	// should not inherit top value as is
+	if v1 == v2 {
+		t.Errorf("middle did not inherit properly from top: value of rule1 is: %v", v2)
+	}
+
+	// should inherit middle value as is
+	if v3 != v2 {
+		t.Errorf("bottom did not inherit properly from top: value of rule1 is: %v", v3)
+	}
+}
