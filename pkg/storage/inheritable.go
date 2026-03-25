@@ -32,6 +32,7 @@ func NewInheritableStorage(source Storage) (Storage, error) {
 	}, nil
 }
 
+// Get gets the entry at the specified logical path, inheriting all parent chambers if they exist
 func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
@@ -79,12 +80,12 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 				span.RecordError(err)
 				continue
 			}
-			InheritWith(curChamber, c)
+			curChamber.InheritFrom(c)
 			c = curChamber
 		}
 
 		// inherit all of the parents
-		InheritWith(leaf, c)
+		leaf.InheritFrom(c)
 	}
 
 	select {
@@ -103,6 +104,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
 }
 
+// Put puts the entry at the specified logical path, creating or overwriting it
 func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Put", trace.WithAttributes(attribute.String("realm.inheritable.entry.key", e.Key)))
 	defer span.End()
@@ -130,6 +132,7 @@ func (s *InheritableStorage) Put(ctx context.Context, e StorageEntry) error {
 	return nil
 }
 
+// Delete deletes the entry at the specified logical path
 func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) error {
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Delete", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
@@ -157,6 +160,7 @@ func (s *InheritableStorage) Delete(ctx context.Context, logicalPath string) err
 	return nil
 }
 
+// List lists all keys with the specified prefix
 func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string, error) {
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage List", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", prefix)))
 	defer span.End()
@@ -185,20 +189,7 @@ func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string,
 	return names, nil
 }
 
+// Close closes the source storage
 func (s *InheritableStorage) Close(ctx context.Context) error {
 	return s.source.Close(ctx)
-}
-
-func InheritWith(base *realm.Chamber, inheritedFrom *realm.Chamber) {
-	for key := range inheritedFrom.Rules {
-		if _, ok := base.Rules[key]; !ok {
-			base.Rules[key] = inheritedFrom.Rules[key]
-		}
-	}
-}
-
-func OverwriteWith(base *realm.Chamber, overwrittenFrom *realm.Chamber) {
-	for key := range overwrittenFrom.Rules {
-		base.Rules[key] = overwrittenFrom.Rules[key]
-	}
 }

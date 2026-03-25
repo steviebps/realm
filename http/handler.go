@@ -170,10 +170,10 @@ func handleChambers(strg storage.Storage) http.Handler {
 			return
 
 		case PutOperation:
-			var c realm.Chamber
+			var putChamber realm.Chamber
 
 			// ensure data is in correct format
-			if err := utils.ReadInterfaceWith(r.Body, &c); err != nil {
+			if err := utils.ReadInterfaceWith(r.Body, &putChamber); err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				errorLog.Msg(err.Error())
 				if errors.Is(err, io.EOF) {
@@ -185,7 +185,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 				return
 			}
 
-			b, err := json.Marshal(&c)
+			b, err := json.Marshal(&putChamber)
 			if err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				errorLog.Msg(err.Error())
@@ -207,10 +207,10 @@ func handleChambers(strg storage.Storage) http.Handler {
 			return
 
 		case PatchOperation:
-			var c realm.Chamber
+			var patchChamber realm.Chamber
 
 			// ensure data is in correct format
-			if err := utils.ReadInterfaceWith(r.Body, &c); err != nil {
+			if err := utils.ReadInterfaceWith(r.Body, &patchChamber); err != nil {
 				span.SetStatus(codes.Error, err.Error())
 				errorLog.Msg(err.Error())
 				if errors.Is(err, io.EOF) {
@@ -247,7 +247,7 @@ func handleChambers(strg storage.Storage) http.Handler {
 				return
 			}
 
-			storage.OverwriteWith(&current, &c)
+			current.OverwriteFrom(&patchChamber)
 			b, err := json.Marshal(&current)
 			if err != nil {
 				err = fmt.Errorf("could not patch while merging chambers: %w", err)
