@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steviebps/realm/helper/logging"
 	realmhttp "github.com/steviebps/realm/http"
+	realm "github.com/steviebps/realm/pkg"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
 
@@ -109,6 +111,23 @@ var serverCmd = &cobra.Command{
 			stg, err = storage.NewInheritableStorage(stg)
 			if err != nil {
 				logger.ErrorCtx(ctx).Msg(err.Error())
+				os.Exit(1)
+			}
+		}
+
+		var notFoundErr *storage.NotFoundError
+		if _, err = stg.Get(ctx, "/"); errors.As(err, &notFoundErr) {
+			logger.DebugCtx(ctx).Msg("initializing root entry in storage")
+
+			b, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.OverrideableRule{}})
+			if err != nil {
+				logger.ErrorCtx(ctx).Msgf("failed to marshal root entry during startup: %s", err.Error())
+				os.Exit(1)
+			}
+
+			entry := storage.StorageEntry{Key: "/", Value: b}
+			if err := stg.Put(ctx, entry); err != nil {
+				logger.ErrorCtx(ctx).Msgf("failed to initialize root entry during startup: %s", err.Error())
 				os.Exit(1)
 			}
 		}

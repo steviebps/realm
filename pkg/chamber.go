@@ -25,6 +25,22 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// InheritFrom inherits rules from the provided chamber if they do not exist in the current chamber
+func (c *Chamber) InheritFrom(from *Chamber) {
+	for key := range from.Rules {
+		if _, ok := c.Rules[key]; !ok {
+			c.Rules[key] = from.Rules[key]
+		}
+	}
+}
+
+// OverwriteFrom overwrites rules from the provided chamber
+func (c *Chamber) OverwriteFrom(overwrittenFrom *Chamber) {
+	for key := range overwrittenFrom.Rules {
+		c.Rules[key] = overwrittenFrom.Rules[key]
+	}
+}
+
 // ChamberEntry is a read-only version of Chamber
 // it is specifically used for realm clients
 type ChamberEntry struct {

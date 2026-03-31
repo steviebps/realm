@@ -10,7 +10,20 @@ export type ChamberResponse = {
 
 export type Rules = Record<string, Rule>;
 
-export type Rule = {
-  type: string;
-  value: unknown;
-};
+export type Rule =
+  | {
+      type: 'string';
+      value: string;
+    }
+  | {
+      type: 'number';
+      value: number;
+    }
+  | {
+      type: 'boolean';
+      value: boolean;
+    }
+  | {
+      type: 'custom';
+      value: Record<string, unknown>;
+    };
