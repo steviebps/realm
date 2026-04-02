@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Label, TextInput, Button } from 'flowbite-react';
+import { Label, TextInput, Button, Spinner } from 'flowbite-react';
 import { HiTrash } from 'react-icons/hi';
 import { ChamberResponse, Rule } from '../../models/response';
 import { useMutation, useQueryClient } from 'react-query';
 import { encodePath, ensureTrailingSlash } from '../../utils/path';
 import { BooleanRule } from '../BooleanRule/BooleanRule';
+import { StringRule } from '../StringRule/StringRule';
 
 const determineValue = (type: Rule['type'], value: string): Rule => {
   switch (type) {
@@ -20,21 +21,35 @@ const determineValue = (type: Rule['type'], value: string): Rule => {
   }
 };
 
+const convertToString = (rule: Rule): string => {
+  switch (rule.type) {
+    case 'string':
+      return rule.value;
+    case 'number':
+      return rule.value.toString();
+    case 'boolean':
+      return rule.value.toString();
+    case 'custom':
+      return JSON.stringify(rule.value);
+  }
+};
+
 export const RuleInput = ({ ruleName, rule }: { ruleName: string; rule: Rule }) => {
-  const [value, setValue] = useState(JSON.stringify(rule.value));
+  const [value, setValue] = useState<string>(convertToString(rule));
   const location = useLocation();
   const queryClient = useQueryClient();
   const res = queryClient.getQueryData<ChamberResponse>(location.pathname + '_chamber');
 
   useEffect(() => {
-    setValue(JSON.stringify(rule.value));
-  }, [rule.value]);
+    setValue(convertToString(rule));
+  }, [rule]);
 
-  const { mutate } = useMutation<null, unknown, Rule>(
+  const { mutate, isLoading } = useMutation<null, unknown, Rule>(
     (r: Rule) => {
       if (!res?.data) {
         return Promise.reject(new Error('could not retrieve chamber'));
       }
+
       return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname))}`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -125,26 +140,26 @@ export const RuleInput = ({ ruleName, rule }: { ruleName: string; rule: Rule }) 
             </div>
           )}
           {rule.type === 'boolean' && (
-            <BooleanRule onChange={(value) => setValue(value)} value={value.toLowerCase() === 'true'} />
+            <BooleanRule
+              ruleName={ruleName}
+              onChange={(value) => setValue(value)}
+              value={value.toLowerCase() === 'true'}
+            />
           )}
-          {rule.type === 'string' && (
-            <div>
-              <Label htmlFor={ruleName}>{ruleName}</Label>
-              <TextInput
-                id={ruleName}
-                type="text"
-                sizing="md"
-                value={value}
-                onChange={(event) => {
-                  setValue(event.target.value);
-                }}
-              />
-            </div>
-          )}
+          {rule.type === 'string' && <StringRule value={value} onChange={(val) => setValue(val)} ruleName={ruleName} />}
+
           <div className="grid gap-2 grid-cols-2">
-            <Button type="submit" size="md" color="default">
-              Update
-            </Button>
+            {!isLoading && (
+              <Button type="submit" size="md" color="default">
+                Update
+              </Button>
+            )}
+            {isLoading && (
+              <Button type="submit" size="md" color="default">
+                <Spinner size="sm" aria-label="Loading" className="me-3" light />
+                Loading...
+              </Button>
+            )}
             <Button type="button" size="md" color="red" outline onClick={onDelete}>
               Delete
               <HiTrash />

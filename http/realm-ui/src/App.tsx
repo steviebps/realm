@@ -68,7 +68,7 @@ const Content = () => {
     }
   );
 
-  const { mutate } = useMutation<null, unknown, string>(
+  const { mutate, isLoading: isLoadingCreateChamber } = useMutation<null, unknown, string>(
     (c: string) => {
       return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname) + c)}`, {
         method: 'POST',
@@ -158,7 +158,13 @@ const Content = () => {
                     }}
                   />
                 </div>
-                <Button type="submit">Create New Chamber</Button>
+                {isLoadingCreateChamber && (
+                  <Button type="submit" disabled>
+                    <Spinner size="sm" aria-label="Creating Chammber" className="me-3" light />
+                    Creating...
+                  </Button>
+                )}
+                {!isLoadingCreateChamber && <Button type="submit">Create New Chamber</Button>}
               </form>
             )}
 
