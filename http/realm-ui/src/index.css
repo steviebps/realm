@@ -10,4 +10,8 @@
   h2 {
     @apply text-xl;
   }
+
+  button {
+    @apply cursor-pointer;
+  }
 }
