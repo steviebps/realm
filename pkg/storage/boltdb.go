@@ -182,7 +182,7 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	names := make([]string, 0)
-	b.db.View(func(tx *bolt.Tx) error {
+	if err := b.db.View(func(tx *bolt.Tx) error {
 		// Assume bucket exists and has keys
 		c := tx.Bucket([]byte("chambers")).Cursor()
 
@@ -197,11 +197,14 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 		}
 
 		for key := range set {
-			names = append(names, string(key))
+			names = append(names, key)
 		}
 
 		return nil
-	})
+	}); err != nil {
+		span.RecordError(err)
+		return nil, err
+	}
 
 	select {
 	case <-ctx.Done():

@@ -26,7 +26,10 @@ func main() {
 	var err error
 	ctx := context.Background()
 	shutdownFn, err := realmtrace.SetupOtelInstrumentation(ctx, false)
-	defer shutdownFn(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() { _ = shutdownFn(ctx) }()
 
 	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080"})
 	if err != nil {
@@ -48,7 +51,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		message, _ := rlm.String(r.Context(), "message", "DEFAULT")
-		w.Write([]byte(message))
+		_, _ = w.Write([]byte(message))
 	})
 
 	mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +62,7 @@ func main() {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(custom)
+		_ = json.NewEncoder(w).Encode(custom)
 	})
 
 	rlmHandler := realmhttp.RealmHandler(rlm, mux)

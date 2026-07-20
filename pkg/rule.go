@@ -72,6 +72,7 @@ func (t *Rule) assertType(data json.RawMessage) error {
 type OverrideableRule struct {
 	*Rule
 	Overrides []*Override `json:"overrides,omitempty"`
+	Rollout   *Rollout    `json:"rollout,omitempty"`
 }
 
 type UnsupportedTypeError struct {
@@ -104,6 +105,14 @@ func (t *OverrideableRule) UnmarshalJSON(b []byte) error {
 		t.Overrides = overrides
 	}
 
+	if v, ok := m["rollout"]; ok {
+		var rollout Rollout
+		if err := json.Unmarshal(v, &rollout); err != nil {
+			return err
+		}
+		t.Rollout = &rollout
+	}
+
 	var previous *Override
 	for _, override := range t.Overrides {
 		// overrides should not overlap
@@ -130,6 +139,60 @@ func (t *OverrideableRule) ValueAtVersion(version string) interface{} {
 	}
 
 	return v
+}
+
+// ValueFor resolves the rule value for the given evaluation context. It first
+// applies any version override (see ValueAtVersion) to determine the base
+// value, then serves the rollout value instead when a percentage rollout is
+// configured and the context falls within it.
+func (t *OverrideableRule) ValueFor(ruleKey string, ec EvaluationContext, version string) interface{} {
+	if t.Rollout.Includes(ruleKey, ec) {
+		return t.Rollout.Value
+	}
+	return t.ValueAtVersion(version)
+}
+
+// StringValueFor retrieves a string value of the rule for the given evaluation
+// context and returns the default value if it does not exist and a bool on
+// whether or not the value could be converted.
+func (t *OverrideableRule) StringValueFor(ruleKey string, ec EvaluationContext, version string, defaultValue string) (string, bool) {
+	v, ok := t.ValueFor(ruleKey, ec, version).(string)
+	if !ok {
+		return defaultValue, ok
+	}
+	return v, ok
+}
+
+// BoolValueFor retrieves a bool value of the rule for the given evaluation
+// context and returns the default value if it does not exist and a bool on
+// whether or not the value could be converted.
+func (t *OverrideableRule) BoolValueFor(ruleKey string, ec EvaluationContext, version string, defaultValue bool) (bool, bool) {
+	v, ok := t.ValueFor(ruleKey, ec, version).(bool)
+	if !ok {
+		return defaultValue, ok
+	}
+	return v, ok
+}
+
+// Float64ValueFor retrieves a float64 value of the rule for the given
+// evaluation context and returns the default value if it does not exist and a
+// bool on whether or not the value could be converted.
+func (t *OverrideableRule) Float64ValueFor(ruleKey string, ec EvaluationContext, version string, defaultValue float64) (float64, bool) {
+	v, ok := t.ValueFor(ruleKey, ec, version).(float64)
+	if !ok {
+		return defaultValue, ok
+	}
+	return v, ok
+}
+
+// CustomValueFor unmarshals the rule value for the given evaluation context
+// into v.
+func (t *OverrideableRule) CustomValueFor(ruleKey string, ec EvaluationContext, version string, v any) error {
+	raw, ok := t.ValueFor(ruleKey, ec, version).(*json.RawMessage)
+	if !ok {
+		return fmt.Errorf("rule with type %q could not be converted for unmarshalling", t.Type)
+	}
+	return json.Unmarshal(*raw, v)
 }
 
 // StringValue retrieves a string value of the rule

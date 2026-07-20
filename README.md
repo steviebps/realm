@@ -100,3 +100,30 @@ func main() {
  }
 }
 ```
+
+### progressive rollout (percentage targeting)
+
+A rule can carry a `rollout` that serves an alternate value to a deterministic
+percentage of subjects, bucketed by an evaluation key (for example, a user id).
+Assignment is sticky: the same key always lands in the same bucket.
+
+```json
+{
+  "rules": {
+    "new-checkout": {
+      "type": "boolean",
+      "value": false,
+      "rollout": { "type": "boolean", "value": true, "percentage": 20 }
+    }
+  }
+}
+```
+
+Supply the evaluation key per request with `NewContextWithEvaluation`. Without a
+key the rollout is inert and the base value is returned, so existing callers are
+unaffected.
+
+```go
+ctx := rlm.NewContextWithEvaluation(r.Context(), realm.EvaluationContext{Key: userID})
+enabled, _ := rlm.Bool(ctx, "new-checkout", false) // true for ~20% of users
+```
