@@ -24,7 +24,7 @@ var serverCmd = &cobra.Command{
 	PreRun: func(cmd *cobra.Command, args []string) {
 		devMode, _ := cmd.Flags().GetBool("dev")
 		if !devMode {
-			cmd.MarkFlagRequired("config")
+			_ = cmd.MarkFlagRequired("config")
 		}
 	},
 	Run: func(cmd *cobra.Command, args []string) {
@@ -80,7 +80,7 @@ var serverCmd = &cobra.Command{
 		certFileEmpty := certFile == ""
 		keyFileEmpty := keyFile == ""
 		if certFileEmpty != keyFileEmpty {
-			logger.ErrorCtx(ctx).Msg("certFile must be used in conjuction with keyFile")
+			logger.ErrorCtx(ctx).Msg("certFile must be used in conjunction with keyFile")
 			os.Exit(1)
 		}
 

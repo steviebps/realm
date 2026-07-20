@@ -29,6 +29,15 @@
     "feature switch two": {
       "type": "boolean",
       "value": false
+    },
+    "feature switch five": {
+      "type": "boolean",
+      "value": false,
+      "rollout": {
+        "type": "boolean",
+        "value": true,
+        "percentage": 20
+      }
     }
   }
 }

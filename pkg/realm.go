@@ -52,6 +52,12 @@ var (
 	// RequestContextKey is the context key to use with a WithValue function to associate a root chamber value with a context
 	// such that rule retrievals will be consistent throughout the client's request
 	RequestContextKey = &contextKey{"realm"}
+
+	// EvaluationContextKey is the context key used to associate an
+	// EvaluationContext with a context so that rule retrievals can apply
+	// per-subject targeting (such as percentage rollouts) consistently
+	// throughout the client's request
+	EvaluationContextKey = &contextKey{"realm-evaluation"}
 )
 
 type RealmOption interface {
@@ -234,6 +240,25 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 	return ctx
 }
 
+// NewContextWithEvaluation pins the current chamber snapshot (like NewContext)
+// and additionally associates the provided EvaluationContext with the context.
+// Rule retrievals performed with the returned context apply per-subject
+// targeting, such as percentage rollouts bucketed by EvaluationContext.Key.
+func (rlm *Realm) NewContextWithEvaluation(ctx context.Context, ec EvaluationContext) context.Context {
+	ctx = rlm.NewContext(ctx)
+	return context.WithValue(ctx, EvaluationContextKey, ec)
+}
+
+// evaluationFromContext returns the EvaluationContext associated with ctx, or
+// the zero EvaluationContext (no targeting) when none is present.
+func evaluationFromContext(ctx context.Context) EvaluationContext {
+	ec, ok := ctx.Value(EvaluationContextKey).(EvaluationContext)
+	if !ok {
+		return EvaluationContext{}
+	}
+	return ec
+}
+
 // Bool retrieves a bool by the key of the rule.
 // Returns the default value if it does not exist and an error if the chamber is empty or could not be converted
 func (rlm *Realm) Bool(ctx context.Context, ruleKey string, defaultValue bool) (bool, error) {
@@ -241,7 +266,7 @@ func (rlm *Realm) Bool(ctx context.Context, ruleKey string, defaultValue bool) (
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	return c.BoolValue(ruleKey, defaultValue)
+	return c.BoolValueFor(ruleKey, evaluationFromContext(ctx), defaultValue)
 }
 
 // String retrieves a string by the key of the rule.
@@ -251,7 +276,7 @@ func (rlm *Realm) String(ctx context.Context, ruleKey string, defaultValue strin
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	return c.StringValue(ruleKey, defaultValue)
+	return c.StringValueFor(ruleKey, evaluationFromContext(ctx), defaultValue)
 }
 
 // Float64 retrieves a float64 by the key of the rule.
@@ -261,7 +286,7 @@ func (rlm *Realm) Float64(ctx context.Context, ruleKey string, defaultValue floa
 	if c == nil {
 		return defaultValue, ErrChamberEmpty
 	}
-	return c.Float64Value(ruleKey, defaultValue)
+	return c.Float64ValueFor(ruleKey, evaluationFromContext(ctx), defaultValue)
 }
 
 // CustomValue retrieves an arbitrary value by the key of the rule
@@ -271,7 +296,7 @@ func (rlm *Realm) CustomValue(ctx context.Context, ruleKey string, v any) error 
 	if c == nil {
 		return ErrChamberEmpty
 	}
-	err := c.CustomValue(ruleKey, v)
+	err := c.CustomValueFor(ruleKey, evaluationFromContext(ctx), v)
 	if err != nil {
 		return fmt.Errorf("could not convert custom rule %q: %w", ruleKey, err)
 	}

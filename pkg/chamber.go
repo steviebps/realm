@@ -72,14 +72,36 @@ func (c *ChamberEntry) Get(ruleKey string) *OverrideableRule {
 	return t
 }
 
-// StringValue retrieves a string by the key of the rule
-// and returns the default value if it does not exist and an error if it is not found or could not be converted
-func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string, error) {
+// StringValueFor retrieves a string by the key of the rule, resolved for the
+// given evaluation context (applying any percentage rollout). It returns the
+// default value and an error if the rule is not found or could not be converted.
+func (c *ChamberEntry) StringValueFor(ruleKey string, ec EvaluationContext, defaultValue string) (string, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := t.StringValue(c.version, defaultValue)
+	v, ok := t.StringValueFor(ruleKey, ec, c.version, defaultValue)
+	if !ok {
+		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
+	}
+	return v, nil
+}
+
+// StringValue retrieves a string by the key of the rule
+// and returns the default value if it does not exist and an error if it is not found or could not be converted
+func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string, error) {
+	return c.StringValueFor(ruleKey, EvaluationContext{}, defaultValue)
+}
+
+// BoolValueFor retrieves a bool by the key of the rule, resolved for the given
+// evaluation context (applying any percentage rollout). It returns the default
+// value and an error if the rule is not found or could not be converted.
+func (c *ChamberEntry) BoolValueFor(ruleKey string, ec EvaluationContext, defaultValue bool) (bool, error) {
+	t := c.Get(ruleKey)
+	if t == nil {
+		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
+	}
+	v, ok := t.BoolValueFor(ruleKey, ec, c.version, defaultValue)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
@@ -89,11 +111,18 @@ func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string,
 // BoolValue retrieves a bool by the key of the rule
 // and returns the default value if it does not exist and an error if it is not found or could not be converted
 func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error) {
+	return c.BoolValueFor(ruleKey, EvaluationContext{}, defaultValue)
+}
+
+// Float64ValueFor retrieves a float64 by the key of the rule, resolved for the
+// given evaluation context (applying any percentage rollout). It returns the
+// default value and an error if the rule is not found or could not be converted.
+func (c *ChamberEntry) Float64ValueFor(ruleKey string, ec EvaluationContext, defaultValue float64) (float64, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := t.BoolValue(c.version, defaultValue)
+	v, ok := t.Float64ValueFor(ruleKey, ec, c.version, defaultValue)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
@@ -103,27 +132,27 @@ func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error
 // Float64Value retrieves a float64 by the key of the rule
 // and returns the default value if it does not exist and an error if it is not found or could not be converted
 func (c *ChamberEntry) Float64Value(ruleKey string, defaultValue float64) (float64, error) {
+	return c.Float64ValueFor(ruleKey, EvaluationContext{}, defaultValue)
+}
+
+// CustomValueFor retrieves a json.RawMessage by the key of the rule, resolved
+// for the given evaluation context (applying any percentage rollout), and
+// unmarshals it into v. It returns an error if the rule is not found or could
+// not be converted.
+func (c *ChamberEntry) CustomValueFor(ruleKey string, ec EvaluationContext, v any) error {
 	t := c.Get(ruleKey)
 	if t == nil {
-		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
+		return &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := t.Float64Value(c.version, defaultValue)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
+	err := t.CustomValueFor(ruleKey, ec, c.version, v)
+	if err != nil {
+		return &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
-	return v, nil
+	return nil
 }
 
 // CustomValue retrieves a json.RawMessage by the key of the rule
 // and returns an error if it is not found or could not be converted
 func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
-	t := c.Get(ruleKey)
-	if t == nil {
-		return &ErrRuleNotFound{Key: ruleKey}
-	}
-	err := t.CustomValue(c.version, v)
-	if err != nil {
-		return &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
-	}
-	return nil
+	return c.CustomValueFor(ruleKey, EvaluationContext{}, v)
 }

@@ -127,7 +127,11 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 
 	err := c.source.Put(ctx, e)
 	if err == nil {
-		c.cache.Put(ctx, e)
+		// best-effort cache update: a cache write failure must not fail the
+		// source write, but it is worth recording on the span
+		if cacheErr := c.cache.Put(ctx, e); cacheErr != nil {
+			span.RecordError(cacheErr)
+		}
 	} else {
 		span.RecordError(err)
 	}

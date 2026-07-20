@@ -8,7 +8,7 @@ import (
 
 func convertToBytes(i interface{}) []byte {
 	buffer := new(bytes.Buffer)
-	json.NewEncoder(buffer).Encode(i)
+	_ = json.NewEncoder(buffer).Encode(i)
 
 	return buffer.Bytes()
 }

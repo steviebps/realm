@@ -122,21 +122,21 @@ func handleOk(w http.ResponseWriter, body interface{}) {
 		w.WriteHeader(http.StatusNoContent)
 	} else {
 		w.WriteHeader(http.StatusOK)
-		utils.WriteInterfaceWith(w, body, true)
+		_ = utils.WriteInterfaceWith(w, body, true)
 	}
 }
 
 func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	utils.WriteInterfaceWith(w, body, true)
+	_ = utils.WriteInterfaceWith(w, body, true)
 }
 
 func handleError(ctx context.Context, w http.ResponseWriter, status int, resp api.HTTPErrorAndDataResponse) {
 	errorCounter.Add(ctx, 1, metric.WithAttributes(attribute.Int("http.status_code", status)))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	utils.WriteInterfaceWith(w, resp, true)
+	_ = utils.WriteInterfaceWith(w, resp, true)
 }
 
 func handleChambers(strg storage.Storage) http.Handler {
@@ -326,6 +326,6 @@ func handleUIEmpty() http.Handler {
 	</html>
 	`
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Write([]byte(stubHTML))
+		_, _ = w.Write([]byte(stubHTML))
 	})
 }
