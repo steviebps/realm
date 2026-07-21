@@ -81,10 +81,31 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   new rule capabilities need **no** handler changes.
 
 The SDK (`pkg/realm.go`) fetches the chamber at its configured path on `Start`
-and then refreshes on a ticker (`DefaultPollingInterval = 15m`), swapping the
-immutable `ChamberEntry` snapshot under a mutex. Reads (`Bool`/`String`/
-`Float64`/`CustomValue`) pull the snapshot (and any `EvaluationContext`) from the
-request context.
+and then keeps it current, swapping the immutable `ChamberEntry` snapshot under a
+mutex. Reads (`Bool`/`String`/`Float64`/`CustomValue`) pull the snapshot (and any
+`EvaluationContext`) from the request context. Two refresh modes:
+
+- **Polling (default)** — refetch on a ticker (`DefaultPollingInterval = 15m`).
+- **Streaming (`WithStreaming(true)`)** — hold an SSE connection open and apply
+  changes as the server pushes them ("immediately sourced"). The SDK reconnects
+  with capped exponential backoff and **falls back to polling** if the server
+  does not return an event stream (detected via `Content-Type`).
+
+### Real-time updates (SSE)
+
+`GET /v1/chambers/<path>?watch=true` returns a `text/event-stream` that emits an
+`event: chamber` with the current chamber immediately, then again on every
+change, plus periodic heartbeat comments. On the server, an in-process **broker**
+(`http/broker.go`) is notified after each write (`Put`/`Patch`/`Delete`) and
+wakes watchers whose path is at or below the changed path (prefix match), so an
+inherited parent change refreshes child watchers. The watch request bypasses the
+per-request timeout; the endpoint reuses the same storage `Get` as a normal read,
+so inheritance and validation are identical.
+
+**Limitation (first cut):** the broker is process-local. With multiple server
+replicas, a write on replica A does not push to watchers connected to replica B;
+those converge on their next reconnect or poll. Cross-replica fanout (a shared
+bus, or each replica watching its storage source) is a follow-up.
 
 ## Storage
 
@@ -126,7 +147,8 @@ Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
 | **Percentage rollout (deterministic bucketing)** | ✅ Done | `pkg/rollout.go` |
 | Hierarchy / inheritance (proto "zones") | ✅ Done | `pkg/storage/inheritable.go` |
 | Attribute/segment targeting (rules on `EvaluationContext.Attributes`) | ⬜ Next | seam exists in `pkg/context.go` |
-| Real-time streaming ("immediately sourced", SSE) instead of polling | ⬜ Next | `pkg/realm.go` polling loop |
+| **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
+| Cross-replica stream fanout (multi-instance) | ⬜ Next | broker is process-local today |
 | Environment API-key auth | ⬜ Next | `http/handler.go` middleware |
 | Audit log of flag changes | ⬜ Next | around `http/handler.go` write ops |
 | Multi-language SDKs | ⬜ Next | new clients against `/v1/chambers` |

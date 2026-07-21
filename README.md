@@ -127,3 +127,24 @@ unaffected.
 ctx := rlm.NewContextWithEvaluation(r.Context(), realm.EvaluationContext{Key: userID})
 enabled, _ := rlm.Bool(ctx, "new-checkout", false) // true for ~20% of users
 ```
+
+### real-time updates (streaming)
+
+By default the SDK polls (every 15 min). Opt into streaming with
+`WithStreaming(true)` and flag changes are pushed to the client over
+server-sent events within milliseconds, with automatic fallback to polling if
+the server doesn't support it.
+
+```go
+rlm, _ := realm.NewRealm(
+	realm.WithHttpClient(client),
+	realm.WithPath("root"),
+	realm.WithStreaming(true),
+)
+```
+
+You can watch a chamber directly over HTTP too:
+
+```bash
+curl -N 'http://localhost:8080/v1/chambers/root?watch=true'
+```
