@@ -26,6 +26,7 @@ type Realm struct {
 	initSync           sync.Once
 	stopCh             chan struct{}
 	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
 	mu                 sync.RWMutex
 	root               *ChamberEntry
 	client             *client.HttpClient
@@ -167,11 +168,15 @@ func (rlm *Realm) Start() error {
 		return err
 	}
 
-	if rlm.streaming {
-		go rlm.stream(ctx)
-	} else {
-		go rlm.poll(ctx)
-	}
+	rlm.wg.Add(1)
+	go func() {
+		defer rlm.wg.Done()
+		if rlm.streaming {
+			rlm.stream(ctx)
+		} else {
+			rlm.poll(ctx)
+		}
+	}()
 
 	return nil
 }
@@ -290,12 +295,13 @@ func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received b
 	return true, received, scanner.Err()
 }
 
-// Stop stops realm and flushes any pending tasks
+// Stop stops realm and blocks until the background refresh goroutine has exited.
 func (rlm *Realm) Stop() {
 	close(rlm.stopCh)
 	if rlm.cancel != nil {
 		rlm.cancel()
 	}
+	rlm.wg.Wait()
 }
 
 func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, error) {
