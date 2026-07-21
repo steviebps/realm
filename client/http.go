@@ -28,6 +28,9 @@ type HttpClientConfig struct {
 
 type HttpClient struct {
 	underlying *http.Client
+	// streaming is used for long-lived watch connections and therefore has no
+	// overall client timeout (which would sever the stream).
+	streaming  *http.Client
 	address    *url.URL
 	tracer     trace.Tracer
 	propagator propagation.TextMapPropagator
@@ -49,10 +52,28 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 
 	return &HttpClient{
 		underlying: &http.Client{Timeout: c.Timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		streaming:  &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		address:    u,
 		tracer:     tracer,
 		propagator: otel.GetTextMapPropagator(),
 	}, nil
+}
+
+// Watch opens a long-lived server-sent-events stream of the chamber at path.
+// The request is not subject to the client's overall timeout, so the stream can
+// stay open. The caller must close the returned response body.
+func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, error) {
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("path", path).Msg("opening chamber watch stream")
+
+	target := c.address.Scheme + "://" + c.address.Host + "/v1/chambers/" + strings.TrimPrefix(path, "/") + "?watch=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	c.propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
+	return c.streaming.Do(req)
 }
 
 func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {

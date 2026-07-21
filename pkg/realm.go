@@ -1,10 +1,12 @@
 package realm
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -23,10 +25,13 @@ type Realm struct {
 	path               string
 	initSync           sync.Once
 	stopCh             chan struct{}
+	cancel             context.CancelFunc
+	wg                 sync.WaitGroup
 	mu                 sync.RWMutex
 	root               *ChamberEntry
 	client             *client.HttpClient
 	pollingInterval    time.Duration
+	streaming          bool
 	logger             *logging.TracedLogger
 	tracer             trace.Tracer
 }
@@ -37,6 +42,9 @@ type RealmConfig struct {
 	applicationVersion string
 	// pollingInterval is how often realm will refetch the chamber from the realm server
 	pollingInterval time.Duration
+	// streaming makes realm keep its chamber current via a server-sent-events
+	// stream (with polling as an automatic fallback) instead of only polling
+	streaming bool
 }
 
 const (
@@ -98,6 +106,17 @@ func WithVersion(version string) RealmOption {
 	})
 }
 
+// WithStreaming enables real-time updates over a server-sent-events stream. When
+// enabled, realm applies chamber changes as the server pushes them, reconnecting
+// with backoff and falling back to polling if the server does not support
+// streaming. Defaults to false (polling only).
+func WithStreaming(streaming bool) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.streaming = streaming
+		return rc
+	})
+}
+
 // NewRealm returns a new Realm struct that carries out all of the core features
 func NewRealm(options ...RealmOption) (*Realm, error) {
 	cfg := RealmConfig{}
@@ -128,13 +147,15 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		applicationVersion: cfg.applicationVersion,
 		stopCh:             make(chan struct{}),
 		pollingInterval:    cfg.pollingInterval,
+		streaming:          cfg.streaming,
 	}, nil
 }
 
 // Start starts realm and initializes the underlying chamber
 func (rlm *Realm) Start() error {
 	var err error
-	ctx := rlm.logger.WithContext(context.Background())
+	ctx, cancel := context.WithCancel(rlm.logger.WithContext(context.Background()))
+	rlm.cancel = cancel
 	rlm.initSync.Do(func() {
 		var chamber *Chamber
 		if chamber, err = rlm.retrieveChamber(ctx, rlm.path); err == nil {
@@ -143,31 +164,144 @@ func (rlm *Realm) Start() error {
 	})
 
 	if err != nil {
+		cancel()
 		return err
 	}
 
+	rlm.wg.Add(1)
 	go func() {
-		ticker := time.NewTicker(rlm.pollingInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-rlm.stopCh:
-				rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
-				return
-			case <-ticker.C:
-				if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
-					rlm.setChamber(chamber)
-				}
-			}
+		defer rlm.wg.Done()
+		if rlm.streaming {
+			rlm.stream(ctx)
+		} else {
+			rlm.poll(ctx)
 		}
 	}()
 
 	return nil
 }
 
-// Stop stops realm and flushes any pending tasks
+// poll refreshes the chamber snapshot on a fixed interval until realm is stopped.
+func (rlm *Realm) poll(ctx context.Context) {
+	ticker := time.NewTicker(rlm.pollingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-rlm.stopCh:
+			rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
+			return
+		case <-ticker.C:
+			if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
+				rlm.setChamber(chamber)
+			}
+		}
+	}
+}
+
+// stream keeps the chamber snapshot current from a server-sent-events stream,
+// reconnecting with capped exponential backoff. If the server does not support
+// streaming, it falls back to polling permanently.
+func (rlm *Realm) stream(ctx context.Context) {
+	const (
+		initialBackoff = 1 * time.Second
+		maxBackoff     = 30 * time.Second
+	)
+	backoff := initialBackoff
+
+	for {
+		select {
+		case <-rlm.stopCh:
+			rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
+			return
+		default:
+		}
+
+		supported, received, err := rlm.consumeStream(ctx)
+		if !supported {
+			rlm.logger.InfoCtx(ctx).Msg("realm server does not support streaming; falling back to polling")
+			rlm.poll(ctx)
+			return
+		}
+		if err != nil {
+			rlm.logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("chamber stream disconnected; reconnecting")
+		}
+		if received {
+			backoff = initialBackoff
+		}
+
+		select {
+		case <-rlm.stopCh:
+			return
+		case <-time.After(backoff):
+		}
+
+		if !received {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+}
+
+// consumeStream opens one streaming connection and applies chamber updates until
+// it drops. It reports whether the server supports streaming (false means the
+// caller should fall back to polling) and whether at least one event was
+// applied (used to reset reconnect backoff).
+func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received bool, err error) {
+	ctx, span := rlm.tracer.Start(ctx, "consumeStream", trace.WithAttributes(attribute.String("realm.path", rlm.path)))
+	defer span.End()
+
+	resp, err := rlm.client.Watch(ctx, rlm.path)
+	if err != nil {
+		// A transient connection error: keep retrying the stream.
+		return true, false, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		// The server did not give us an event stream (older server, or the watch
+		// parameter is unsupported): fall back to polling.
+		return false, false, nil
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	var data strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "data:"):
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case line == "":
+			// blank line terminates an event
+			if data.Len() == 0 {
+				continue
+			}
+			var c Chamber
+			if uerr := json.Unmarshal([]byte(data.String()), &c); uerr != nil {
+				rlm.logger.ErrorCtx(ctx).Str("error", uerr.Error()).Msg("could not unmarshal streamed chamber")
+			} else {
+				rlm.setChamber(&c)
+				received = true
+			}
+			data.Reset()
+		default:
+			// comment/heartbeat (": ping") or other SSE fields (event:, id:) — ignore
+		}
+	}
+
+	return true, received, scanner.Err()
+}
+
+// Stop stops realm and blocks until the background refresh goroutine has exited.
 func (rlm *Realm) Stop() {
 	close(rlm.stopCh)
+	if rlm.cancel != nil {
+		rlm.cancel()
+	}
+	rlm.wg.Wait()
 }
 
 func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, error) {

@@ -20,9 +20,10 @@ switches, synchronized across application zones, with progressive rollout.
 **Honest current state:** flags are grouped into hierarchical **chambers** that
 inherit from their parents; values can be overridden per **application version
 range** and rolled out to a **deterministic percentage** of subjects; the SDK
-stays current by **polling** (default 15 min). Not yet built: attribute-based
-targeting, real-time streaming ("immediately sourced"), API-key auth, and audit
-logging. See `docs/ARCHITECTURE.md` for the full gap analysis.
+stays current by **polling** (default 15 min) or **real-time streaming**
+(opt-in SSE, "immediately sourced"). Not yet built: attribute-based targeting,
+cross-replica stream fanout, API-key auth, and audit logging. See
+`docs/ARCHITECTURE.md` for the full gap analysis.
 
 ## Domain vocabulary
 
@@ -46,8 +47,12 @@ Read `pkg/rule.go`, `pkg/override.go`, `pkg/rollout.go`, `pkg/chamber.go`,
   `InheritFrom` / `OverwriteFrom`. **ChamberEntry** is the immutable,
   version-bound read view the SDK evaluates against.
 - **Realm** — the SDK client object (`NewRealm(WithHttpClient, WithPath,
-  WithVersion, WithPollingInterval)`; `Start`/`Stop`; `Bool`/`String`/`Float64`/
-  `CustomValue`; `NewContext` / `NewContextWithEvaluation`).
+  WithVersion, WithPollingInterval, WithStreaming)`; `Start`/`Stop`; `Bool`/
+  `String`/`Float64`/`CustomValue`; `NewContext` / `NewContextWithEvaluation`).
+  Refresh is either **polling** (default) or **streaming** (`WithStreaming(true)`
+  → SSE `GET /v1/chambers/<path>?watch=true`, with polling fallback). The server
+  pushes changes via an in-process **broker** (`http/broker.go`, notified after
+  each write). See `docs/ARCHITECTURE.md`.
 
 ## Architecture map
 
