@@ -77,6 +77,9 @@ func handle(ctx context.Context, hc HandlerConfig) http.Handler {
 	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
 	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
 	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
+	// Liveness for orchestrators (e.g. Kubernetes probes); deliberately not
+	// traced so frequent probes do not flood trace exports.
+	mux.HandleFunc("/healthz", handleHealth)
 
 	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler, logger)
@@ -475,6 +478,16 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 			flusher.Flush()
 		}
 	}
+}
+
+// handleHealth reports that the server is up and serving requests.
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ok\n"))
 }
 
 func handleUIEmpty() http.Handler {
