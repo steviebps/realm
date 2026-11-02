@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -116,13 +117,11 @@ func WithVersion(version string) RealmOption {
 // EvaluationContext. Repeated calls merge.
 func WithAttributes(attributes map[string]string) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
-		merged := make(map[string]string, len(rc.attributes)+len(attributes))
-		for k, v := range rc.attributes {
-			merged[k] = v
+		merged := maps.Clone(rc.attributes)
+		if merged == nil {
+			merged = make(map[string]string, len(attributes))
 		}
-		for k, v := range attributes {
-			merged[k] = v
-		}
+		maps.Copy(merged, attributes)
 		rc.attributes = merged
 		return rc
 	})
@@ -161,12 +160,13 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		cfg.pollingInterval = DefaultPollingInterval
 	}
 
-	attributes := make(map[string]string, len(cfg.attributes)+1)
-	for k, v := range cfg.attributes {
-		attributes[k] = v
-	}
+	attributes := maps.Clone(cfg.attributes)
 	if cfg.applicationVersion != "" {
-		attributes[VersionAttribute] = cfg.applicationVersion
+		if attributes == nil {
+			attributes = make(map[string]string, 1)
+		}
+		// stored "v"-prefixed so semver clauses compare without allocating
+		attributes[VersionAttribute] = canonicalSemver(cfg.applicationVersion)
 	}
 
 	return &Realm{

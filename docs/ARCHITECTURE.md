@@ -79,8 +79,8 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   (`GET`→get/list, `POST`→put, `PATCH`→patch-merge via `OverwriteFrom`,
   `DELETE`→delete). `GET ?inherit=false` returns the chamber as stored,
   without inherited flags (editors use this).
-- **Safe editing** — `GET` returns an `ETag` of the chamber as stored at its
-  path; writes honor `If-Match` / `If-None-Match: *` and return `412` on
+- **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as
+  stored at its path (the inherited view carries none); writes honor `If-Match` / `If-None-Match: *` and return `412` on
   mismatch, checked under a per-path lock (`http/meta.go`). Every write is
   appended to history with the `X-Realm-Actor` header as the actor.
 - **Metadata endpoints** (`http/meta_handlers.go`) — `GET /v1/history/<path>`

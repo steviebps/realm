@@ -46,9 +46,6 @@ export type Flag = {
   targeting?: TargetingRule[];
 };
 
-/** @deprecated use Flag */
-export type Rule = Flag;
-
 export type Revision = {
   revision: number;
   time: string;

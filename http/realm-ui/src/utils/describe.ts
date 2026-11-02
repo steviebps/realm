@@ -11,8 +11,7 @@ export const OPERATOR_LABELS: Record<Operator, string> = {
 /** Returns the catalog label for a value, falling back to the raw value. */
 export const labelFor = (catalog: Catalog, attribute: string, value: string) => catalog[attribute]?.[value] ?? value;
 
-export const formatValue = (value: FlagValue): string =>
-  typeof value === 'object' ? JSON.stringify(value) : JSON.stringify(value);
+export const formatValue = (value: FlagValue): string => JSON.stringify(value);
 
 export const describeClause = (clause: Clause, catalog: Catalog) => {
   const values = clause.values.map((v) => labelFor(catalog, clause.attribute, v));

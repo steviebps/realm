@@ -27,20 +27,20 @@ func TestClauseMatches(t *testing.T) {
 		clause Clause
 		want   bool
 	}{
-		{"in match", Clause{"locationId", OpIn, []string{"loc-b", "loc-a"}}, true},
-		{"in miss", Clause{"locationId", OpIn, []string{"loc-b"}}, false},
-		{"in on key", Clause{"key", OpIn, []string{"user-1"}}, true},
-		{"notIn match", Clause{"environment", OpNotIn, []string{"staging"}}, true},
-		{"notIn miss", Clause{"environment", OpNotIn, []string{"prod"}}, false},
-		{"notIn missing attribute never matches", Clause{"region", OpNotIn, []string{"us-west-2"}}, false},
-		{"in missing attribute", Clause{"tenantId", OpIn, []string{"t1"}}, false},
-		{"startsWith short sha", Clause{"buildSha", OpStartsWith, []string{"3f9a2c7"}}, true},
-		{"startsWith miss", Clause{"buildSha", OpStartsWith, []string{"aaaa"}}, false},
-		{"semverGte equal", Clause{"version", OpSemverGte, []string{"v1.4.2"}}, true},
-		{"semverGte below", Clause{"version", OpSemverGte, []string{"1.5.0"}}, false},
-		{"semverLte above", Clause{"version", OpSemverLte, []string{"1.4.1"}}, false},
-		{"semverLte equal", Clause{"version", OpSemverLte, []string{"1.4.2"}}, true},
-		{"semver on non-semver attribute", Clause{"environment", OpSemverGte, []string{"1.0.0"}}, false},
+		{"in match", Clause{Attribute: "locationId", Op: OpIn, Values: []string{"loc-b", "loc-a"}}, true},
+		{"in miss", Clause{Attribute: "locationId", Op: OpIn, Values: []string{"loc-b"}}, false},
+		{"in on key", Clause{Attribute: "key", Op: OpIn, Values: []string{"user-1"}}, true},
+		{"notIn match", Clause{Attribute: "environment", Op: OpNotIn, Values: []string{"staging"}}, true},
+		{"notIn miss", Clause{Attribute: "environment", Op: OpNotIn, Values: []string{"prod"}}, false},
+		{"notIn missing attribute never matches", Clause{Attribute: "region", Op: OpNotIn, Values: []string{"us-west-2"}}, false},
+		{"in missing attribute", Clause{Attribute: "tenantId", Op: OpIn, Values: []string{"t1"}}, false},
+		{"startsWith short sha", Clause{Attribute: "buildSha", Op: OpStartsWith, Values: []string{"3f9a2c7"}}, true},
+		{"startsWith miss", Clause{Attribute: "buildSha", Op: OpStartsWith, Values: []string{"aaaa"}}, false},
+		{"semverGte equal", Clause{Attribute: "version", Op: OpSemverGte, Values: []string{"v1.4.2"}}, true},
+		{"semverGte below", Clause{Attribute: "version", Op: OpSemverGte, Values: []string{"1.5.0"}}, false},
+		{"semverLte above", Clause{Attribute: "version", Op: OpSemverLte, Values: []string{"1.4.1"}}, false},
+		{"semverLte equal", Clause{Attribute: "version", Op: OpSemverLte, Values: []string{"1.4.2"}}, true},
+		{"semver on non-semver attribute", Clause{Attribute: "environment", Op: OpSemverGte, Values: []string{"1.0.0"}}, false},
 	}
 
 	for _, test := range tests {
@@ -332,8 +332,8 @@ func BenchmarkFlagValueForTargeting(b *testing.B) {
 	f := &Flag{
 		Rule: &Rule{Type: "boolean", Value: false},
 		Targeting: []*TargetingRule{
-			{Clauses: []*Clause{{"environment", OpIn, []string{"prod"}}, {"locationId", OpIn, locations}}, Value: true},
-			{Clauses: []*Clause{{"version", OpSemverGte, []string{"v2.0.0"}}}, Value: true, Rollout: &Rollout{Percentage: 25, BucketBy: "locationId"}},
+			{Clauses: []*Clause{{Attribute: "environment", Op: OpIn, Values: []string{"prod"}}, {Attribute: "locationId", Op: OpIn, Values: locations}}, Value: true},
+			{Clauses: []*Clause{{Attribute: "version", Op: OpSemverGte, Values: []string{"v2.0.0"}}}, Value: true, Rollout: &Rollout{Percentage: 25, BucketBy: "locationId"}},
 		},
 	}
 	ec := EvaluationContext{Key: "user-1", Attributes: map[string]string{

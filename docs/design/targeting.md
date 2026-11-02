@@ -129,7 +129,7 @@ Metadata always goes to the raw storage beneath the `inheritable` wrapper.
 
 ## Safe editing
 
-- **Optimistic concurrency.** `GET /v1/chambers/<path>` returns an `ETag`
+- **Optimistic concurrency.** `GET /v1/chambers/<path>?inherit=false` returns an `ETag`
   (content hash of the chamber *as stored at that path*, not its inherited
   view, so editing a parent never invalidates a child's ETag).
   `POST`/`PATCH`/`DELETE` honor `If-Match` (and `If-None-Match: *` for

@@ -78,9 +78,13 @@ func TestChamberOptimisticConcurrency(t *testing.T) {
 		t.Fatalf("second create-only: expected 412, got %d", resp.StatusCode)
 	}
 
-	resp, _ = do(t, http.MethodGet, url, "", nil)
+	resp, _ = do(t, http.MethodGet, url+"?inherit=false", "", nil)
 	if got := resp.Header.Get("ETag"); got != created {
 		t.Fatalf("GET ETag %q does not match create ETag %q", got, created)
+	}
+	resp, _ = do(t, http.MethodGet, url, "", nil)
+	if got := resp.Header.Get("ETag"); got != "" {
+		t.Fatalf("inherited GET should not carry the stored chamber's ETag, got %q", got)
 	}
 
 	// A write with the current ETag succeeds and changes the ETag.
@@ -113,7 +117,7 @@ func TestParentWriteDoesNotChangeChildETag(t *testing.T) {
 
 	do(t, http.MethodPost, srv.URL+"/v1/chambers/app/", strings.Replace(flagBody, "%s", "true", 1), nil)
 
-	resp, _ = do(t, http.MethodGet, srv.URL+"/v1/chambers/app/prod/", "", nil)
+	resp, _ = do(t, http.MethodGet, srv.URL+"/v1/chambers/app/prod/?inherit=false", "", nil)
 	if resp.Header.Get("ETag") != child {
 		t.Error("editing a parent should not invalidate the child's ETag")
 	}
@@ -227,6 +231,7 @@ func TestReservedPathsAreHidden(t *testing.T) {
 	srv := newInheritableTestServer(t)
 	do(t, http.MethodPost, srv.URL+"/v1/chambers/", `{"rules":{}}`, nil)
 	do(t, http.MethodPost, srv.URL+"/v1/chambers/app/", `{"rules":{}}`, nil)
+	do(t, http.MethodPost, srv.URL+"/v1/chambers/_realmx/", `{"rules":{}}`, nil)
 	do(t, http.MethodPatch, srv.URL+"/v1/catalog/locationId", `{"values":{"a":"A"}}`, nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
@@ -237,8 +242,17 @@ func TestReservedPathsAreHidden(t *testing.T) {
 	}
 
 	_, out := do(t, http.MethodGet, srv.URL+"/v1/chambers/?list=true", "", nil)
-	if strings.Contains(string(out.Data), "_realm") {
-		t.Errorf("root listing exposes metadata: %s", out.Data)
+	var names []string
+	if err := json.Unmarshal(out.Data, &names); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, name := range names {
+		if isReservedName(name) {
+			t.Errorf("root listing exposes metadata: %v", names)
+		}
+	}
+	if !strings.Contains(string(out.Data), "_realmx") {
+		t.Errorf("a chamber merely prefixed with _realm should still be listed: %v", names)
 	}
 }
 

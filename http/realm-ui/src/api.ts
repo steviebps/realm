@@ -36,7 +36,10 @@ const errorFrom = async (res: Response) => {
   }
 };
 
-const chamberURL = (path: string, query = '') => `/v1/chambers${encodePath(ensureTrailingSlash(path))}${query}`;
+const apiURL = (route: string, path: string, query = '') =>
+  `/v1/${route}${encodePath(ensureTrailingSlash(path))}${query}`;
+const chamberURL = (path: string, query = '') => apiURL('chambers', path, query);
+const historyURL = (path: string, query = '') => apiURL('history', path, query);
 
 export const listChambers = async (path: string): Promise<string[]> => {
   const res = await fetch(chamberURL(path, '?list=true'));
@@ -53,7 +56,12 @@ export type LoadedChamber = {
 };
 
 export const getChamber = async (path: string): Promise<LoadedChamber> => {
-  const [ownRes, mergedRes] = await Promise.all([fetch(chamberURL(path, '?inherit=false')), fetch(chamberURL(path))]);
+  // The root chamber has no parents, so its inherited view is identical.
+  const isRoot = ensureTrailingSlash(path) === '/';
+  const [ownRes, mergedRes] = await Promise.all([
+    fetch(chamberURL(path, '?inherit=false')),
+    isRoot ? null : fetch(chamberURL(path)),
+  ]);
   if (ownRes.status === 404) {
     return { own: null, merged: null, etag: null };
   }
@@ -61,13 +69,14 @@ export const getChamber = async (path: string): Promise<LoadedChamber> => {
     throw await errorFrom(ownRes);
   }
   const own = (await ownRes.json()) as ChamberResponse;
-  const merged = mergedRes.ok ? ((await mergedRes.json()) as ChamberResponse) : own;
+  const merged = mergedRes?.ok ? ((await mergedRes.json()) as ChamberResponse) : own;
   return { own: own.data ?? null, merged: merged.data ?? null, etag: ownRes.headers.get('ETag') };
 };
 
+// The server records an unset actor as anonymous.
 const writeHeaders = (precondition: Record<string, string>) => ({
   'Content-Type': 'application/json',
-  'X-Realm-Actor': getActor() || 'anonymous',
+  ...(getActor() ? { 'X-Realm-Actor': getActor() } : {}),
   ...precondition,
 });
 
@@ -89,7 +98,7 @@ export const saveChamber = async (path: string, chamber: Chamber, etag: string |
 export const createChamber = (path: string) => saveChamber(path, { rules: {} }, null);
 
 export const getHistory = async (path: string): Promise<Revision[]> => {
-  const res = await fetch(`/v1/history${encodePath(ensureTrailingSlash(path))}`);
+  const res = await fetch(historyURL(path));
   if (!res.ok) {
     throw await errorFrom(res);
   }
@@ -97,7 +106,7 @@ export const getHistory = async (path: string): Promise<Revision[]> => {
 };
 
 export const getRevision = async (path: string, revision: number): Promise<Revision> => {
-  const res = await fetch(`/v1/history${encodePath(ensureTrailingSlash(path))}?revision=${revision}`);
+  const res = await fetch(historyURL(path, `?revision=${revision}`));
   if (!res.ok) {
     throw await errorFrom(res);
   }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,8 +32,6 @@ type S3Storage struct {
 var (
 	_ Storage = (*S3Storage)(nil)
 )
-
-const s3EntryKey string = "entry"
 
 // NewS3Storage creates S3-backed storage. Options:
 //
@@ -209,7 +206,7 @@ func (s *S3Storage) List(ctx context.Context, prefix string) ([]string, error) {
 			keys = append(keys, strings.TrimPrefix(aws.ToString(cp.Prefix), listPrefix))
 		}
 		for _, obj := range page.Contents {
-			if strings.HasSuffix(aws.ToString(obj.Key), "_"+s3EntryKey) {
+			if strings.HasSuffix(aws.ToString(obj.Key), "_"+objectEntryKey) {
 				// file
 				keys = append(keys, ".")
 			}
@@ -225,12 +222,10 @@ func (s *S3Storage) Close(ctx context.Context) error {
 	return nil
 }
 
-// objectKey maps a logical path such as "/a/b/" to its object key "a/b/_entry"
-// (under the configured prefix).
+// objectKey returns the object key for a logical path under the configured
+// prefix, using the layout shared with GCSStorage (see objectKeyFor).
 func (s *S3Storage) objectKey(logicalPath string) string {
-	k := logicalPath + s3EntryKey
-	dir := strings.TrimPrefix(path.Dir(k), "/")
-	return s.withPrefix(path.Join(dir, "_"+path.Base(k)))
+	return s.withPrefix(objectKeyFor(logicalPath))
 }
 
 // withPrefix places a relative object key under the configured prefix.

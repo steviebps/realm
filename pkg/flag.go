@@ -62,37 +62,35 @@ func (f *Flag) ValueFor(flagKey string, ec EvaluationContext) interface{} {
 	return f.Value
 }
 
+// valueAs resolves the flag for ec and asserts the result to T, returning
+// defaultValue and false when it is not a T.
+func valueAs[T any](f *Flag, flagKey string, ec EvaluationContext, defaultValue T) (T, bool) {
+	v, ok := f.ValueFor(flagKey, ec).(T)
+	if !ok {
+		return defaultValue, false
+	}
+	return v, true
+}
+
 // StringValueFor retrieves a string value of the flag for the given evaluation
 // context and returns the default value if it could not be converted, along
 // with whether the conversion succeeded.
 func (f *Flag) StringValueFor(flagKey string, ec EvaluationContext, defaultValue string) (string, bool) {
-	v, ok := f.ValueFor(flagKey, ec).(string)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
+	return valueAs(f, flagKey, ec, defaultValue)
 }
 
 // BoolValueFor retrieves a bool value of the flag for the given evaluation
 // context and returns the default value if it could not be converted, along
 // with whether the conversion succeeded.
 func (f *Flag) BoolValueFor(flagKey string, ec EvaluationContext, defaultValue bool) (bool, bool) {
-	v, ok := f.ValueFor(flagKey, ec).(bool)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
+	return valueAs(f, flagKey, ec, defaultValue)
 }
 
 // Float64ValueFor retrieves a float64 value of the flag for the given
 // evaluation context and returns the default value if it could not be
 // converted, along with whether the conversion succeeded.
 func (f *Flag) Float64ValueFor(flagKey string, ec EvaluationContext, defaultValue float64) (float64, bool) {
-	v, ok := f.ValueFor(flagKey, ec).(float64)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
+	return valueAs(f, flagKey, ec, defaultValue)
 }
 
 // CustomValueFor unmarshals the flag value for the given evaluation context

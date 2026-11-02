@@ -2,6 +2,7 @@ package realm
 
 import (
 	"encoding/json"
+	"maps"
 )
 
 // Chamber is a struct that holds metadata and rules
@@ -52,18 +53,9 @@ type ChamberEntry struct {
 // process-wide defaults (for example "environment" or "version") consulted
 // when an evaluation context does not set them.
 func NewChamberEntry(c *Chamber, attributes map[string]string) *ChamberEntry {
-	m := make(map[string]*Flag, len(c.Rules))
-	for k, v := range c.Rules {
-		m[k] = v
-	}
-	attrs := make(map[string]string, len(attributes))
-	for k, v := range attributes {
-		attrs[k] = v
-	}
-
 	return &ChamberEntry{
-		rules:      m,
-		attributes: attrs,
+		rules:      maps.Clone(c.Rules),
+		attributes: maps.Clone(attributes),
 	}
 }
 
@@ -78,19 +70,26 @@ func (c *ChamberEntry) Get(ruleKey string) *Flag {
 	return t
 }
 
-// StringValueFor retrieves a string by the key of the rule, resolved for the
-// given evaluation context (applying any targeting rules). It returns the
-// default value and an error if the rule is not found or could not be converted.
-func (c *ChamberEntry) StringValueFor(ruleKey string, ec EvaluationContext, defaultValue string) (string, error) {
+// entryValue resolves ruleKey for ec (merged over the entry's process-wide
+// attributes) using the typed accessor get, wrapping lookup and conversion
+// failures in the chamber's error types.
+func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, defaultValue T, get func(*Flag, string, EvaluationContext, T) (T, bool)) (T, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := t.StringValueFor(ruleKey, ec.withDefaults(c.attributes), defaultValue)
+	v, ok := get(t, ruleKey, ec.withDefaults(c.attributes), defaultValue)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
 	return v, nil
+}
+
+// StringValueFor retrieves a string by the key of the rule, resolved for the
+// given evaluation context (applying any targeting rules). It returns the
+// default value and an error if the rule is not found or could not be converted.
+func (c *ChamberEntry) StringValueFor(ruleKey string, ec EvaluationContext, defaultValue string) (string, error) {
+	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).StringValueFor)
 }
 
 // StringValue retrieves a string by the key of the rule
@@ -103,15 +102,7 @@ func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string,
 // evaluation context (applying any targeting rules). It returns the default
 // value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) BoolValueFor(ruleKey string, ec EvaluationContext, defaultValue bool) (bool, error) {
-	t := c.Get(ruleKey)
-	if t == nil {
-		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
-	}
-	v, ok := t.BoolValueFor(ruleKey, ec.withDefaults(c.attributes), defaultValue)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
-	}
-	return v, nil
+	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).BoolValueFor)
 }
 
 // BoolValue retrieves a bool by the key of the rule
@@ -124,15 +115,7 @@ func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error
 // given evaluation context (applying any targeting rules). It returns the
 // default value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) Float64ValueFor(ruleKey string, ec EvaluationContext, defaultValue float64) (float64, error) {
-	t := c.Get(ruleKey)
-	if t == nil {
-		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
-	}
-	v, ok := t.Float64ValueFor(ruleKey, ec.withDefaults(c.attributes), defaultValue)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
-	}
-	return v, nil
+	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).Float64ValueFor)
 }
 
 // Float64Value retrieves a float64 by the key of the rule

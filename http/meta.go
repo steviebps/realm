@@ -29,9 +29,20 @@ const ActorHeader = "X-Realm-Actor"
 
 const defaultActor = "anonymous"
 
+// reservedName is the root-level storage name of realm's metadata.
+var reservedName = strings.Trim(reservedPrefix, "/")
+
 // isReservedPath reports whether p falls under realm's metadata prefix.
 func isReservedPath(p string) bool {
-	return strings.HasPrefix(p, reservedPrefix) || p == strings.TrimSuffix(reservedPrefix, "/")
+	return strings.HasPrefix(p, reservedPrefix) || p == "/"+reservedName
+}
+
+// isReservedName reports whether a root listing entry is realm's metadata.
+// Backends format directory names differently ("_realm", "_realm/", or a
+// nested "_realm/catalog"), so match the segment exactly.
+func isReservedName(name string) bool {
+	segment, _, _ := strings.Cut(name, "/")
+	return segment == reservedName
 }
 
 // etagOf returns a strong ETag for stored chamber bytes.
@@ -83,8 +94,8 @@ type Revision struct {
 	Chamber json.RawMessage `json:"chamber,omitempty"`
 }
 
+// historyIndex lists revision summaries, newest first.
 type historyIndex struct {
-	Latest    int        `json:"latest"`
 	Revisions []Revision `json:"revisions"`
 }
 
@@ -94,28 +105,30 @@ type metaStore struct {
 	catalogMu sync.Mutex
 }
 
-// segment encodes a chamber path or attribute name as a single storage path
-// segment so nested chambers never collide with one another's metadata.
-func segment(s string) string {
-	return url.PathEscape(s)
-}
-
+// historyIndexKey encodes the chamber path as a single storage segment so
+// nested chambers never collide with one another's history.
 func historyIndexKey(chamberPath string) string {
-	return reservedPrefix + "history/" + segment(chamberPath) + "/"
+	return reservedPrefix + "history/" + url.PathEscape(chamberPath) + "/"
 }
 
 func revisionKey(chamberPath string, rev int) string {
 	return historyIndexKey(chamberPath) + strconv.Itoa(rev) + "/"
 }
 
+// get returns the entry stored at key, or nil when it does not exist.
+func (m *metaStore) get(ctx context.Context, key string) (*storage.StorageEntry, error) {
+	entry, err := m.strg.Get(ctx, key)
+	var nf *storage.NotFoundError
+	if errors.As(err, &nf) {
+		return nil, nil
+	}
+	return entry, err
+}
+
 // readJSON loads the value at key into v. found is false when it does not exist.
 func (m *metaStore) readJSON(ctx context.Context, key string, v any) (found bool, err error) {
-	entry, err := m.strg.Get(ctx, key)
-	if err != nil {
-		var nf *storage.NotFoundError
-		if errors.As(err, &nf) {
-			return false, nil
-		}
+	entry, err := m.get(ctx, key)
+	if entry == nil || err != nil {
 		return false, err
 	}
 	return true, json.Unmarshal(entry.Value, v)
@@ -129,35 +142,23 @@ func (m *metaStore) writeJSON(ctx context.Context, key string, v any) error {
 	return m.strg.Put(ctx, storage.StorageEntry{Key: key, Value: b})
 }
 
-// currentETag returns the ETag of the chamber as stored at chamberPath
-// (without inheritance), or "" when it does not exist.
-func (m *metaStore) currentETag(ctx context.Context, chamberPath string) (string, error) {
-	entry, err := m.strg.Get(ctx, chamberPath)
-	if err != nil {
-		var nf *storage.NotFoundError
-		if errors.As(err, &nf) {
-			return "", nil
-		}
-		return "", err
-	}
-	return etagOf(entry.Value), nil
-}
-
 // appendHistory records a change. Callers must hold the path lock.
-func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev Revision) (Revision, error) {
+func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev Revision) error {
 	var idx historyIndex
 	if _, err := m.readJSON(ctx, historyIndexKey(chamberPath), &idx); err != nil {
-		return rev, fmt.Errorf("could not read history index: %w", err)
+		return fmt.Errorf("could not read history index: %w", err)
 	}
 
-	rev.Revision = idx.Latest + 1
+	rev.Revision = 1
+	if len(idx.Revisions) > 0 {
+		rev.Revision = idx.Revisions[0].Revision + 1
+	}
 	if err := m.writeJSON(ctx, revisionKey(chamberPath, rev.Revision), rev); err != nil {
-		return rev, fmt.Errorf("could not write revision: %w", err)
+		return fmt.Errorf("could not write revision: %w", err)
 	}
 
 	summary := rev
 	summary.Chamber = nil
-	idx.Latest = rev.Revision
 	idx.Revisions = append([]Revision{summary}, idx.Revisions...)
 	var expired []Revision
 	if len(idx.Revisions) > maxHistory {
@@ -165,12 +166,12 @@ func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev R
 		idx.Revisions = idx.Revisions[:maxHistory]
 	}
 	if err := m.writeJSON(ctx, historyIndexKey(chamberPath), idx); err != nil {
-		return rev, fmt.Errorf("could not write history index: %w", err)
+		return fmt.Errorf("could not write history index: %w", err)
 	}
 	for _, old := range expired {
 		_ = m.strg.Delete(ctx, revisionKey(chamberPath, old.Revision))
 	}
-	return rev, nil
+	return nil
 }
 
 // history returns revision summaries, newest first.

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -42,6 +43,10 @@ type Clause struct {
 	Attribute string   `json:"attribute"`
 	Op        Operator `json:"op"`
 	Values    []string `json:"values"`
+
+	// semverBound caches the "v"-prefixed semver operand so evaluation does
+	// not rebuild it. Set by validation; computed on demand when empty.
+	semverBound string
 }
 
 type clauseAlias Clause
@@ -71,7 +76,8 @@ func (c *Clause) validate() error {
 		if len(c.Values) != 1 {
 			return fmt.Errorf("clause on %q: operator %q takes exactly one value", c.Attribute, c.Op)
 		}
-		if !semver.IsValid(canonicalSemver(c.Values[0])) {
+		c.semverBound = canonicalSemver(c.Values[0])
+		if !semver.IsValid(c.semverBound) {
 			return fmt.Errorf("clause on %q: %q is not a valid semantic version", c.Attribute, c.Values[0])
 		}
 		return nil
@@ -88,18 +94,9 @@ func (c *Clause) Matches(ec EvaluationContext) bool {
 	}
 	switch c.Op {
 	case OpIn:
-		for _, want := range c.Values {
-			if v == want {
-				return true
-			}
-		}
+		return slices.Contains(c.Values, v)
 	case OpNotIn:
-		for _, want := range c.Values {
-			if v == want {
-				return false
-			}
-		}
-		return true
+		return !slices.Contains(c.Values, v)
 	case OpStartsWith:
 		for _, want := range c.Values {
 			if strings.HasPrefix(v, want) {
@@ -111,7 +108,11 @@ func (c *Clause) Matches(ec EvaluationContext) bool {
 		if !semver.IsValid(have) {
 			return false
 		}
-		cmp := semver.Compare(have, canonicalSemver(c.Values[0]))
+		bound := c.semverBound
+		if bound == "" {
+			bound = canonicalSemver(c.Values[0])
+		}
+		cmp := semver.Compare(have, bound)
 		if c.Op == OpSemverGte {
 			return cmp >= 0
 		}
@@ -189,7 +190,10 @@ func (r *Rollout) Includes(flagKey string, ec EvaluationContext) bool {
 // key. The same (seed, key) pair always maps to the same bucket, which is what
 // makes rollout assignment sticky for a given evaluation context.
 func bucket(seed, key string) float64 {
-	sum := sha1.Sum([]byte(seed + "." + key))
+	// Hash "<seed>.<key>" from a stack buffer so typical keys never allocate.
+	var buf [128]byte
+	b := append(append(append(buf[:0], seed...), '.'), key...)
+	sum := sha1.Sum(b)
 	// Use the 15 leading hex digits (60 bits) of the digest, matching the
 	// widely used LaunchDarkly-style bucketing algorithm. Shifting the first
 	// 8 bytes right by 4 yields exactly those 60 bits without allocating.
@@ -224,14 +228,14 @@ func (tr *TargetingRule) Applies(flagKey string, ec EvaluationContext) bool {
 	return tr.Rollout.Includes(flagKey, ec)
 }
 
-// targetingRuleJSON mirrors TargetingRule with a raw value so the value can be
-// type-checked against the owning flag's type.
+type targetingRuleAlias TargetingRule
+
+// targetingRuleJSON decodes a TargetingRule with its value kept raw so the
+// value can be type-checked against the owning flag's type. The outer Value
+// field shadows the embedded one.
 type targetingRuleJSON struct {
-	ID          string          `json:"id,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Clauses     []*Clause       `json:"clauses,omitempty"`
-	Value       json.RawMessage `json:"value"`
-	Rollout     *Rollout        `json:"rollout,omitempty"`
+	targetingRuleAlias
+	Value json.RawMessage `json:"value"`
 }
 
 // parseTargeting decodes and validates targeting rules for a flag of the given type.
@@ -266,13 +270,9 @@ func parseTargeting(data json.RawMessage, ruleType string) ([]*TargetingRule, er
 			raw := r.Value
 			value = &raw
 		}
-		rules = append(rules, &TargetingRule{
-			ID:          r.ID,
-			Description: r.Description,
-			Clauses:     r.Clauses,
-			Value:       value,
-			Rollout:     r.Rollout,
-		})
+		rule := TargetingRule(r.targetingRuleAlias)
+		rule.Value = value
+		rules = append(rules, &rule)
 	}
 	return rules, nil
 }

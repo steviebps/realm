@@ -27,8 +27,14 @@ type AgentRequest struct {
 	Path      string
 }
 
+// logicalPath returns the chamber path addressed by a request under the given
+// route prefix (for example "/v1/chambers"), unescaped and with a trailing slash.
+func logicalPath(req *http.Request, routePrefix string) string {
+	p, _ := url.PathUnescape(strings.TrimPrefix(req.URL.Path, routePrefix))
+	return utils.EnsureTrailingSlash(p)
+}
+
 func buildAgentRequest(req *http.Request) *AgentRequest {
-	p, _ := url.PathUnescape(strings.TrimPrefix(req.URL.Path, "/v1/chambers"))
 	var op Operation
 
 	switch req.Method {
@@ -51,12 +57,10 @@ func buildAgentRequest(req *http.Request) *AgentRequest {
 		op = ListOperation
 	}
 
-	Path := utils.EnsureTrailingSlash(p)
-
 	return &AgentRequest{
 		Request:   req,
 		ID:        uuid.New().String(),
 		Operation: op,
-		Path:      Path,
+		Path:      logicalPath(req, "/v1/chambers"),
 	}
 }

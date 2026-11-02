@@ -1,7 +1,6 @@
 package http
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,8 +33,7 @@ func handleHistory(meta *metaStore) http.Handler {
 			return
 		}
 
-		p, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/v1/history"))
-		chamberPath := utils.EnsureTrailingSlash(p)
+		chamberPath := logicalPath(r, "/v1/history")
 		span.SetAttributes(attribute.String("realm.server.logicalPath", chamberPath))
 
 		var body any
@@ -62,12 +60,7 @@ func handleHistory(meta *metaStore) http.Handler {
 			return
 		}
 
-		raw, err := json.Marshal(body)
-		if err != nil {
-			handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
-			return
-		}
-		handleOk(w, createResponseWithErrors(raw, nil))
+		handleOkJSON(ctx, w, body)
 	})
 }
 
@@ -99,26 +92,8 @@ func handleCatalog(meta *metaStore) http.Handler {
 			errorLog.Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 		}
-		respond := func(v any) {
-			raw, err := json.Marshal(v)
-			if err != nil {
-				fail(http.StatusInternalServerError, err)
-				return
-			}
-			handleOk(w, createResponseWithErrors(raw, nil))
-		}
-
-		if attr == "" {
-			if r.Method != http.MethodGet {
-				fail(http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))
-				return
-			}
-			c, err := meta.catalog(ctx)
-			if err != nil {
-				fail(http.StatusInternalServerError, err)
-				return
-			}
-			respond(c)
+		if attr == "" && r.Method != http.MethodGet {
+			fail(http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))
 			return
 		}
 
@@ -141,12 +116,16 @@ func handleCatalog(meta *metaStore) http.Handler {
 				fail(http.StatusInternalServerError, err)
 				return
 			}
+			if attr == "" {
+				handleOkJSON(ctx, w, c)
+				return
+			}
 			values, ok := c[attr]
 			if !ok {
 				fail(http.StatusNotFound, fmt.Errorf("attribute %q is not in the catalog", attr))
 				return
 			}
-			respond(map[string]any{"values": values})
+			handleOkJSON(ctx, w, map[string]any{"values": values})
 
 		case http.MethodPost, http.MethodPut:
 			body, ok := readBody()
@@ -194,7 +173,7 @@ func handleCatalog(meta *metaStore) http.Handler {
 				fail(http.StatusInternalServerError, err)
 				return
 			}
-			respond(map[string]any{"values": c[attr]})
+			handleOkJSON(ctx, w, map[string]any{"values": c[attr]})
 
 		case http.MethodDelete:
 			if _, err := meta.updateCatalog(ctx, func(c Catalog) error {
