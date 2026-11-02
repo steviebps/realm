@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -103,8 +103,8 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 		return nil, err
 	}
 
-	path, key := f.expandPath(logicalPath + bigCacheEntryKey)
-	b, err := f.underlying.Get(filepath.Join(path, key))
+	dir, key := f.expandPath(logicalPath + bigCacheEntryKey)
+	b, err := f.underlying.Get(path.Join(dir, key))
 	if err != nil {
 		span.RecordError(err)
 		if errors.Is(err, bigcache.ErrEntryNotFound) {
@@ -134,7 +134,7 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 		span.RecordError(err)
 		return err
 	}
-	path, key := f.expandPath(e.Key + bigCacheEntryKey)
+	dir, key := f.expandPath(e.Key + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -143,7 +143,7 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	default:
 	}
 
-	return f.underlying.Set(filepath.Join(path, key), e.Value)
+	return f.underlying.Set(path.Join(dir, key), e.Value)
 }
 
 func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error {
@@ -157,7 +157,7 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 		span.RecordError(err)
 		return err
 	}
-	path, key := f.expandPath(logicalPath + bigCacheEntryKey)
+	dir, key := f.expandPath(logicalPath + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
@@ -166,7 +166,7 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 	default:
 	}
 
-	return f.underlying.Delete(filepath.Join(path, key))
+	return f.underlying.Delete(path.Join(dir, key))
 }
 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
@@ -190,7 +190,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 		}
 		key := record.Key()
 		if strings.HasPrefix(key, prefix) {
-			names = append(names, filepath.Dir(strings.TrimPrefix(key, prefix)))
+			names = append(names, path.Dir(strings.TrimPrefix(key, prefix)))
 		}
 	}
 
@@ -212,8 +212,9 @@ func (f *BigCacheStorage) Close(ctx context.Context) error {
 	return f.underlying.Close()
 }
 
+// expandPath splits a logical key into its directory and entry name. Keys are
+// logical, slash-separated paths (not OS file paths), so they are built with
+// the path package to stay identical across platforms.
 func (f *BigCacheStorage) expandPath(k string) (string, string) {
-	key := filepath.Base(k)
-	path := filepath.Dir(k)
-	return path, "_" + key
+	return path.Dir(k), "_" + path.Base(k)
 }
