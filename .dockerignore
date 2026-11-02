@@ -8,5 +8,7 @@ dist
 realm
 realm.exe
 .realm
+docs
 *.md
-!README.md
+Dockerfile
+.dockerignore
