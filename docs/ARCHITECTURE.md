@@ -7,59 +7,63 @@ where the project sits relative to its "open-source LaunchDarkly" goal.
 
 ## Data model
 
-Flags are stored as JSON and modeled by four nested types in `pkg/`:
+Flags are stored as JSON and modeled by a few nested types in `pkg/`:
 
 ```
-Chamber                      // a namespace: map[ruleName] -> OverrideableRule
-└── OverrideableRule         // one flag
-    ├── Rule                 // { type, value }  (string | number | boolean | custom)
-    ├── Overrides []Override // value scoped to an app semver range
-    └── Rollout   *Rollout   // value served to a % of evaluation contexts
+Chamber                        // a namespace: map[flagKey] -> Flag   (json "rules")
+└── Flag                       // one flag: { type, value } + ordered targeting
+    └── Targeting []TargetingRule
+        ├── Clauses []Clause   // ANDed: { attribute, op, values }
+        ├── Value              // served when the rule applies
+        └── Rollout *Rollout   // optional: { percentage, bucketBy, seed }
 ```
 
-- **`Rule`** (`pkg/rule.go`) — a `type` and a `value`. `UnmarshalJSON` strictly
-  validates the value against the declared type (`assertType`).
-- **`Override`** (`pkg/override.go`) — embeds `*Rule` and adds
-  `minimumVersion`/`maximumVersion`. Selected when the app version falls inside
-  the (non-overlapping, validated) semver range.
-- **`Rollout`** (`pkg/rollout.go`) — embeds `*Rule` and adds `percentage`
-  (`[0,100]`) and an optional `seed`. Selected for the deterministic subset of
-  evaluation contexts whose bucket falls under the percentage.
-- **`Chamber`** (`pkg/chamber.go`) — a `map[string]*OverrideableRule` plus
-  `InheritFrom` (fill missing rules from a parent) and `OverwriteFrom` (used for
-  PATCH merges). **`ChamberEntry`** is the immutable, version-bound read view the
-  SDK evaluates against.
+- **`Rule`** (`pkg/rule.go`) — a typed value: `type` and `value`.
+  `UnmarshalJSON` strictly validates the value against the declared type
+  (`assertType`). It is embedded by `Flag`.
+- **`Flag`** (`pkg/flag.go`) — a default value plus ordered `targeting` rules.
+  `UnmarshalJSON` type-checks every rule value against the flag type and
+  rejects the removed `overrides`/`rollout` fields with migration guidance.
+- **`TargetingRule` / `Clause` / `Rollout`** (`pkg/targeting.go`) — a rule
+  applies when all its clauses match the evaluation context and, if it has a
+  rollout, the context buckets in. Operators: `in`, `notIn`, `startsWith`,
+  `semverGte`, `semverLte`.
+- **`Chamber`** (`pkg/chamber.go`) — `map[string]*Flag` plus `InheritFrom`
+  (fill missing flags from a parent) and `OverwriteFrom` (PATCH merges).
+  **`ChamberEntry`** is the immutable read view the SDK evaluates against; it
+  carries the process-wide attributes from `WithAttributes`/`WithVersion`.
 
-### Value resolution order
+The design rationale is in [design/targeting.md](design/targeting.md).
 
-`OverrideableRule.ValueFor(ruleKey, ec, version)` (`pkg/rule.go`) resolves a
-value in two steps:
+### Value resolution
 
-1. **Version override** — `ValueAtVersion(version)` picks the override whose
-   semver range contains the app version, else the base value.
-2. **Rollout** — if a `Rollout` is configured and the `EvaluationContext.Key`
-   buckets under the rollout percentage, the rollout value is served instead.
+`Flag.ValueFor(flagKey, ec)` (`pkg/flag.go`):
 
 ```
-value = base
-      → overridden by matching version range
-      → replaced by rollout value when the context buckets in
+for rule in flag.targeting (in order):
+    if all clauses match and rule.rollout includes ec: return rule.value
+return flag.value
 ```
 
-An **`EvaluationContext`** (`pkg/context.go`) carries the per-subject `Key`
-(used for bucketing) and reserved `Attributes`. It travels through the request
-context via `Realm.NewContextWithEvaluation`, so a single logical request
-evaluates every rule consistently. An empty `Key` makes rollouts inert — callers
-that don't opt in are unaffected.
+A clause on an attribute the context does not carry never matches (including
+`notIn`). A rule whose rollout excludes the context falls through to the next
+rule.
+
+An **`EvaluationContext`** (`pkg/context.go`) carries `Key` (exposed as the
+`key` attribute) and `Attributes`. Lookups fall back to the process-wide
+attributes configured on the SDK, so deployment facts (`environment`,
+`service`, `version`, `buildSha`) are set once while subject facts
+(`tenantId`, `locationId`) travel per request via
+`Realm.NewContextWithEvaluation`. Evaluation is allocation-free (~30 ns for a
+flag with a 200-value clause and a rollout rule).
 
 ### Deterministic bucketing
 
-`bucket(seed, key)` (`pkg/rollout.go`) hashes `"<seed>.<key>"` with SHA-1, takes
-the 15 leading hex digits (60 bits), and normalizes to `[0,100)` — the
-LaunchDarkly-style algorithm. The same key always lands in the same bucket, so
-rollout assignment is **sticky**. `seed` defaults to the rule key, so each flag
-buckets independently; sharing a seed rolls flags out to the same population
-together.
+`bucket(seed, value)` (`pkg/targeting.go`) hashes `"<seed>.<value>"` with
+SHA-1, takes the leading 60 bits, and normalizes to `[0,100)` — the
+LaunchDarkly-style algorithm. The bucketed value is the rollout's `bucketBy`
+attribute (default `key`), so bucketing by `locationId` rolls out to whole
+locations at once. `seed` defaults to the flag key.
 
 ## Request flow
 
@@ -73,7 +77,17 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   injects OpenTelemetry trace-propagation headers.
 - **`http/handler.go` + `http/agent.go`** — map HTTP methods to operations
   (`GET`→get/list, `POST`→put, `PATCH`→patch-merge via `OverwriteFrom`,
-  `DELETE`→delete). Cross-cutting: gzip, per-request timeout, OTel spans/metrics,
+  `DELETE`→delete). `GET ?inherit=false` returns the chamber as stored,
+  without inherited flags (editors use this).
+- **Safe editing** — `GET` returns an `ETag` of the chamber as stored at its
+  path; writes honor `If-Match` / `If-None-Match: *` and return `412` on
+  mismatch, checked under a per-path lock (`http/meta.go`). Every write is
+  appended to history with the `X-Realm-Actor` header as the actor.
+- **Metadata endpoints** (`http/meta_handlers.go`) — `GET /v1/history/<path>`
+  (and `?revision=N`) and `/v1/catalog[/<attribute>]`, the application-supplied
+  map of attribute values to human-readable labels used by the UI. Metadata is
+  stored under the reserved `/_realm/` prefix in the raw storage beneath the
+  `inheritable` wrapper; chamber APIs reject and hide that prefix. Cross-cutting: gzip, per-request timeout, OTel spans/metrics,
   `no-store` cache header, `X-Realm-Hostname`.
 - **Persistence note:** PUT/PATCH unmarshal the body into a `realm.Chamber` and
   re-marshal it before storing. Any json-tagged field on the domain types
@@ -118,6 +132,7 @@ bus, or each replica watching its storage source) is a follow-up.
 | `boltdb` | `boltdb.go` | embedded bbolt key/value store |
 | `bigcache` | `bigcache.go` | in-memory (dev / cache tier) |
 | `gcs` | `gcs.go` | Google Cloud Storage |
+| `s3` | `s3.go` | Amazon S3 or S3-compatible (`bucket`, `region`, `prefix`, `endpoint`, `force_path_style`) |
 
 Two wrappers compose backends:
 
@@ -126,7 +141,13 @@ Two wrappers compose backends:
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
   `Get`, merges a chamber with all of its ancestors along the path so child
   chambers inherit parent rules. This hierarchy is the current stand-in for
-  "environments / zones".
+  "environments / zones". It implements `Unwrap()` so the server can reach the
+  raw storage for ETags, history, and the catalog.
+
+Recommended production setup today: `cacheable` (`bigcache` over `s3`) as a
+single replica. SDKs evaluate in memory, so storage latency only affects
+writes and cold start. Running several replicas safely needs the planned
+Postgres backend (transactional compare-and-set and cross-replica fanout).
 
 Server config (`configs/realm.json`, parsed in `cmd/config.go`) selects the
 storage type and options, TLS cert/key, port, and `inheritable`.
@@ -143,17 +164,17 @@ Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
 | Capability | Status | Where |
 |---|---|---|
 | Typed flags (bool/number/string/custom) | ✅ Done | `pkg/rule.go` |
-| Version-range overrides | ✅ Done | `pkg/override.go` |
-| **Percentage rollout (deterministic bucketing)** | ✅ Done | `pkg/rollout.go` |
+| Version targeting (semver ranges, build SHAs) | ✅ Done | `pkg/targeting.go` |
+| **Percentage rollout (deterministic, `bucketBy` any attribute)** | ✅ Done | `pkg/targeting.go` |
 | Hierarchy / inheritance (proto "zones") | ✅ Done | `pkg/storage/inheritable.go` |
-| Attribute/segment targeting (rules on `EvaluationContext.Attributes`) | ⬜ Next | seam exists in `pkg/context.go` |
+| Attribute targeting (ordered rules on `EvaluationContext.Attributes`) | ✅ Done | `pkg/targeting.go`, `pkg/flag.go` |
+| Optimistic concurrency, change history, attribute catalog | ✅ Done | `http/meta.go`, `http/meta_handlers.go` |
+| S3 storage | ✅ Done | `pkg/storage/s3.go` |
+| Postgres storage + multi-replica safety | ⬜ Next | new backend; replaces per-process lock |
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
 | Cross-replica stream fanout (multi-instance) | ⬜ Next | broker is process-local today |
-| Environment API-key auth | ⬜ Next | `http/handler.go` middleware |
-| Audit log of flag changes | ⬜ Next | around `http/handler.go` write ops |
+| SDK API keys + OIDC sign-in for the UI | ⬜ Next | `http/handler.go` middleware |
+| TypeScript SDK + server-side evaluation endpoint | ⬜ Next | new clients against `/v1/chambers` |
+| Audit log of flag changes | 🟡 Partial | history records actor from `X-Realm-Actor`; verified identity needs OIDC |
 | Multi-language SDKs | ⬜ Next | new clients against `/v1/chambers` |
-| UI editing of rollouts/targeting | ⬜ Next | `http/realm-ui` |
-
-`EvaluationContext.Attributes` is deliberately in place but unused: it is the
-seam attribute targeting will build on, so that feature can land without another
-signature change to the read API.
+| UI editing of targeting, rollouts, diff confirmation, history/restore | ✅ Done | `http/realm-ui` |

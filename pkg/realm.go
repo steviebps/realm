@@ -21,25 +21,26 @@ import (
 )
 
 type Realm struct {
-	applicationVersion string
-	path               string
-	initSync           sync.Once
-	stopCh             chan struct{}
-	cancel             context.CancelFunc
-	wg                 sync.WaitGroup
-	mu                 sync.RWMutex
-	root               *ChamberEntry
-	client             *client.HttpClient
-	pollingInterval    time.Duration
-	streaming          bool
-	logger             *logging.TracedLogger
-	tracer             trace.Tracer
+	attributes      map[string]string
+	path            string
+	initSync        sync.Once
+	stopCh          chan struct{}
+	cancel          context.CancelFunc
+	wg              sync.WaitGroup
+	mu              sync.RWMutex
+	root            *ChamberEntry
+	client          *client.HttpClient
+	pollingInterval time.Duration
+	streaming       bool
+	logger          *logging.TracedLogger
+	tracer          trace.Tracer
 }
 
 type RealmConfig struct {
 	client             *client.HttpClient
 	path               string
 	applicationVersion string
+	attributes         map[string]string
 	// pollingInterval is how often realm will refetch the chamber from the realm server
 	pollingInterval time.Duration
 	// streaming makes realm keep its chamber current via a server-sent-events
@@ -99,9 +100,30 @@ func WithPollingInterval(d time.Duration) RealmOption {
 	})
 }
 
+// WithVersion sets the application version, exposed to targeting clauses as
+// the "version" attribute. It is shorthand for a "version" entry in
+// WithAttributes and takes precedence over it.
 func WithVersion(version string) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.applicationVersion = version
+		return rc
+	})
+}
+
+// WithAttributes sets process-wide targeting attributes, such as "service",
+// "environment", "region", or "buildSha". They apply to every evaluation and
+// are overridden by attributes of the same name on a request's
+// EvaluationContext. Repeated calls merge.
+func WithAttributes(attributes map[string]string) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		merged := make(map[string]string, len(rc.attributes)+len(attributes))
+		for k, v := range rc.attributes {
+			merged[k] = v
+		}
+		for k, v := range attributes {
+			merged[k] = v
+		}
+		rc.attributes = merged
 		return rc
 	})
 }
@@ -139,15 +161,23 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		cfg.pollingInterval = DefaultPollingInterval
 	}
 
+	attributes := make(map[string]string, len(cfg.attributes)+1)
+	for k, v := range cfg.attributes {
+		attributes[k] = v
+	}
+	if cfg.applicationVersion != "" {
+		attributes[VersionAttribute] = cfg.applicationVersion
+	}
+
 	return &Realm{
-		tracer:             otel.Tracer("github.com/steviebps/realm"),
-		logger:             logging.NewTracedLogger(),
-		client:             cfg.client,
-		path:               cfg.path,
-		applicationVersion: cfg.applicationVersion,
-		stopCh:             make(chan struct{}),
-		pollingInterval:    cfg.pollingInterval,
-		streaming:          cfg.streaming,
+		tracer:          otel.Tracer("github.com/steviebps/realm"),
+		logger:          logging.NewTracedLogger(),
+		client:          cfg.client,
+		path:            cfg.path,
+		attributes:      attributes,
+		stopCh:          make(chan struct{}),
+		pollingInterval: cfg.pollingInterval,
+		streaming:       cfg.streaming,
 	}, nil
 }
 
@@ -222,7 +252,7 @@ func (rlm *Realm) stream(ctx context.Context) {
 			rlm.poll(ctx)
 			return
 		}
-		if err != nil {
+		if err != nil && ctx.Err() == nil {
 			rlm.logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("chamber stream disconnected; reconnecting")
 		}
 		if received {
@@ -340,7 +370,7 @@ func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, e
 }
 
 func (rlm *Realm) setChamber(c *Chamber) {
-	entry := NewChamberEntry(c, rlm.applicationVersion)
+	entry := NewChamberEntry(c, rlm.attributes)
 	rlm.mu.Lock()
 	defer rlm.mu.Unlock()
 	rlm.root = entry
@@ -376,8 +406,8 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 
 // NewContextWithEvaluation pins the current chamber snapshot (like NewContext)
 // and additionally associates the provided EvaluationContext with the context.
-// Rule retrievals performed with the returned context apply per-subject
-// targeting, such as percentage rollouts bucketed by EvaluationContext.Key.
+// Flag retrievals performed with the returned context apply targeting rules
+// against the context's Key and Attributes (merged over WithAttributes).
 func (rlm *Realm) NewContextWithEvaluation(ctx context.Context, ec EvaluationContext) context.Context {
 	ctx = rlm.NewContext(ctx)
 	return context.WithValue(ctx, EvaluationContextKey, ec)

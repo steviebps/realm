@@ -2,19 +2,20 @@ package realm
 
 import (
 	"encoding/json"
+	"os"
 	"strconv"
 	"testing"
 )
 
 func BenchmarkChamberStringValue(b *testing.B) {
-	m := make(map[string]*OverrideableRule, 100000)
+	m := make(map[string]*Flag, 100000)
 	for i := 1; i < 10000; i++ {
-		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "string", Value: "string"}}
+		m[strconv.Itoa(i)] = &Flag{Rule: &Rule{Type: "string", Value: "string"}}
 	}
 
 	chamber := NewChamberEntry(&Chamber{
 		Rules: m,
-	}, "")
+	}, nil)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -28,13 +29,13 @@ func BenchmarkChamberStringValue(b *testing.B) {
 }
 
 func BenchmarkChamberBoolValue(b *testing.B) {
-	m := make(map[string]*OverrideableRule, 100000)
+	m := make(map[string]*Flag, 100000)
 	for i := 1; i < 100000; i++ {
-		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "boolean", Value: false}}
+		m[strconv.Itoa(i)] = &Flag{Rule: &Rule{Type: "boolean", Value: false}}
 	}
 	chamber := NewChamberEntry(&Chamber{
 		Rules: m,
-	}, "")
+	}, nil)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -48,13 +49,13 @@ func BenchmarkChamberBoolValue(b *testing.B) {
 }
 
 func BenchmarkChamberFloat64Value(b *testing.B) {
-	m := make(map[string]*OverrideableRule, 100000)
+	m := make(map[string]*Flag, 100000)
 	for i := 1; i < 100000; i++ {
-		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "number", Value: float64(10)}}
+		m[strconv.Itoa(i)] = &Flag{Rule: &Rule{Type: "number", Value: float64(10)}}
 	}
 	chamber := NewChamberEntry(&Chamber{
 		Rules: m,
-	}, "")
+	}, nil)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -72,15 +73,15 @@ func BenchmarkChamberCustomValue(b *testing.B) {
 		Test string
 	}
 
-	m := make(map[string]*OverrideableRule, 100000)
+	m := make(map[string]*Flag, 100000)
 	for i := 0; i < 100000; i++ {
 		raw := json.RawMessage(`{"Test":"test"}`)
-		m[strconv.Itoa(i)] = &OverrideableRule{Rule: &Rule{Type: "custom", Value: &raw}}
+		m[strconv.Itoa(i)] = &Flag{Rule: &Rule{Type: "custom", Value: &raw}}
 	}
 
 	chamber := NewChamberEntry(&Chamber{
 		Rules: m,
-	}, "")
+	}, nil)
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
@@ -96,7 +97,7 @@ func BenchmarkChamberCustomValue(b *testing.B) {
 
 func TestInheritWith(t *testing.T) {
 	bottom := &Chamber{
-		Rules: map[string]*OverrideableRule{
+		Rules: map[string]*Flag{
 			"rule2": {
 				Rule: &Rule{
 					Type:  "boolean",
@@ -106,7 +107,7 @@ func TestInheritWith(t *testing.T) {
 		},
 	}
 	middle := &Chamber{
-		Rules: map[string]*OverrideableRule{
+		Rules: map[string]*Flag{
 			"rule1": {
 				Rule: &Rule{
 					Type:  "boolean",
@@ -116,7 +117,7 @@ func TestInheritWith(t *testing.T) {
 		},
 	}
 	top := &Chamber{
-		Rules: map[string]*OverrideableRule{
+		Rules: map[string]*Flag{
 			"rule1": {
 				Rule: &Rule{
 					Type:  "boolean",
@@ -141,5 +142,20 @@ func TestInheritWith(t *testing.T) {
 	// should inherit middle value as is
 	if v3 != v2 {
 		t.Errorf("bottom did not inherit properly from top: value of rule1 is: %v", v3)
+	}
+}
+
+func TestSampleChambersParse(t *testing.T) {
+	for _, path := range []string{"../configs/chamber.json", "../examples/go/chambers.json"} {
+		t.Run(path, func(t *testing.T) {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			var c Chamber
+			if err := json.Unmarshal(b, &c); err != nil {
+				t.Fatalf("sample chamber does not parse: %v", err)
+			}
+		})
 	}
 }

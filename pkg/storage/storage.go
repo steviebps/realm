@@ -35,6 +35,7 @@ var StorageOptions = map[string]StorageCreator{
 	"bigcache":  NewBigCacheStorage,
 	"cacheable": NewCacheableStorageWithConf,
 	"gcs":       NewGCSStorage,
+	"s3":        NewS3Storage,
 	"boltdb":    NewBoltStorage,
 }
 
@@ -43,6 +44,7 @@ var SourcableStorageOptions = map[string]StorageCreator{
 	"file":     NewFileStorage,
 	"bigcache": NewBigCacheStorage,
 	"gcs":      NewGCSStorage,
+	"s3":       NewS3Storage,
 	"boltdb":   NewBoltStorage,
 }
 

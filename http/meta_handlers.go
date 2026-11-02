@@ -1,0 +1,221 @@
+package http
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+
+	"github.com/steviebps/realm/helper/logging"
+	"github.com/steviebps/realm/pkg/storage"
+	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+)
+
+// handleHistory serves chamber change history:
+//
+//	GET /v1/history/<path>               → revision summaries, newest first
+//	GET /v1/history/<path>?revision=<n>  → one revision including its chamber
+func handleHistory(meta *metaStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		ctx := r.Context()
+		errorLog := logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
+		span := trace.SpanFromContext(ctx)
+
+		if r.Method != http.MethodGet {
+			handleError(ctx, w, http.StatusMethodNotAllowed, createResponseWithErrors(nil, []string{http.StatusText(http.StatusMethodNotAllowed)}))
+			return
+		}
+
+		p, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/v1/history"))
+		chamberPath := utils.EnsureTrailingSlash(p)
+		span.SetAttributes(attribute.String("realm.server.logicalPath", chamberPath))
+
+		var body any
+		var err error
+		if revStr := r.URL.Query().Get("revision"); revStr != "" {
+			rev, convErr := strconv.Atoi(revStr)
+			if convErr != nil || rev < 1 {
+				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{"revision must be a positive integer"}))
+				return
+			}
+			body, err = meta.revision(ctx, chamberPath, rev)
+		} else {
+			body, err = meta.history(ctx, chamberPath)
+		}
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			errorLog.Msg(err.Error())
+			status := http.StatusInternalServerError
+			var nf *storage.NotFoundError
+			if errors.As(err, &nf) {
+				status = http.StatusNotFound
+			}
+			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+			return
+		}
+
+		raw, err := json.Marshal(body)
+		if err != nil {
+			handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+			return
+		}
+		handleOk(w, createResponseWithErrors(raw, nil))
+	})
+}
+
+// catalogValues is the request and response body for a single attribute.
+type catalogValues struct {
+	Values map[string]*string `json:"values"`
+}
+
+// handleCatalog serves the attribute catalog that maps targeting values to
+// human-readable labels for the UI:
+//
+//	GET    /v1/catalog              → every attribute and its labeled values
+//	GET    /v1/catalog/<attribute>  → {"values": {"<value>": "<label>"}}
+//	POST   /v1/catalog/<attribute>  → replace (PUT is accepted too)
+//	PATCH  /v1/catalog/<attribute>  → upsert labels; a null label removes a value
+//	DELETE /v1/catalog/<attribute>  → remove the attribute
+func handleCatalog(meta *metaStore) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		ctx := r.Context()
+		errorLog := logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
+		span := trace.SpanFromContext(ctx)
+
+		attr, _ := url.PathUnescape(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/catalog"), "/"))
+		span.SetAttributes(attribute.String("realm.server.catalog.attribute", attr))
+
+		fail := func(status int, err error) {
+			span.SetStatus(codes.Error, err.Error())
+			errorLog.Msg(err.Error())
+			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+		}
+		respond := func(v any) {
+			raw, err := json.Marshal(v)
+			if err != nil {
+				fail(http.StatusInternalServerError, err)
+				return
+			}
+			handleOk(w, createResponseWithErrors(raw, nil))
+		}
+
+		if attr == "" {
+			if r.Method != http.MethodGet {
+				fail(http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))
+				return
+			}
+			c, err := meta.catalog(ctx)
+			if err != nil {
+				fail(http.StatusInternalServerError, err)
+				return
+			}
+			respond(c)
+			return
+		}
+
+		readBody := func() (*catalogValues, bool) {
+			var body catalogValues
+			if err := utils.ReadInterfaceWith(r.Body, &body); err != nil {
+				if errors.Is(err, io.EOF) {
+					err = errors.New("request body must not be empty")
+				}
+				fail(http.StatusBadRequest, err)
+				return nil, false
+			}
+			return &body, true
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			c, err := meta.catalog(ctx)
+			if err != nil {
+				fail(http.StatusInternalServerError, err)
+				return
+			}
+			values, ok := c[attr]
+			if !ok {
+				fail(http.StatusNotFound, fmt.Errorf("attribute %q is not in the catalog", attr))
+				return
+			}
+			respond(map[string]any{"values": values})
+
+		case http.MethodPost, http.MethodPut:
+			body, ok := readBody()
+			if !ok {
+				return
+			}
+			values := make(map[string]string, len(body.Values))
+			for v, label := range body.Values {
+				if label == nil {
+					fail(http.StatusBadRequest, fmt.Errorf("label for %q must not be null when replacing", v))
+					return
+				}
+				values[v] = *label
+			}
+			if _, err := meta.updateCatalog(ctx, func(c Catalog) error {
+				c[attr] = values
+				return nil
+			}); err != nil {
+				fail(http.StatusInternalServerError, err)
+				return
+			}
+			handleOk(w, nil)
+
+		case http.MethodPatch:
+			body, ok := readBody()
+			if !ok {
+				return
+			}
+			c, err := meta.updateCatalog(ctx, func(c Catalog) error {
+				values := c[attr]
+				if values == nil {
+					values = make(map[string]string, len(body.Values))
+				}
+				for v, label := range body.Values {
+					if label == nil {
+						delete(values, v)
+						continue
+					}
+					values[v] = *label
+				}
+				c[attr] = values
+				return nil
+			})
+			if err != nil {
+				fail(http.StatusInternalServerError, err)
+				return
+			}
+			respond(map[string]any{"values": c[attr]})
+
+		case http.MethodDelete:
+			if _, err := meta.updateCatalog(ctx, func(c Catalog) error {
+				if _, ok := c[attr]; !ok {
+					return &storage.NotFoundError{Key: attr}
+				}
+				delete(c, attr)
+				return nil
+			}); err != nil {
+				var nf *storage.NotFoundError
+				if errors.As(err, &nf) {
+					fail(http.StatusNotFound, err)
+					return
+				}
+				fail(http.StatusInternalServerError, err)
+				return
+			}
+			handleOk(w, nil)
+
+		default:
+			fail(http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))
+		}
+	})
+}

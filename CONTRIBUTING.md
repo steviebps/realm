@@ -35,14 +35,14 @@ Then use the CLI client against it:
 ./realm client list  --address http://localhost:8080 <path>
 ```
 
-Rule content (including rollouts) is set by writing a chamber body to the API or
+Flag content (including targeting rules and rollouts) is set by writing a chamber body to the API or
 via the web UI. For example, with the server running:
 
 ```bash
 curl -X POST http://localhost:8080/v1/chambers/root \
   -H 'Content-Type: application/json' \
   -d '{"rules":{"new-checkout":{"type":"boolean","value":false,
-        "rollout":{"type":"boolean","value":true,"percentage":20}}}}'
+        "targeting":[{"value":true,"rollout":{"percentage":20}}]}}}'
 ```
 
 To build with the web UI embedded (as releases do):

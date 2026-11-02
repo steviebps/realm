@@ -2,6 +2,9 @@
 @import "flowbite-react/plugin/tailwindcss";
 @source "../.flowbite-react/class-list.json";
 
+/* Dark styles apply only when a .dark class is present, matching flowbite's `dark: false`. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @layer base {
   h1 {
     @apply text-2xl;

@@ -1,0 +1,114 @@
+import { useState } from 'react';
+import { Alert, Button, Label, Modal, ModalBody, ModalFooter, ModalHeader } from 'flowbite-react';
+import { HiPlus } from 'react-icons/hi';
+import { Catalog, Flag, TargetingRule } from '../../models/response';
+import { validateFlag } from '../../utils/flags';
+import { RuleEditor } from './RuleEditor';
+import { ValueInput } from './ValueInput';
+
+type Props = {
+  name: string;
+  flag: Flag;
+  catalog: Catalog;
+  attributes: string[];
+  onCancel: () => void;
+  /** Called with the edited flag; the caller confirms the diff and saves. */
+  onReview: (flag: Flag) => void;
+};
+
+export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview }: Props) => {
+  const [draft, setDraft] = useState<Flag>(() => structuredClone(flag));
+  const [invalid, setInvalid] = useState<Set<string>>(new Set());
+  const [showProblems, setShowProblems] = useState(false);
+  const rules = draft.targeting ?? [];
+  const problems = validateFlag(draft);
+
+  const setRules = (next: TargetingRule[]) => setDraft({ ...draft, targeting: next.length ? next : undefined });
+  const setValidity = (key: string) => (valid: boolean) =>
+    setInvalid((prev) => {
+      const next = new Set(prev);
+      if (valid) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  return (
+    <Modal show size="4xl" onClose={onCancel}>
+      <ModalHeader>
+        {name} <span className="ml-2 text-sm font-normal text-gray-500">({draft.type})</span>
+      </ModalHeader>
+      <ModalBody>
+        <div className="flex flex-col gap-4">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Rules are checked top to bottom; the first rule that applies decides the value. If none applies, the default
+            is served.
+          </p>
+
+          {rules.map((rule, i) => (
+            <RuleEditor
+              key={i}
+              index={i}
+              count={rules.length}
+              rule={rule}
+              type={draft.type}
+              catalog={catalog}
+              attributes={attributes}
+              onChange={(r) => setRules(rules.map((x, j) => (j === i ? r : x)))}
+              onMove={(delta) => {
+                const next = [...rules];
+                [next[i], next[i + delta]] = [next[i + delta], next[i]];
+                setRules(next);
+              }}
+              onRemove={() => setRules(rules.filter((_, j) => j !== i))}
+              onValidityChange={setValidity(`rule-${i}`)}
+            />
+          ))}
+
+          <div>
+            <Button size="sm" color="light" onClick={() => setRules([...rules, { clauses: [], value: draft.value }])}>
+              <HiPlus className="mr-1" /> Add rule
+            </Button>
+          </div>
+
+          <div>
+            <Label htmlFor="flag-default">Default (when no rule applies)</Label>
+            <ValueInput
+              id="flag-default"
+              type={draft.type}
+              value={draft.value}
+              onChange={(value) => setDraft({ ...draft, value })}
+              onValidityChange={setValidity('default')}
+            />
+          </div>
+
+          {showProblems && problems.length > 0 && (
+            <Alert color="failure">
+              <ul className="list-disc pl-4">
+                {problems.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            </Alert>
+          )}
+        </div>
+      </ModalBody>
+      <ModalFooter className="justify-end">
+        <Button color="light" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          disabled={invalid.size > 0}
+          onClick={() => {
+            if (problems.length > 0) {
+              setShowProblems(true);
+              return;
+            }
+            onReview(draft);
+          }}
+        >
+          Review changes
+        </Button>
+      </ModalFooter>
+    </Modal>
+  );
+};

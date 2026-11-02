@@ -3,17 +3,45 @@
     "feature switch four": {
       "type": "number",
       "value": 10.6,
-      "overrides": [
+      "targeting": [
         {
-          "minimumVersion": "v0.0.1",
-          "maximumVersion": "v2.0.0",
-          "type": "number",
+          "id": "v0-v1",
+          "clauses": [
+            {
+              "attribute": "version",
+              "op": "semverGte",
+              "values": [
+                "v0.0.1"
+              ]
+            },
+            {
+              "attribute": "version",
+              "op": "semverLte",
+              "values": [
+                "v2.0.0"
+              ]
+            }
+          ],
           "value": 10.2
         },
         {
-          "minimumVersion": "v2.0.0",
-          "maximumVersion": "v3.0.0",
-          "type": "number",
+          "id": "v2",
+          "clauses": [
+            {
+              "attribute": "version",
+              "op": "semverGte",
+              "values": [
+                "v2.0.0"
+              ]
+            },
+            {
+              "attribute": "version",
+              "op": "semverLte",
+              "values": [
+                "v3.0.0"
+              ]
+            }
+          ],
           "value": 10.4
         }
       ]
@@ -33,11 +61,15 @@
     "feature switch five": {
       "type": "boolean",
       "value": false,
-      "rollout": {
-        "type": "boolean",
-        "value": true,
-        "percentage": 20
-      }
+      "targeting": [
+        {
+          "id": "gradual",
+          "value": true,
+          "rollout": {
+            "percentage": 20
+          }
+        }
+      ]
     }
   }
 }

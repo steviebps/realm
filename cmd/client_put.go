@@ -74,7 +74,7 @@ var clientPut = &cobra.Command{
 			return err
 		}
 
-		emptyChamber, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.OverrideableRule{}})
+		emptyChamber, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.Flag{}})
 		if err != nil {
 			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not marshal empty chamber for putting: %q", args[0]))
 			return err
