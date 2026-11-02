@@ -1,0 +1,14 @@
+# Keep the build context small and reproducible.
+.git
+.github
+.claude
+**/node_modules
+http/realm-ui/dist
+dist
+realm
+realm.exe
+.realm
+docs
+*.md
+Dockerfile
+.dockerignore

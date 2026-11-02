@@ -16,6 +16,26 @@ go install github.com/steviebps/realm
 realm server --config ./configs/realm.json
 ```
 
+#### run with Docker
+
+Multi-arch images (`linux/amd64`, `linux/arm64`) with the web UI embedded are
+published to GitHub Container Registry: `latest` and semver tags for releases,
+`edge` for `master`.
+
+```bash
+# try it out: in-memory storage, UI at http://localhost:8080/ui/
+docker run --rm -p 8080:8080 ghcr.io/steviebps/realm server --dev
+
+# with a config file (the default command reads /etc/realm/realm.json)
+docker run -p 8080:8080 -v "$PWD/configs/realm.json:/etc/realm/realm.json:ro" ghcr.io/steviebps/realm
+```
+
+The image runs as a non-root user. Point the `file` or `boltdb` backends at
+`/var/lib/realm` (a volume) to persist data; the `s3` and `gcs` backends use
+the standard AWS / Google credential chains, so workload identity on
+Kubernetes works without extra configuration. `GET /healthz` is a liveness
+endpoint suitable for probes.
+
 ## example code snippets
 
 ```go
