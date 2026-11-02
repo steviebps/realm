@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
@@ -35,6 +36,10 @@ func handleHistory(meta *metaStore) http.Handler {
 
 		chamberPath := logicalPath(r, "/v1/history")
 		span.SetAttributes(attribute.String("realm.server.logicalPath", chamberPath))
+		if !auth.FromContext(ctx).CanRead(chamberPath) {
+			forbidden(w, r, fmt.Sprintf("not allowed to read %s", chamberPath))
+			return
+		}
 
 		var body any
 		var err error
@@ -91,6 +96,10 @@ func handleCatalog(meta *metaStore) http.Handler {
 			span.SetStatus(codes.Error, err.Error())
 			errorLog.Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+		}
+		if r.Method != http.MethodGet && !auth.FromContext(ctx).IsAdmin() {
+			forbidden(w, r, "only administrators may change the catalog")
+			return
 		}
 		if attr == "" && r.Method != http.MethodGet {
 			fail(http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))

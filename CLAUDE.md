@@ -24,10 +24,12 @@ environment, service, semver `version`, `buildSha`, …), each optionally
 limited to a **deterministic percentage rollout**. The SDK stays current by
 **polling** (default 15 min) or **real-time streaming** (SSE). The server
 offers ETag optimistic concurrency, per-chamber change history, and an
-attribute catalog (value → label) for the UI; storage includes S3. Not yet
-built: API keys / OIDC, a TypeScript SDK and server-side evaluation endpoint,
-Postgres storage, and cross-replica fanout (run one replica). See
-`docs/ARCHITECTURE.md` and `docs/design/targeting.md`.
+attribute catalog (value → label) for the UI; storage includes S3. Optional
+auth: path-scoped read/write **API keys** for SDKs and automation, and
+OIDC / GitHub **sign-in** with viewer / editor / admin roles for the UI. Not
+yet built: a TypeScript SDK and server-side evaluation endpoint, Postgres
+storage, and cross-replica fanout (run one replica). See
+`docs/ARCHITECTURE.md`, `docs/design/targeting.md`, and `docs/design/auth.md`.
 
 **Open source:** keep consumer- or company-specific names out of code, docs,
 examples, and tests; use generic terms (tenant, location, service).
@@ -66,6 +68,12 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   (`/v1/catalog/<attribute>`) live in `http/meta.go` / `http/meta_handlers.go`,
   stored under the reserved `/_realm/` prefix in the raw storage beneath the
   `inheritable` wrapper.
+- **Principal** (`auth/`) — the caller of a request: an API key (`Access`
+  read/write, `Path` scope), a signed-in user (`Role`), or `auth.Anonymous`
+  when the server has no `auth` config. Handlers read it with
+  `auth.FromContext(ctx)` and check `CanRead(path)` / `CanWrite(path)` /
+  `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted
+  cookies; roles are recomputed from config on every request.
 
 ## Architecture map
 
@@ -75,8 +83,9 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
 | `pkg/` | Core domain + SDK (package `realm`) |
 | `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions` |
-| `client/http.go` | `HttpClient` used by both CLI and SDK |
-| `http/` | Server handler (`handler.go`), request mapping (`agent.go`), UI embedding (`assets.go` behind the `ui` build tag; `assets_stub.go` fallback), `realm-ui/` React app |
+| `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
+| `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
+| `http/` | Server handler (`handler.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI embedding (`assets.go` behind the `ui` build tag; `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |
 | `trace/otel.go` | OpenTelemetry setup |
 | `helper/logging/` | zerolog `TracedLogger` (context-aware, trace-correlated) |

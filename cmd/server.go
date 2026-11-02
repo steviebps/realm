@@ -86,21 +86,11 @@ var serverCmd = &cobra.Command{
 
 		logger.InfoCtx(ctx).Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
 
-		strgCreator, exists := storage.StorageOptions[storageType]
-		if !exists {
-			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("storage type %q does not exist", storageType))
-			os.Exit(1)
+		if len(serverConfig.StorageOptions) > 0 {
+			logger.DebugCtx(ctx).Any("options", serverConfig.StorageOptions).Msg("storage options")
 		}
 
-		options := []interface{}{}
-		for k, v := range serverConfig.StorageOptions {
-			options = append(options, k, v)
-		}
-		if len(options) > 0 {
-			logger.DebugCtx(ctx).Any("options", options).Msg("storage options")
-		}
-
-		stg, err := strgCreator(serverConfig.StorageOptions)
+		stg, err := openStorage(serverConfig)
 		if err != nil {
 			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
@@ -132,7 +122,11 @@ var serverCmd = &cobra.Command{
 			}
 		}
 
-		handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout})
+		if serverConfig.Auth == nil {
+			logger.WarnCtx(ctx).Msg("AUTHENTICATION IS DISABLED: anyone who can reach this server can read and change every chamber. Add an \"auth\" block to the server config to require sign-in and API keys.")
+		}
+
+		handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout, Auth: serverConfig.Auth})
 		if err != nil {
 			logger.ErrorCtx(ctx).Msg(err.Error())
 			os.Exit(1)
@@ -171,4 +165,14 @@ func init() {
 	serverCmd.Flags().String("port", "", "port to run server on")
 	serverCmd.Flags().Bool("dev", false, "run server in dev mode")
 	rootCmd.AddCommand(serverCmd)
+}
+
+// openStorage creates the storage backend named by the server config, without
+// the inheritance wrapper.
+func openStorage(c ServerConfig) (storage.Storage, error) {
+	create, exists := storage.StorageOptions[c.StorageType]
+	if !exists {
+		return nil, fmt.Errorf("storage type %q does not exist", c.StorageType)
+	}
+	return create(c.StorageOptions)
 }

@@ -1,9 +1,19 @@
-import { Catalog, Chamber, ChamberResponse, ListResponse, Revision } from './models/response';
+import {
+  ApiKey,
+  Catalog,
+  Chamber,
+  ChamberResponse,
+  CreatedKey,
+  KeyAccess,
+  ListResponse,
+  Me,
+  Revision,
+} from './models/response';
 import { encodePath, ensureTrailingSlash } from './utils/path';
 
 const ACTOR_KEY = 'realm.actor';
 
-/** The name recorded in change history. Stored per browser until sign-in exists. */
+/** The name recorded in change history when the server has no sign-in. Stored per browser. */
 export const getActor = (): string => {
   try {
     return localStorage.getItem(ACTOR_KEY) ?? '';
@@ -27,7 +37,21 @@ export class ConflictError extends Error {
   }
 }
 
+/** Thrown when the server needs the user to sign in (again). */
+export class UnauthorizedError extends Error {
+  constructor() {
+    super('Your session has ended. Sign in again to continue.');
+  }
+}
+
+/** Dispatched on window whenever a request is refused for lack of a session. */
+export const UNAUTHORIZED_EVENT = 'realm:unauthorized';
+
 const errorFrom = async (res: Response) => {
+  if (res.status === 401) {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    return new UnauthorizedError();
+  }
   try {
     const body = (await res.json()) as { errors?: string[] };
     return new Error(body.errors?.join('; ') || res.statusText);
@@ -43,6 +67,9 @@ const historyURL = (path: string, query = '') => apiURL('history', path, query);
 
 export const listChambers = async (path: string): Promise<string[]> => {
   const res = await fetch(chamberURL(path, '?list=true'));
+  if (res.status === 401 || res.status === 403) {
+    throw await errorFrom(res);
+  }
   const body = (await res.json()) as ListResponse;
   return body.data ?? [];
 };
@@ -115,8 +142,54 @@ export const getRevision = async (path: string, revision: number): Promise<Revis
 
 export const getCatalog = async (): Promise<Catalog> => {
   const res = await fetch('/v1/catalog');
+  if (res.status === 401) {
+    throw await errorFrom(res);
+  }
   if (!res.ok) {
     return {};
   }
   return ((await res.json()) as { data?: Catalog }).data ?? {};
+};
+
+export const getMe = async (): Promise<Me> => {
+  const res = await fetch('/v1/auth/me');
+  if (!res.ok) {
+    throw await errorFrom(res);
+  }
+  return ((await res.json()) as { data: Me }).data;
+};
+
+/** Where to send the browser to sign in with a provider, returning here afterwards. */
+export const signInURL = (provider: string) =>
+  `/v1/auth/login/${encodeURIComponent(provider)}?returnTo=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+
+export const signOut = async () => {
+  await fetch('/v1/auth/logout', { method: 'POST' });
+};
+
+export const listKeys = async (): Promise<ApiKey[]> => {
+  const res = await fetch('/v1/keys');
+  if (!res.ok) {
+    throw await errorFrom(res);
+  }
+  return ((await res.json()) as { data?: ApiKey[] }).data ?? [];
+};
+
+export const createKey = async (key: { name: string; access: KeyAccess; path: string }): Promise<CreatedKey> => {
+  const res = await fetch('/v1/keys', {
+    method: 'POST',
+    body: JSON.stringify(key),
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    throw await errorFrom(res);
+  }
+  return ((await res.json()) as { data: CreatedKey }).data;
+};
+
+export const revokeKey = async (id: string) => {
+  const res = await fetch(`/v1/keys/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!res.ok) {
+    throw await errorFrom(res);
+  }
 };

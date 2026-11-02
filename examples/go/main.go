@@ -31,7 +31,7 @@ func main() {
 	}
 	defer func() { _ = shutdownFn(ctx) }()
 
-	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080"})
+	client, err := client.NewHttpClient(&client.HttpClientConfig{Address: "http://localhost:8080", Token: os.Getenv("REALM_TOKEN")})
 	if err != nil {
 		log.Fatal(err)
 	}

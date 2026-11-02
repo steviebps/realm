@@ -24,6 +24,9 @@ const DefaultClientTimeout = 15 * time.Second
 type HttpClientConfig struct {
 	Address string
 	Timeout time.Duration
+	// Token is an API key sent as a bearer token. Servers with
+	// authentication enabled require one.
+	Token string
 }
 
 type HttpClient struct {
@@ -32,6 +35,7 @@ type HttpClient struct {
 	// overall client timeout (which would sever the stream).
 	streaming  *http.Client
 	address    *url.URL
+	token      string
 	tracer     trace.Tracer
 	propagator propagation.TextMapPropagator
 }
@@ -54,6 +58,7 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 		underlying: &http.Client{Timeout: c.Timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		streaming:  &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		address:    u,
+		token:      c.Token,
 		tracer:     tracer,
 		propagator: otel.GetTextMapPropagator(),
 	}, nil
@@ -72,6 +77,7 @@ func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, er
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	c.authorize(req)
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
 	return c.streaming.Do(req)
 }
@@ -89,8 +95,16 @@ func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path).Str("host", r.URL.Host).Msg("executing request")
 
+	c.authorize(r)
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))
 	return c.underlying.Do(r)
+}
+
+// authorize adds the client's API key to r unless r already carries one.
+func (c *HttpClient) authorize(r *http.Request) {
+	if c.token != "" && r.Header.Get("Authorization") == "" {
+		r.Header.Set("Authorization", "Bearer "+c.token)
+	}
 }
 
 func (c *HttpClient) PerformRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Response, error) {

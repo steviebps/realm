@@ -14,6 +14,7 @@ import (
 
 	"github.com/NYTimes/gziphandler"
 	"github.com/steviebps/realm/api"
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
@@ -40,6 +41,8 @@ var errorCounter, _ = meter.Int64Counter(
 type HandlerConfig struct {
 	Storage        storage.Storage
 	RequestTimeout time.Duration
+	// Auth enables authentication. When nil every request is allowed.
+	Auth *auth.Config
 }
 
 func RealmHandler(rlm *realm.Realm, h http.Handler) http.Handler {
@@ -56,10 +59,17 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = DefaultHandlerTimeout
 	}
-	return handle(ctx, config), nil
+	var authn *auth.Authenticator
+	if config.Auth != nil {
+		var err error
+		if authn, err = auth.New(*config.Auth, rawStorage(config.Storage)); err != nil {
+			return nil, err
+		}
+	}
+	return handle(ctx, config, authn), nil
 }
 
-func handle(ctx context.Context, hc HandlerConfig) http.Handler {
+func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) http.Handler {
 	logger := logging.Ctx(ctx)
 	mux := http.NewServeMux()
 	brk := newBroker()
@@ -73,12 +83,19 @@ func handle(ctx context.Context, hc HandlerConfig) http.Handler {
 	meta := &metaStore{strg: rawStorage(hc.Storage)}
 	locks := &pathLocks{}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, meta, locks, brk), "/v1/chambers/"))
-	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
-	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
-	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
+	mux.Handle("/v1/chambers/", otelhttp.NewHandler(requireAuth(handleChambers(hc.Storage, meta, locks, brk)), "/v1/chambers/"))
+	mux.Handle("/v1/history/", otelhttp.NewHandler(requireAuth(handleHistory(meta)), "/v1/history/"))
+	mux.Handle("/v1/catalog", otelhttp.NewHandler(requireAuth(handleCatalog(meta)), "/v1/catalog"))
+	mux.Handle("/v1/catalog/", otelhttp.NewHandler(requireAuth(handleCatalog(meta)), "/v1/catalog/"))
+	mux.Handle("/v1/auth/me", otelhttp.NewHandler(handleMe(authn), "/v1/auth/me"))
+	if authn != nil {
+		mux.Handle("/v1/auth/", otelhttp.NewHandler(authn.Handler(), "/v1/auth/"))
+		keys := requireAuth(handleKeys(authn.Keys()))
+		mux.Handle("/v1/keys", otelhttp.NewHandler(keys, "/v1/keys"))
+		mux.Handle("/v1/keys/", otelhttp.NewHandler(keys, "/v1/keys/"))
+	}
 
-	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
+	timeoutHandler := wrapWithTimeout(withPrincipal(authn, mux), hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler, logger)
 }
 
@@ -187,8 +204,13 @@ func rawStorage(s storage.Storage) storage.Storage {
 	}
 }
 
-// actorFrom returns the identity recorded in history for a request.
+// actorFrom returns the identity recorded in history for a request: the
+// authenticated principal, or when authentication is off, the self-reported
+// ActorHeader.
 func actorFrom(r *http.Request) string {
+	if p := auth.FromContext(r.Context()); p != nil && p.Kind != auth.KindAnonymous {
+		return p.Actor()
+	}
 	if a := strings.TrimSpace(r.Header.Get(ActorHeader)); a != "" {
 		return a
 	}
@@ -233,6 +255,20 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 			span.SetStatus(codes.Error, err.Error())
 			errorLog.Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+		}
+
+		p := auth.FromContext(ctx)
+		switch req.Operation {
+		case GetOperation, ListOperation:
+			if !p.CanRead(req.Path) {
+				forbidden(w, r, fmt.Sprintf("not allowed to read %s", req.Path))
+				return
+			}
+		default:
+			if !p.CanWrite(req.Path) {
+				forbidden(w, r, fmt.Sprintf("not allowed to change %s", req.Path))
+				return
+			}
 		}
 
 		// Writes decode and validate their body before taking the path lock.
