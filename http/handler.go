@@ -94,6 +94,9 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 		mux.Handle("/v1/keys", otelhttp.NewHandler(keys, "/v1/keys"))
 		mux.Handle("/v1/keys/", otelhttp.NewHandler(keys, "/v1/keys/"))
 	}
+	// Liveness for orchestrators (e.g. Kubernetes probes); deliberately not
+	// traced or authenticated so frequent probes stay cheap.
+	mux.HandleFunc("GET /healthz", handleHealth)
 
 	timeoutHandler := wrapWithTimeout(withPrincipal(authn, mux), hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler, logger)
@@ -511,6 +514,12 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 			flusher.Flush()
 		}
 	}
+}
+
+// handleHealth reports that the server is up and serving requests.
+func handleHealth(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write([]byte("ok\n"))
 }
 
 func handleUIEmpty() http.Handler {

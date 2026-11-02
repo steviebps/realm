@@ -39,6 +39,10 @@ test-race: ## Run all tests with the race detector (CI gate)
 bench: ## Run benchmarks
 	go test -run '^$$' -bench . -benchmem ./...
 
+.PHONY: docker
+docker: ## Build the Docker image (UI embedded) as realm:dev
+	docker build -t realm:dev .
+
 .PHONY: fmt
 fmt: ## Format all Go code
 	gofmt -w -s .

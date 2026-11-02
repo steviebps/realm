@@ -144,8 +144,10 @@ func TestAuthRequired(t *testing.T) {
 		!strings.Contains(string(out.Data), `"user":null`) || !strings.Contains(string(out.Data), `"name":"test"`) {
 		t.Fatalf("me = %d %s", status, out.Data)
 	}
-	if status, _ := call(t, nil, http.MethodGet, srv.URL+"/ui/", "", ""); status != http.StatusOK {
-		t.Errorf("UI without credentials = %d, want 200", status)
+	for _, path := range []string{"/ui/", "/healthz"} {
+		if status, _ := call(t, nil, http.MethodGet, srv.URL+path, "", ""); status != http.StatusOK {
+			t.Errorf("GET %s without credentials = %d, want 200", path, status)
+		}
 	}
 }
 
