@@ -1,14 +1,14 @@
 import { useState } from 'react';
-import { Breadcrumb, BreadcrumbItem, Button, Label, Spinner, TextInput } from 'flowbite-react';
+import { Alert, Breadcrumb, BreadcrumbItem, Button, Label, TextInput } from 'flowbite-react';
 import { HiHome } from 'react-icons/hi';
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from 'react-query';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeInit } from '../.flowbite-react/init';
 import { trimPrefix, trimSuffix } from './utils/strings';
 import { SideNav } from './components/side-nav';
-import { ChamberResponse, ListResponse } from './models/response';
-import { RuleInput } from './components/RuleInput/RuleInput';
-import { encodePath, ensureTrailingSlash } from './utils/path';
+import { ChamberView } from './components/ChamberView';
+import { createChamber, getActor, listChambers, setActor } from './api';
+import { ensureTrailingSlash } from './utils/path';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,143 +37,96 @@ export const App = () => {
   );
 };
 
+/** Lets an editor say who they are; recorded with every change until sign-in exists. */
+const ActorField = () => {
+  const [actor, setActorState] = useState(getActor);
+  return (
+    <div className="flex items-center gap-2">
+      <Label htmlFor="actor" className="whitespace-nowrap">
+        Editing as
+      </Label>
+      <TextInput
+        id="actor"
+        sizing="sm"
+        placeholder="your name or email"
+        value={actor}
+        onChange={(e) => {
+          setActorState(e.target.value);
+          setActor(e.target.value);
+        }}
+      />
+    </div>
+  );
+};
+
 const Content = () => {
   const [chamberName, setChamberName] = useState('');
   const location = useLocation();
+  const navigate = useNavigate();
+  const path = ensureTrailingSlash(location.pathname);
 
-  const { data: listResponse, isLoading: isLoadingList } = useQuery<ListResponse>(location.pathname, () => {
-    return fetch(`/v1/chambers${encodePath(location.pathname)}?list=true`, {
-      method: 'GET',
-      mode: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    }).then((res) => {
-      return res.json();
-    });
-  });
+  const { data: children = [] } = useQuery(['list', path], () => listChambers(path));
 
-  const { data: chamber, isLoading: isLoadingChamber } = useQuery<ChamberResponse>(
-    location.pathname + '_chamber',
-    () => {
-      return fetch(`/v1/chambers${encodePath(location.pathname)}`, {
-        method: 'GET',
-        mode: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }).then((res) => {
-        return res.json();
-      });
-    }
-  );
-
-  const { mutate } = useMutation<null, unknown, string>(
-    (c: string) => {
-      return fetch(`/v1/chambers${encodePath(ensureTrailingSlash(location.pathname) + c)}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          rules: {
-            string: { type: 'string', value: 'hello, world' },
-            boolean: { type: 'boolean', value: true },
-            number: { type: 'number', value: 10.2 },
-          },
-        }),
-        mode: 'same-origin',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      })
-        .then((res) => {
-          return res.json();
-        })
-        .then((res: null) => {
-          setChamberName('');
-          return res;
-        });
-    },
+  const create = useMutation(
+    (name: string) => createChamber(path + ensureTrailingSlash(trimPrefix(name.trim(), '/'))),
     {
-      onSettled: () => {
-        return Promise.all([
-          queryClient.invalidateQueries(location.pathname + '_chamber'),
-          queryClient.invalidateQueries(location.pathname),
-        ]);
+      onSuccess: (_, name) => {
+        setChamberName('');
+        void queryClient.invalidateQueries(['list', path]);
+        void navigate(path + trimSuffix(trimPrefix(name.trim(), '/'), '/'));
       },
     }
   );
 
-  const onCreateNewChamber: React.FormEventHandler<HTMLFormElement> = (event) => {
-    event.preventDefault();
-    mutate(chamberName);
-  };
-
-  const directories = (listResponse?.data || []).filter((curChamber) => curChamber !== '.');
-  const { data: chamberData } = chamber || {};
-  const { rules } = chamberData || {};
+  const directories = children.filter((c) => c !== '.');
   const trimmed = trimSuffix(trimPrefix(location.pathname, '/'), '/');
   const up = trimmed !== '' ? trimmed.split('/') : [];
-  const isLoading = isLoadingList || isLoadingChamber;
 
   return (
-    <div className="flex flex-col items-center my-5">
-      <h1>Realm</h1>
-      <div className="w-full max-w-[1280px]">
-        <Breadcrumb aria-label="directory crumbs" className="px-5 py-3">
-          <BreadcrumbItem icon={HiHome}>
-            <Link to="/" relative="path">
-              Home
-            </Link>
+    <div className="mx-auto my-5 flex w-full max-w-[1280px] flex-col gap-4 px-4">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold">Realm</h1>
+        <ActorField />
+      </header>
+      <Breadcrumb aria-label="directory crumbs" className="py-1">
+        <BreadcrumbItem icon={HiHome}>
+          <Link to="/" relative="path">
+            Home
+          </Link>
+        </BreadcrumbItem>
+        {up.map((segment, index) => (
+          <BreadcrumbItem key={index}>
+            <Link to={'/' + [...up.slice(0, index), segment].join('/')}>{segment}</Link>
           </BreadcrumbItem>
-          {up.map((path, index) => {
-            return (
-              <BreadcrumbItem key={index}>
-                <Link to={'/' + [...up.slice(0, index), path].join('/')}>{path}</Link>
-              </BreadcrumbItem>
-            );
-          })}
-        </Breadcrumb>
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-5">
-          <div className="p-3 col-span-1 md:col-span-3">
-            {directories.length > 0 && <SideNav directories={directories} />}
-          </div>
-          <div className="grid gap-8 p-3 col-span-1 md:col-span-9">
-            {isLoading && (
-              <div className="text-left">
-                <Spinner aria-label="Loading Chambers" size="lg" />
-              </div>
-            )}
-            {!isLoading && (
-              <form className="flex flex-col gap-4" onSubmit={onCreateNewChamber}>
-                <div>
-                  <div className="mb-2 block">
-                    <Label htmlFor="chamber">Chamber</Label>
-                  </div>
-                  <TextInput
-                    id="chamber"
-                    type="input"
-                    required
-                    value={chamberName}
-                    onChange={(event) => {
-                      setChamberName(event.target.value);
-                    }}
-                  />
-                </div>
-                <Button type="submit">Create New Chamber</Button>
-              </form>
-            )}
-
-            {!!rules && (
-              <ul className="grid gap-5 list-none">
-                {Object.entries(rules).map(([ruleName, rule]) => {
-                  if (!rule) {
-                    return null;
-                  }
-                  return <RuleInput key={ruleName} ruleName={ruleName} rule={rule} />;
-                })}
-              </ul>
-            )}
-          </div>
-        </div>
+        ))}
+      </Breadcrumb>
+      <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
+        <aside className="flex flex-col gap-4 md:col-span-3">
+          {directories.length > 0 && <SideNav directories={directories} />}
+          <form
+            className="flex flex-col gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              create.mutate(chamberName);
+            }}
+          >
+            <Label htmlFor="chamber">New child chamber</Label>
+            <TextInput
+              id="chamber"
+              required
+              placeholder="prod"
+              value={chamberName}
+              onChange={(e) => setChamberName(e.target.value)}
+            />
+            <Button type="submit" size="sm" disabled={create.isLoading}>
+              Create chamber
+            </Button>
+            {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
+          </form>
+        </aside>
+        <main className="md:col-span-9">
+          <ChamberView key={path} path={path} />
+        </main>
       </div>
     </div>
   );

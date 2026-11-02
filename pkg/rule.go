@@ -3,12 +3,10 @@ package realm
 import (
 	"encoding/json"
 	"fmt"
-
-	"golang.org/x/mod/semver"
 )
 
-// Rule is a feature definition structure for holding
-// its name, value, type and any overrides to be parsed by the applicable realm sdk
+// Rule is a typed value: a type ("string", "number", "boolean", or "custom")
+// and a value that is validated against that type. It is the base of a Flag.
 type Rule struct {
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
@@ -69,167 +67,10 @@ func (t *Rule) assertType(data json.RawMessage) error {
 	return &UnsupportedTypeError{t.Type}
 }
 
-type OverrideableRule struct {
-	*Rule
-	Overrides []*Override `json:"overrides,omitempty"`
-	Rollout   *Rollout    `json:"rollout,omitempty"`
-}
-
 type UnsupportedTypeError struct {
 	RuleType string
 }
 
 func (ut *UnsupportedTypeError) Error() string {
 	return fmt.Sprintf("type %q is currently not supported", ut.RuleType)
-}
-
-// UnmarshalJSON Custom UnmarshalJSON method for validating rule Value to the RuleType
-func (t *OverrideableRule) UnmarshalJSON(b []byte) error {
-	var rule Rule
-	err := json.Unmarshal(b, &rule)
-	if err != nil {
-		return err
-	}
-	t.Rule = &rule
-
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
-		return err
-	}
-
-	if v, ok := m["overrides"]; ok {
-		var overrides []*Override
-		if err := json.Unmarshal(v, &overrides); err != nil {
-			return err
-		}
-		t.Overrides = overrides
-	}
-
-	if v, ok := m["rollout"]; ok {
-		var rollout Rollout
-		if err := json.Unmarshal(v, &rollout); err != nil {
-			return err
-		}
-		t.Rollout = &rollout
-	}
-
-	var previous *Override
-	for _, override := range t.Overrides {
-		// overrides should not overlap
-		if previous != nil && semver.Compare(previous.MaximumVersion, override.MinimumVersion) == 1 {
-			return fmt.Errorf("an override with maximum version %v is semantically greater than the next override's minimum version (%v) ", previous.MaximumVersion, override.MinimumVersion)
-		}
-		previous = override
-	}
-
-	return nil
-}
-
-// ValueAtVersion returns the value at the given version.
-// Will return default value if version is empty string or no override is present for the specified version
-func (t *OverrideableRule) ValueAtVersion(version string) interface{} {
-	v := t.Value
-	if version != "" {
-		for _, override := range t.Overrides {
-			if semver.Compare(override.MinimumVersion, version) <= 0 && semver.Compare(override.MaximumVersion, version) >= 0 {
-				v = override.Value
-				break
-			}
-		}
-	}
-
-	return v
-}
-
-// ValueFor resolves the rule value for the given evaluation context. It first
-// applies any version override (see ValueAtVersion) to determine the base
-// value, then serves the rollout value instead when a percentage rollout is
-// configured and the context falls within it.
-func (t *OverrideableRule) ValueFor(ruleKey string, ec EvaluationContext, version string) interface{} {
-	if t.Rollout.Includes(ruleKey, ec) {
-		return t.Rollout.Value
-	}
-	return t.ValueAtVersion(version)
-}
-
-// StringValueFor retrieves a string value of the rule for the given evaluation
-// context and returns the default value if it does not exist and a bool on
-// whether or not the value could be converted.
-func (t *OverrideableRule) StringValueFor(ruleKey string, ec EvaluationContext, version string, defaultValue string) (string, bool) {
-	v, ok := t.ValueFor(ruleKey, ec, version).(string)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
-}
-
-// BoolValueFor retrieves a bool value of the rule for the given evaluation
-// context and returns the default value if it does not exist and a bool on
-// whether or not the value could be converted.
-func (t *OverrideableRule) BoolValueFor(ruleKey string, ec EvaluationContext, version string, defaultValue bool) (bool, bool) {
-	v, ok := t.ValueFor(ruleKey, ec, version).(bool)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
-}
-
-// Float64ValueFor retrieves a float64 value of the rule for the given
-// evaluation context and returns the default value if it does not exist and a
-// bool on whether or not the value could be converted.
-func (t *OverrideableRule) Float64ValueFor(ruleKey string, ec EvaluationContext, version string, defaultValue float64) (float64, bool) {
-	v, ok := t.ValueFor(ruleKey, ec, version).(float64)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
-}
-
-// CustomValueFor unmarshals the rule value for the given evaluation context
-// into v.
-func (t *OverrideableRule) CustomValueFor(ruleKey string, ec EvaluationContext, version string, v any) error {
-	raw, ok := t.ValueFor(ruleKey, ec, version).(*json.RawMessage)
-	if !ok {
-		return fmt.Errorf("rule with type %q could not be converted for unmarshalling", t.Type)
-	}
-	return json.Unmarshal(*raw, v)
-}
-
-// StringValue retrieves a string value of the rule
-// and returns the default value if it does not exist and a bool on whether or not the rule exists
-func (t *OverrideableRule) StringValue(version string, defaultValue string) (string, bool) {
-	v, ok := t.ValueAtVersion(version).(string)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
-}
-
-// BoolValue retrieves a bool value of the rule
-// and returns the default value if it does not exist and a bool on whether or not the rule exists
-func (t *OverrideableRule) BoolValue(version string, defaultValue bool) (bool, bool) {
-	v, ok := t.ValueAtVersion(version).(bool)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
-}
-
-// Float64Value retrieves a float64 value of the rule
-// and returns the default value if it does not exist and a bool on whether or not the rule exists
-func (t *OverrideableRule) Float64Value(version string, defaultValue float64) (float64, bool) {
-	v, ok := t.ValueAtVersion(version).(float64)
-	if !ok {
-		return defaultValue, ok
-	}
-	return v, ok
-}
-
-// CustomValue unmarshals v into the value of the rule
-func (t *OverrideableRule) CustomValue(version string, v any) error {
-	raw, ok := t.ValueAtVersion(version).(*json.RawMessage)
-	if !ok {
-		return fmt.Errorf("rule with type %q could not be converted for unmarshalling", t.Type)
-	}
-	return json.Unmarshal(*raw, v)
 }

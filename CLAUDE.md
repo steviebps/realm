@@ -18,41 +18,54 @@ binary is three things at once:
 switches, synchronized across application zones, with progressive rollout.
 
 **Honest current state:** flags are grouped into hierarchical **chambers** that
-inherit from their parents; values can be overridden per **application version
-range** and rolled out to a **deterministic percentage** of subjects; the SDK
-stays current by **polling** (default 15 min) or **real-time streaming**
-(opt-in SSE, "immediately sourced"). Not yet built: attribute-based targeting,
-cross-replica stream fanout, API-key auth, and audit logging. See
-`docs/ARCHITECTURE.md` for the full gap analysis.
+inherit from their parents. Each flag has a default value and ordered
+**targeting rules** matched against context attributes (tenant, location,
+environment, service, semver `version`, `buildSha`, …), each optionally
+limited to a **deterministic percentage rollout**. The SDK stays current by
+**polling** (default 15 min) or **real-time streaming** (SSE). The server
+offers ETag optimistic concurrency, per-chamber change history, and an
+attribute catalog (value → label) for the UI; storage includes S3. Not yet
+built: API keys / OIDC, a TypeScript SDK and server-side evaluation endpoint,
+Postgres storage, and cross-replica fanout (run one replica). See
+`docs/ARCHITECTURE.md` and `docs/design/targeting.md`.
+
+**Open source:** keep consumer- or company-specific names out of code, docs,
+examples, and tests; use generic terms (tenant, location, service).
 
 ## Domain vocabulary
 
-Read `pkg/rule.go`, `pkg/override.go`, `pkg/rollout.go`, `pkg/chamber.go`,
+Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 `pkg/context.go`, `pkg/realm.go` — these define the whole model.
 
-- **Rule** — one flag: a `type` (`string` | `number` | `boolean` | `custom`)
-  and a `value`. `UnmarshalJSON` strictly validates the value against the type.
-- **Override** — an alternate rule value scoped to an app **semver range**
-  (`minimumVersion`..`maximumVersion`).
-- **Rollout** — an alternate rule value served to a deterministic **percentage**
-  of evaluation contexts, bucketed by a key (sticky assignment). Embeds `*Rule`
-  like `Override` does.
-- **OverrideableRule** — a `Rule` plus its `Overrides` and optional `Rollout`.
-  `ValueFor(ruleKey, ec, version)` is the resolver: **version override first,
-  then rollout**.
-- **EvaluationContext** — per-evaluation targeting info (`Key` for bucketing,
-  `Attributes` reserved for future targeting). Travels through the request
-  context, not the snapshot.
-- **Chamber** — a namespace: `map[ruleName]*OverrideableRule`, with
-  `InheritFrom` / `OverwriteFrom`. **ChamberEntry** is the immutable,
-  version-bound read view the SDK evaluates against.
+- **Rule** — a typed value: a `type` (`string` | `number` | `boolean` |
+  `custom`) and a `value`. `UnmarshalJSON` strictly validates the value against
+  the type. Embedded by `Flag`.
+- **Flag** — one flag: a `Rule` (its default) plus ordered `Targeting`.
+  `ValueFor(flagKey, ec)` returns the value of the first rule that applies, else
+  the default. `UnmarshalJSON` type-checks rule values and rejects the removed
+  `overrides`/`rollout` fields.
+- **TargetingRule** — `Clauses` (ANDed), a `Value`, and an optional `Rollout`.
+- **Clause** — `{attribute, op, values}`; ops `in`, `notIn`, `startsWith`,
+  `semverGte`, `semverLte`. A missing attribute never matches.
+- **Rollout** — `{percentage, bucketBy, seed}`: sticky percentage of matching
+  contexts, bucketed on any attribute (default `key`). Not bucketed in → next rule.
+- **EvaluationContext** — `Key` (the `key` attribute) and `Attributes`
+  (`map[string]string`); falls back to process-wide attributes set with
+  `WithAttributes` / `WithVersion`. Travels through the request context.
+- **Chamber** — a namespace: `map[flagKey]*Flag` (json `rules`), with
+  `InheritFrom` / `OverwriteFrom`. **ChamberEntry** is the immutable read view
+  the SDK evaluates against, carrying the process-wide attributes.
 - **Realm** — the SDK client object (`NewRealm(WithHttpClient, WithPath,
-  WithVersion, WithPollingInterval, WithStreaming)`; `Start`/`Stop`; `Bool`/
-  `String`/`Float64`/`CustomValue`; `NewContext` / `NewContextWithEvaluation`).
-  Refresh is either **polling** (default) or **streaming** (`WithStreaming(true)`
-  → SSE `GET /v1/chambers/<path>?watch=true`, with polling fallback). The server
-  pushes changes via an in-process **broker** (`http/broker.go`, notified after
-  each write). See `docs/ARCHITECTURE.md`.
+  WithVersion, WithAttributes, WithPollingInterval, WithStreaming)`;
+  `Start`/`Stop`; `Bool`/`String`/`Float64`/`CustomValue`; `NewContext` /
+  `NewContextWithEvaluation`). Refresh is either **polling** (default) or
+  **streaming** (`WithStreaming(true)` → SSE `GET /v1/chambers/<path>?watch=true`,
+  with polling fallback). The server pushes changes via an in-process **broker**
+  (`http/broker.go`, notified after each write).
+- **Metadata** — ETags, history (`/v1/history/<path>`), and the catalog
+  (`/v1/catalog/<attribute>`) live in `http/meta.go` / `http/meta_handlers.go`,
+  stored under the reserved `/_realm/` prefix in the raw storage beneath the
+  `inheritable` wrapper.
 
 ## Architecture map
 
@@ -61,7 +74,7 @@ Read `pkg/rule.go`, `pkg/override.go`, `pkg/rollout.go`, `pkg/chamber.go`,
 | `main.go` | Entry point → `cmd.Execute()` |
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
 | `pkg/` | Core domain + SDK (package `realm`) |
-| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions` |
+| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions` |
 | `client/http.go` | `HttpClient` used by both CLI and SDK |
 | `http/` | Server handler (`handler.go`), request mapping (`agent.go`), UI embedding (`assets.go` behind the `ui` build tag; `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |
@@ -95,9 +108,9 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
 - **Wrap meaningful work in an OTel span:** `ctx, span := tracer.Start(ctx, "…")`.
 - **SDK config uses functional options** (`WithX(...) RealmOption`). Extend that
   pattern rather than adding constructor parameters.
-- **Domain types validate in `UnmarshalJSON`.** New rule capabilities (like
-  `Rollout`) embed `*Rule` so the value is type-checked, and validate their own
-  invariants there. Give them json tags so they round-trip through the server
+- **Domain types validate in `UnmarshalJSON`.** Values that depend on the
+  flag's type (like `TargetingRule.Value`) are type-checked by the owning
+  `Flag` via `Rule.assertType`; other types validate their own invariants. Give them json tags so they round-trip through the server
   (the handler just unmarshals → re-marshals; see below).
 - **Storage backends self-register** in `pkg/storage/storage.go`'s
   `StorageOptions` map via a `StorageCreator` factory. `ValidatePath` rejects
@@ -107,11 +120,12 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
 
 ## Recipes
 
-- **Add a rule capability (like Rollout):** define the type in `pkg/` embedding
-  `*Rule`; add a json-tagged field to `OverrideableRule`; parse + validate it in
-  `OverrideableRule.UnmarshalJSON`; fold it into `ValueFor`. No server change is
-  needed — `http/handler.go` persists chambers by unmarshaling into
-  `realm.Chamber` and re-marshaling, so tagged fields round-trip automatically.
+- **Add a targeting operator:** add an `Operator` constant in
+  `pkg/targeting.go`, validate its values in `Clause.validate`, match it in
+  `Clause.Matches`, add table cases to `pkg/targeting_test.go`, and add a label
+  in `http/realm-ui/src/utils/describe.ts`. No server change is needed —
+  `http/handler.go` persists chambers by unmarshaling into `realm.Chamber` and
+  re-marshaling, so tagged fields round-trip automatically.
 - **Add a storage backend:** implement `storage.Storage`, register it in
   `StorageOptions` (and `SourcableStorageOptions` if it can be a cache source).
 - **Add a CLI subcommand:** add a `*cobra.Command` in `cmd/`, register it in an
@@ -123,7 +137,9 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
   norm; use `t.Run(name, …)` for subtests.
 - Run with `-race` before finishing (`make test-race`) — it is CI's gate.
 - Add `RunParallel` benchmarks for hot evaluation paths (see `pkg/rule_test.go`,
-  `pkg/rollout_test.go`).
+  `pkg/targeting_test.go`); evaluation is allocation-free — keep it that way.
+- The S3 integration test runs only when `REALM_S3_TEST_ENDPOINT` and
+  `REALM_S3_TEST_BUCKET` are set (see `pkg/storage/s3_test.go`).
 - Test data is inlined as literals; there is no `testdata/` fixture convention.
 
 ## Verifying changes

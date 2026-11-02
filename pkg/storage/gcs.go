@@ -27,7 +27,9 @@ var (
 	_ Storage = (*GCSStorage)(nil)
 )
 
-const gcsEntryKey string = "entry"
+// objectEntryKey names the object holding the entry at a logical path in
+// bucket-backed stores (GCS, S3), which share one object layout.
+const objectEntryKey string = "entry"
 
 func NewGCSStorage(conf map[string]string) (Storage, error) {
 	if conf["bucket"] == "" {
@@ -59,9 +61,7 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 		return nil, err
 	}
 
-	p, key := s.expandPath(logicalPath + gcsEntryKey)
-
-	r, err := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewReader(ctx)
+	r, err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).NewReader(ctx)
 	if err != nil {
 		span.RecordError((err))
 		if err == gcs.ErrObjectNotExist {
@@ -106,9 +106,7 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	default:
 	}
 
-	p, key := s.expandPath(e.Key + gcsEntryKey)
-
-	w := s.client.Bucket(s.bucket).Object(path.Join(p, key)).NewWriter(ctx)
+	w := s.client.Bucket(s.bucket).Object(objectKeyFor(e.Key)).NewWriter(ctx)
 	md5Array := md5.Sum(e.Value)
 	w.MD5 = md5Array[:]
 	w.ContentType = "application/json"
@@ -145,8 +143,7 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 	default:
 	}
 
-	p, key := s.expandPath(logicalPath + gcsEntryKey)
-	err := s.client.Bucket(s.bucket).Object(path.Join(p, key)).Delete(ctx)
+	err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).Delete(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to delete: %w", err)
 	}
@@ -196,7 +193,7 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 		if objAttrs.Prefix != "" {
 			// "subdirectory"
 			path = strings.TrimPrefix(objAttrs.Prefix, cleanPrefix)
-		} else if strings.HasSuffix(objAttrs.Name, "_"+gcsEntryKey) {
+		} else if strings.HasSuffix(objAttrs.Name, "_"+objectEntryKey) {
 			// file
 			path = "."
 		}
@@ -216,8 +213,8 @@ func (s *GCSStorage) Close(ctx context.Context) error {
 	return s.client.Close()
 }
 
-func (s *GCSStorage) expandPath(k string) (string, string) {
-	key := path.Base(k)
-	p := path.Dir(k)
-	return strings.TrimPrefix(p, "/"), "_" + key
+// objectKeyFor maps a logical path such as "/a/b/" to its object key "a/b/_entry".
+func objectKeyFor(logicalPath string) string {
+	k := logicalPath + objectEntryKey
+	return path.Join(strings.TrimPrefix(path.Dir(k), "/"), "_"+path.Base(k))
 }

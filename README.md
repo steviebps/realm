@@ -101,11 +101,12 @@ func main() {
 }
 ```
 
-### progressive rollout (percentage targeting)
+### targeting and progressive rollout
 
-A rule can carry a `rollout` that serves an alternate value to a deterministic
-percentage of subjects, bucketed by an evaluation key (for example, a user id).
-Assignment is sticky: the same key always lands in the same bucket.
+Each flag has a default `value` and an ordered list of `targeting` rules. The
+first rule whose clauses all match the evaluation context wins; otherwise the
+default is served. A rule may carry a `rollout` that limits it to a
+deterministic, sticky percentage of matching subjects.
 
 ```json
 {
@@ -113,20 +114,51 @@ Assignment is sticky: the same key always lands in the same bucket.
     "new-checkout": {
       "type": "boolean",
       "value": false,
-      "rollout": { "type": "boolean", "value": true, "percentage": 20 }
+      "targeting": [
+        {
+          "id": "pilot-locations",
+          "clauses": [
+            { "attribute": "environment", "op": "in", "values": ["prod"] },
+            { "attribute": "locationId", "op": "in", "values": ["loc-123", "loc-456"] }
+          ],
+          "value": true
+        },
+        {
+          "id": "gradual",
+          "clauses": [{ "attribute": "version", "op": "semverGte", "values": ["v2.0.0"] }],
+          "value": true,
+          "rollout": { "percentage": 20, "bucketBy": "locationId" }
+        }
+      ]
     }
   }
 }
 ```
 
-Supply the evaluation key per request with `NewContextWithEvaluation`. Without a
-key the rollout is inert and the base value is returned, so existing callers are
-unaffected.
+Operators: `in`, `notIn`, `startsWith` (e.g. build SHAs), `semverGte`,
+`semverLte`. A clause on an attribute the context does not set never matches.
+`rollout.bucketBy` defaults to `key`; bucketing by a coarser attribute such as
+`locationId` rolls out to whole groups at once.
+
+Attributes come from two places. Process-wide facts are set once on the SDK,
+and per-request facts travel with the request context (request wins):
 
 ```go
-ctx := rlm.NewContextWithEvaluation(r.Context(), realm.EvaluationContext{Key: userID})
-enabled, _ := rlm.Bool(ctx, "new-checkout", false) // true for ~20% of users
+rlm, _ := realm.NewRealm(
+  realm.WithHttpClient(client),
+  realm.WithPath("root"),
+  realm.WithVersion("v2.3.0"), // the "version" attribute
+  realm.WithAttributes(map[string]string{"environment": "prod", "service": "checkout", "buildSha": sha}),
+)
+
+ctx := rlm.NewContextWithEvaluation(r.Context(), realm.EvaluationContext{
+  Key:        userID,
+  Attributes: map[string]string{"tenantId": tenantID, "locationId": locationID},
+})
+enabled, _ := rlm.Bool(ctx, "new-checkout", false)
 ```
+
+See [docs/design/targeting.md](docs/design/targeting.md) for the full model.
 
 ### real-time updates (streaming)
 

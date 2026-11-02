@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -68,7 +70,13 @@ func handle(ctx context.Context, hc HandlerConfig) http.Handler {
 		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
 	}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, brk), "/v1/chambers/"))
+	meta := &metaStore{strg: rawStorage(hc.Storage)}
+	locks := &pathLocks{}
+
+	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, meta, locks, brk), "/v1/chambers/"))
+	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
+	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
+	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
 
 	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler, logger)
@@ -138,6 +146,16 @@ func handleOk(w http.ResponseWriter, body interface{}) {
 	}
 }
 
+// handleOkJSON marshals v as the response data, or responds 500 if it cannot.
+func handleOkJSON(ctx context.Context, w http.ResponseWriter, v any) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+		return
+	}
+	handleOk(w, createResponseWithErrors(raw, nil))
+}
+
 func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -151,7 +169,51 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 	_ = utils.WriteInterfaceWith(w, resp, true)
 }
 
-func handleChambers(strg storage.Storage, brk *broker) http.Handler {
+// unwrapper is implemented by storage wrappers that transform reads (such as
+// inheritance) and can expose the storage they wrap.
+type unwrapper interface {
+	Unwrap() storage.Storage
+}
+
+// rawStorage returns the innermost storage beneath any transforming wrappers,
+// so metadata and ETags reflect exactly what is stored at a path.
+func rawStorage(s storage.Storage) storage.Storage {
+	for {
+		u, ok := s.(unwrapper)
+		if !ok {
+			return s
+		}
+		s = u.Unwrap()
+	}
+}
+
+// actorFrom returns the identity recorded in history for a request.
+func actorFrom(r *http.Request) string {
+	if a := strings.TrimSpace(r.Header.Get(ActorHeader)); a != "" {
+		return a
+	}
+	return defaultActor
+}
+
+// hasPrecondition reports whether the request carries If-Match or If-None-Match.
+func hasPrecondition(r *http.Request) bool {
+	return r.Header.Get("If-Match") != "" || r.Header.Get("If-None-Match") != ""
+}
+
+// preconditionFailed reports whether the request's If-Match / If-None-Match
+// headers reject a write against a resource whose current ETag is current
+// ("" when it does not exist).
+func preconditionFailed(r *http.Request, current string) bool {
+	if h := r.Header.Get("If-Match"); h != "" && !etagMatches(h, current) {
+		return true
+	}
+	if h := r.Header.Get("If-None-Match"); h != "" && etagMatches(h, current) {
+		return true
+	}
+	return false
+}
+
+func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk *broker) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -162,6 +224,94 @@ func handleChambers(strg storage.Storage, brk *broker) http.Handler {
 		req := buildAgentRequest(r)
 		span.SetAttributes(attribute.String("realm.server.logicalPath", req.Path), attribute.String("realm.server.operation", string(req.Operation)))
 
+		if isReservedPath(req.Path) {
+			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{fmt.Sprintf("paths under %q are reserved", reservedPrefix)}))
+			return
+		}
+
+		fail := func(status int, err error) {
+			span.SetStatus(codes.Error, err.Error())
+			errorLog.Msg(err.Error())
+			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+		}
+
+		// Writes decode and validate their body before taking the path lock.
+		var body realm.Chamber
+		if req.Operation == PutOperation || req.Operation == PatchOperation {
+			if err := utils.ReadInterfaceWith(r.Body, &body); err != nil {
+				if errors.Is(err, io.EOF) {
+					err = errors.New("request body must not be empty")
+				} else {
+					// surface validation errors (bad types, clauses, removed fields)
+					err = fmt.Errorf("invalid chamber: %w", err)
+				}
+				fail(http.StatusBadRequest, err)
+				return
+			}
+		}
+
+		// Writes are serialized per path. The chamber as stored (not its
+		// inherited view) is read at most once: for If-Match / If-None-Match
+		// and as the PATCH merge base.
+		var stored *storage.StorageEntry
+		switch req.Operation {
+		case PutOperation, PatchOperation, DeleteOperation:
+			unlock := locks.lock(req.Path)
+			defer unlock()
+
+			if req.Operation == PatchOperation || hasPrecondition(r) {
+				var err error
+				if stored, err = meta.get(ctx, req.Path); err != nil {
+					fail(http.StatusInternalServerError, err)
+					return
+				}
+			}
+			current := ""
+			if stored != nil {
+				current = etagOf(stored.Value)
+			}
+			if preconditionFailed(r, current) {
+				if current != "" {
+					w.Header().Set("ETag", current)
+				}
+				handleError(ctx, w, http.StatusPreconditionFailed, createResponseWithErrors(nil, []string{"the chamber was changed by someone else; reload and try again"}))
+				return
+			}
+		}
+
+		// commit stores value (nil deletes), records history, and notifies
+		// watchers. History failures are logged rather than failing the write.
+		commit := func(value []byte) bool {
+			var err error
+			if value == nil {
+				err = strg.Delete(ctx, req.Path)
+			} else {
+				err = strg.Put(ctx, storage.StorageEntry{Key: req.Path, Value: value})
+			}
+			if err != nil {
+				var nfError *storage.NotFoundError
+				if errors.As(err, &nfError) {
+					fail(http.StatusNotFound, nfError)
+					return false
+				}
+				fail(http.StatusInternalServerError, err)
+				return false
+			}
+
+			rev := Revision{Time: time.Now().UTC(), Actor: actorFrom(r), Operation: req.Operation}
+			if value != nil {
+				rev.ETag = etagOf(value)
+				rev.Chamber = value
+				w.Header().Set("ETag", rev.ETag)
+			}
+			if err := meta.appendHistory(ctx, req.Path, rev); err != nil {
+				span.RecordError(err)
+				errorLog.Msg(err.Error())
+			}
+			brk.Notify(req.Path)
+			return true
+		}
+
 		switch req.Operation {
 		case GetOperation:
 			if isWatchRequest(r) {
@@ -169,165 +319,86 @@ func handleChambers(strg storage.Storage, brk *broker) http.Handler {
 				return
 			}
 
-			entry, err := strg.Get(ctx, req.Path)
+			// ?inherit=false returns the chamber exactly as stored at this path,
+			// without rules inherited from its parents, plus its ETag (used by
+			// editors). The default, inherited view carries no ETag because it
+			// is not the representation that writes are checked against.
+			own := r.URL.Query().Get("inherit") == "false"
+			source := strg
+			if own {
+				source = meta.strg
+			}
+			entry, err := source.Get(ctx, req.Path)
 			if err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-
 				var nfError *storage.NotFoundError
 				if errors.As(err, &nfError) {
 					err = nfError
 				}
-
-				handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{err.Error()}))
+				fail(http.StatusNotFound, err)
 				return
 			}
 
+			if own {
+				w.Header().Set("ETag", etagOf(entry.Value))
+			}
 			handleOk(w, createResponseWithErrors(entry.Value, nil))
 			return
 
 		case PutOperation:
-			var putChamber realm.Chamber
-
-			// ensure data is in correct format
-			if err := utils.ReadInterfaceWith(r.Body, &putChamber); err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-				if errors.Is(err, io.EOF) {
-					err = errors.New("request body must not be empty")
-				} else {
-					err = errors.New(http.StatusText(http.StatusBadRequest))
-				}
-				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
-				return
-			}
-
-			b, err := json.Marshal(&putChamber)
+			b, err := json.Marshal(&body)
 			if err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-				err = errors.New(http.StatusText(http.StatusInternalServerError))
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				fail(http.StatusInternalServerError, errors.New(http.StatusText(http.StatusInternalServerError)))
 				return
 			}
-
-			// store the entry if the format is correct
-			entry := storage.StorageEntry{Key: req.Path, Value: b}
-			if err := strg.Put(ctx, entry); err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
-				return
+			if commit(b) {
+				handleWithStatus(w, http.StatusCreated, nil)
 			}
-
-			brk.Notify(req.Path)
-			handleWithStatus(w, http.StatusCreated, nil)
 			return
 
 		case PatchOperation:
-			var patchChamber realm.Chamber
-
-			// ensure data is in correct format
-			if err := utils.ReadInterfaceWith(r.Body, &patchChamber); err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-				if errors.Is(err, io.EOF) {
-					err = errors.New("request body must not be empty")
-				} else {
-					err = errors.New(http.StatusText(http.StatusBadRequest))
-				}
-				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
+			// Merge into the chamber as stored, not its inherited view, so
+			// inherited rules are never copied into the child.
+			if stored == nil {
+				fail(http.StatusBadRequest, fmt.Errorf("cannot patch a resource that does not exist: %w", &storage.NotFoundError{Key: req.Path}))
 				return
 			}
-
-			entry, err := strg.Get(ctx, req.Path)
-			if err != nil {
-				var nfError *storage.NotFoundError
-				if errors.As(err, &nfError) {
-					err = fmt.Errorf("cannot patch a resource that does not exist: %w", err)
-				}
-
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-
-				handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
-				return
-			}
-
 			current := realm.Chamber{}
-			if err := json.Unmarshal(entry.Value, &current); err != nil {
-				err = fmt.Errorf("could not unmarshal current chamber while patching: %w", err)
-
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+			if err := json.Unmarshal(stored.Value, &current); err != nil {
+				fail(http.StatusInternalServerError, fmt.Errorf("could not unmarshal current chamber while patching: %w", err))
 				return
 			}
-
-			current.OverwriteFrom(&patchChamber)
+			current.OverwriteFrom(&body)
 			b, err := json.Marshal(&current)
 			if err != nil {
-				err = fmt.Errorf("could not patch while merging chambers: %w", err)
-
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				fail(http.StatusInternalServerError, fmt.Errorf("could not patch while merging chambers: %w", err))
 				return
 			}
-
-			// store the entry if the format is correct
-			patchEntry := storage.StorageEntry{Key: req.Path, Value: b}
-			if err := strg.Put(ctx, patchEntry); err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
-				return
+			if commit(b) {
+				handleOk(w, nil)
 			}
-
-			brk.Notify(req.Path)
-			handleOk(w, nil)
 			return
 
 		case DeleteOperation:
-			if err := strg.Delete(ctx, req.Path); err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
-
-				var nfError *storage.NotFoundError
-				if errors.As(err, &nfError) {
-					handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{nfError.Error()}))
-					return
-				}
-
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
-				return
+			if commit(nil) {
+				handleOk(w, nil)
 			}
-
-			brk.Notify(req.Path)
-			handleOk(w, nil)
 			return
 
 		case ListOperation:
 			names, err := strg.List(ctx, req.Path)
 			if err != nil {
-				span.SetStatus(codes.Error, err.Error())
-				errorLog.Msg(err.Error())
 				if errors.Is(err, os.ErrNotExist) {
-					handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{http.StatusText(http.StatusNotFound)}))
+					fail(http.StatusNotFound, errors.New(http.StatusText(http.StatusNotFound)))
 					return
 				}
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				fail(http.StatusInternalServerError, err)
 				return
 			}
-			raw, err := json.Marshal(names)
-			if err != nil {
-				handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
-				return
+			if req.Path == "/" {
+				// hide realm's metadata from the root listing
+				names = slices.DeleteFunc(names, isReservedName)
 			}
-
-			handleOk(w, createResponseWithErrors(raw, nil))
+			handleOkJSON(ctx, w, names)
 			return
 
 		default:

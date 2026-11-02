@@ -119,7 +119,7 @@ var serverCmd = &cobra.Command{
 		if _, err = stg.Get(ctx, "/"); errors.As(err, &notFoundErr) {
 			logger.DebugCtx(ctx).Msg("initializing root entry in storage")
 
-			b, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.OverrideableRule{}})
+			b, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.Flag{}})
 			if err != nil {
 				logger.ErrorCtx(ctx).Msgf("failed to marshal root entry during startup: %s", err.Error())
 				os.Exit(1)

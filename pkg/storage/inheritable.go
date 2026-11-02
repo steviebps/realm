@@ -66,7 +66,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		cur := "/"
 		pathChunks := strings.Split(strings.TrimPrefix(dir, "/"), "/")
 
-		c := &realm.Chamber{Rules: map[string]*realm.OverrideableRule{}}
+		c := &realm.Chamber{Rules: map[string]*realm.Flag{}}
 		for _, v := range pathChunks {
 			cur += utils.EnsureTrailingSlash(v)
 			entry, err := s.source.Get(ctx, cur)
@@ -75,7 +75,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 				continue
 			}
 
-			curChamber := &realm.Chamber{Rules: map[string]*realm.OverrideableRule{}}
+			curChamber := &realm.Chamber{Rules: map[string]*realm.Flag{}}
 			if err := json.Unmarshal(entry.Value, curChamber); err != nil {
 				span.RecordError(err)
 				continue
@@ -187,6 +187,12 @@ func (s *InheritableStorage) List(ctx context.Context, prefix string) ([]string,
 	}
 
 	return names, nil
+}
+
+// Unwrap returns the source storage, which holds chambers exactly as written
+// (without inheritance applied).
+func (s *InheritableStorage) Unwrap() Storage {
+	return s.source
 }
 
 // Close closes the source storage

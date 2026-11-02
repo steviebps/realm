@@ -15,7 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	"go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 )
 
 func newHttpTraceExporter(ctx context.Context) (trace.SpanExporter, error) {
@@ -55,10 +55,12 @@ func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx co
 		return nil, fmt.Errorf("creating exporter: %w", err)
 	}
 	hostname, _ := os.Hostname()
+	// The attributes are schemaless so they merge under the SDK's default
+	// schema URL; pairing them with semconv.SchemaURL would fail at startup
+	// whenever the SDK and this semconv import disagree on schema versions.
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName("realm"),
 			semconv.HostName(hostname),
 		),

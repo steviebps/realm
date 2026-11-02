@@ -2,11 +2,12 @@ package realm
 
 import (
 	"encoding/json"
+	"maps"
 )
 
 // Chamber is a struct that holds metadata and rules
 type Chamber struct {
-	Rules map[string]*OverrideableRule `json:"rules"`
+	Rules map[string]*Flag `json:"rules"`
 }
 
 type chamberAlias Chamber
@@ -19,7 +20,7 @@ func (c *Chamber) UnmarshalJSON(b []byte) error {
 
 	*c = Chamber(alias)
 	if c.Rules == nil {
-		c.Rules = make(map[string]*OverrideableRule)
+		c.Rules = make(map[string]*Flag)
 	}
 
 	return nil
@@ -44,26 +45,23 @@ func (c *Chamber) OverwriteFrom(overwrittenFrom *Chamber) {
 // ChamberEntry is a read-only version of Chamber
 // it is specifically used for realm clients
 type ChamberEntry struct {
-	rules   map[string]*OverrideableRule
-	version string
+	rules      map[string]*Flag
+	attributes map[string]string
 }
 
-// NewChamberEntry creates a new ChamberEntry with the specified version
-func NewChamberEntry(c *Chamber, version string) *ChamberEntry {
-	m := make(map[string]*OverrideableRule)
-	for k, v := range c.Rules {
-		m[k] = v
-	}
-
+// NewChamberEntry creates a new ChamberEntry. The provided attributes are
+// process-wide defaults (for example "environment" or "version") consulted
+// when an evaluation context does not set them.
+func NewChamberEntry(c *Chamber, attributes map[string]string) *ChamberEntry {
 	return &ChamberEntry{
-		rules:   m,
-		version: version,
+		rules:      maps.Clone(c.Rules),
+		attributes: maps.Clone(attributes),
 	}
 }
 
-// Get returns the rule with the specified ruleKey.
-// Will return nil if the rule does not exist
-func (c *ChamberEntry) Get(ruleKey string) *OverrideableRule {
+// Get returns the flag with the specified ruleKey.
+// Will return nil if the flag does not exist
+func (c *ChamberEntry) Get(ruleKey string) *Flag {
 	t, ok := c.rules[ruleKey]
 	if !ok {
 		return nil
@@ -72,19 +70,26 @@ func (c *ChamberEntry) Get(ruleKey string) *OverrideableRule {
 	return t
 }
 
-// StringValueFor retrieves a string by the key of the rule, resolved for the
-// given evaluation context (applying any percentage rollout). It returns the
-// default value and an error if the rule is not found or could not be converted.
-func (c *ChamberEntry) StringValueFor(ruleKey string, ec EvaluationContext, defaultValue string) (string, error) {
+// entryValue resolves ruleKey for ec (merged over the entry's process-wide
+// attributes) using the typed accessor get, wrapping lookup and conversion
+// failures in the chamber's error types.
+func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, defaultValue T, get func(*Flag, string, EvaluationContext, T) (T, bool)) (T, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := t.StringValueFor(ruleKey, ec, c.version, defaultValue)
+	v, ok := get(t, ruleKey, ec.withDefaults(c.attributes), defaultValue)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
 	return v, nil
+}
+
+// StringValueFor retrieves a string by the key of the rule, resolved for the
+// given evaluation context (applying any targeting rules). It returns the
+// default value and an error if the rule is not found or could not be converted.
+func (c *ChamberEntry) StringValueFor(ruleKey string, ec EvaluationContext, defaultValue string) (string, error) {
+	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).StringValueFor)
 }
 
 // StringValue retrieves a string by the key of the rule
@@ -94,18 +99,10 @@ func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string,
 }
 
 // BoolValueFor retrieves a bool by the key of the rule, resolved for the given
-// evaluation context (applying any percentage rollout). It returns the default
+// evaluation context (applying any targeting rules). It returns the default
 // value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) BoolValueFor(ruleKey string, ec EvaluationContext, defaultValue bool) (bool, error) {
-	t := c.Get(ruleKey)
-	if t == nil {
-		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
-	}
-	v, ok := t.BoolValueFor(ruleKey, ec, c.version, defaultValue)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
-	}
-	return v, nil
+	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).BoolValueFor)
 }
 
 // BoolValue retrieves a bool by the key of the rule
@@ -115,18 +112,10 @@ func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error
 }
 
 // Float64ValueFor retrieves a float64 by the key of the rule, resolved for the
-// given evaluation context (applying any percentage rollout). It returns the
+// given evaluation context (applying any targeting rules). It returns the
 // default value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) Float64ValueFor(ruleKey string, ec EvaluationContext, defaultValue float64) (float64, error) {
-	t := c.Get(ruleKey)
-	if t == nil {
-		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
-	}
-	v, ok := t.Float64ValueFor(ruleKey, ec, c.version, defaultValue)
-	if !ok {
-		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
-	}
-	return v, nil
+	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).Float64ValueFor)
 }
 
 // Float64Value retrieves a float64 by the key of the rule
@@ -136,7 +125,7 @@ func (c *ChamberEntry) Float64Value(ruleKey string, defaultValue float64) (float
 }
 
 // CustomValueFor retrieves a json.RawMessage by the key of the rule, resolved
-// for the given evaluation context (applying any percentage rollout), and
+// for the given evaluation context (applying any targeting rules), and
 // unmarshals it into v. It returns an error if the rule is not found or could
 // not be converted.
 func (c *ChamberEntry) CustomValueFor(ruleKey string, ec EvaluationContext, v any) error {
@@ -144,7 +133,7 @@ func (c *ChamberEntry) CustomValueFor(ruleKey string, ec EvaluationContext, v an
 	if t == nil {
 		return &ErrRuleNotFound{Key: ruleKey}
 	}
-	err := t.CustomValueFor(ruleKey, ec, c.version, v)
+	err := t.CustomValueFor(ruleKey, ec.withDefaults(c.attributes), v)
 	if err != nil {
 		return &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
