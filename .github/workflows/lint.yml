@@ -19,6 +19,17 @@ jobs:
         with:
           go-version: 1.27.x
 
+      # Fetch modules up front (with retries) so a transient proxy error
+      # doesn't surface as a misleading typecheck failure inside the linter.
+      - name: Download modules
+        run: |
+          for i in 1 2 3; do
+            go mod download && exit 0
+            echo "go mod download failed (attempt $i), retrying..."
+            sleep $((i * 5))
+          done
+          exit 1
+
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
