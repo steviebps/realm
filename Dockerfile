@@ -9,7 +9,7 @@
 # The build stages run on the build machine's platform and cross-compile for
 # TARGETARCH, so multi-arch builds need no emulation.
 
-FROM --platform=$BUILDPLATFORM node:22-alpine AS ui
+FROM --platform=$BUILDPLATFORM node:24-alpine AS ui
 WORKDIR /src/http/realm-ui
 COPY http/realm-ui/package.json http/realm-ui/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
