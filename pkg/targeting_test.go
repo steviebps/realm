@@ -106,6 +106,7 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"duplicate ids", `{"type":"string","value":"a","targeting":[{"id":"x","value":"b"},{"id":"x","value":"c"}]}`, "not unique"},
 		{"rollout out of range", `{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":101}}]}`, "range"},
 		{"bad clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"a","op":"nope","values":["x"]}]}]}`, "unsupported operator"},
+		{"null clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[null]}]}`, "must not be null"},
 		{"legacy overrides rejected", `{"type":"boolean","value":false,"overrides":[]}`, "no longer supported"},
 		{"legacy rollout rejected", `{"type":"boolean","value":false,"rollout":{"type":"boolean","value":true,"percentage":5}}`, "no longer supported"},
 	}

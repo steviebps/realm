@@ -106,7 +106,7 @@ func handleCatalog(meta *metaStore) http.Handler {
 
 		readBody := func() (*catalogValues, bool) {
 			var body catalogValues
-			if err := utils.ReadInterfaceWith(r.Body, &body); err != nil {
+			if err := utils.ReadRequiredInterfaceWith(r.Body, &body); err != nil {
 				if errors.Is(err, io.EOF) {
 					err = errors.New("request body must not be empty")
 				}
