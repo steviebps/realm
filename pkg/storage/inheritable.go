@@ -33,7 +33,8 @@ func NewInheritableStorage(source Storage) (Storage, error) {
 	}, nil
 }
 
-// Get gets the entry at the specified logical path, inheriting all parent chambers if they exist
+// Get gets the entry at the specified logical path, inheriting all parent
+// chambers if they exist. Its Version is the highest of theirs.
 func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
@@ -59,6 +60,9 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		return nil, err
 	}
 
+	// the view changes whenever the leaf or an ancestor does
+	version := leafEntry.Version
+
 	clean := path.Clean(logicalPath)
 	dir := path.Dir(clean)
 
@@ -81,6 +85,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 				}
 				return nil, err
 			}
+			version = max(version, entry.Version)
 
 			curChamber := &realm.Chamber{Rules: map[string]*realm.Flag{}}
 			if err := json.Unmarshal(entry.Value, curChamber); err != nil {
@@ -108,7 +113,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		return nil, err
 	}
 
-	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
+	return &StorageEntry{Key: logicalPath, Value: buf.Bytes(), Version: version}, nil
 }
 
 // Put puts the entry at the specified logical path, creating or overwriting it

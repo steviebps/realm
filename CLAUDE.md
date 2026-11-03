@@ -24,13 +24,16 @@ environment, service, semver `version`, `buildSha`, …), each optionally
 limited to a **deterministic percentage rollout**. The SDK stays current by
 **polling** (default 15 min) or **real-time streaming** (SSE). The server
 offers ETag optimistic concurrency, per-chamber change history, and an
-attribute catalog (value → label) for the UI; storage includes S3. Optional
+attribute catalog (value → label) for the UI; storage includes S3 and
+Postgres, which is safe for many replicas (writes are version-checked in the
+database and every replica streams every change via LISTEN/NOTIFY). Optional
 auth: path-scoped read/write **API keys** for SDKs and automation, and
 OIDC / GitHub **sign-in** with viewer / editor / admin roles for the UI.
 Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
 public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
-which also evaluates locally for Node services. Not yet built: Postgres
-storage and cross-replica fanout (run one replica). See
+which also evaluates locally for Node services. Not yet built: revisioned
+streams (resume with `Last-Event-ID`, SDKs rejecting stale data); with
+backends other than Postgres, run one replica. See
 `docs/ARCHITECTURE.md`, `docs/design/targeting.md`, `docs/design/auth.md`, and
 `docs/design/evaluation.md`.
 
@@ -85,7 +88,7 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `main.go` | Entry point → `cmd.Execute()` |
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
 | `pkg/` | Core domain + SDK (package `realm`) |
-| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions` |
+| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` capabilities and `Update` in `txn.go` |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
 | `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`), `BrowserClient` (server evaluation), and `realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`) |
@@ -127,6 +130,9 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
   flag's type (like `TargetingRule.Value`) are type-checked by the owning
   `Flag` via `Rule.assertType`; other types validate their own invariants. Give them json tags so they round-trip through the server
   (the handler just unmarshals → re-marshals; see below).
+- **Read-modify-write goes through `storage.Update` / `UpdateJSON`** (never a
+  `Get` then `Put`, or a mutex): it version-checks on `Transactional` backends,
+  so it stays correct across replicas.
 - **Storage backends self-register** in `pkg/storage/storage.go`'s
   `StorageOptions` map via a `StorageCreator` factory. `ValidatePath` rejects
   `..`.
@@ -157,6 +163,9 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
   `pkg/targeting_test.go`); evaluation is allocation-free — keep it that way.
 - The S3 integration test runs only when `REALM_S3_TEST_ENDPOINT` and
   `REALM_S3_TEST_BUCKET` are set (see `pkg/storage/s3_test.go`).
+- Postgres tests (`pkg/storage/postgres_test.go`, `http/postgres_test.go`) run
+  only when `REALM_POSTGRES_TEST_URL` is set; each gets a throwaway schema from
+  `pkg/storage/pgtest`.
 - Test data is inlined as literals; there is no `testdata/` fixture convention.
 
 ## Verifying changes

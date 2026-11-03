@@ -109,6 +109,5 @@ These mirror `CLAUDE.md`, which has more detail and recipes:
 ## Where to start
 
 `docs/ARCHITECTURE.md` has a "Path to LaunchDarkly parity" table listing the
-next capabilities (Postgres storage, cross-replica fanout, more language
-SDKs). Those are good first contributions, and the seams for several
+next capabilities (revisioned streams, more language SDKs). Those are good first contributions, and the seams for several
 already exist.

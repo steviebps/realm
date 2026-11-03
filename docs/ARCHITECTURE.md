@@ -116,21 +116,23 @@ mutex. Reads (`Bool`/`String`/`Float64`/`CustomValue`) pull the snapshot (and an
 `GET /v1/chambers/<path>?watch=true` returns a `text/event-stream` that emits an
 `event: chamber` with the current chamber immediately, then again on every
 change, plus periodic heartbeat comments. On the server, an in-process **broker**
-(`http/broker.go`) is notified after each write (`Put`/`Patch`/`Delete`) and
+(`http/broker.go`) is notified of each write (`Put`/`Patch`/`Delete`) and
 wakes watchers whose path is at or below the changed path (prefix match), so an
 inherited parent change refreshes child watchers. The watch request bypasses the
 per-request timeout; the endpoint reuses the same storage `Get` as a normal read,
 so inheritance and validation are identical.
 
-**Limitation (first cut):** the broker is process-local. With multiple server
-replicas, a write on replica A does not push to watchers connected to replica B;
-those converge on their next reconnect or poll. Cross-replica fanout (a shared
-bus, or each replica watching its storage source) is a follow-up.
+Where the broker hears about writes depends on the backend. A `Watchable`
+backend (`postgres`) reports every committed change, including other replicas'
+writes, and that feed alone drives the broker, so every replica pushes every
+change. With other backends the handler notifies the broker after its own
+writes, which only reaches watchers on the same replica; run one replica with
+those backends.
 
 ## Storage
 
 `pkg/storage/storage.go` defines `Storage{Get,Put,Delete,List,Close}` over
-`StorageEntry{Key, Value}`. Backends self-register in the `StorageOptions` map:
+`StorageEntry{Key, Value, Version}`. Backends self-register in the `StorageOptions` map:
 
 | Backend | File | Notes |
 |---|---|---|
@@ -139,21 +141,49 @@ bus, or each replica watching its storage source) is a follow-up.
 | `bigcache` | `bigcache.go` | in-memory (dev / cache tier) |
 | `gcs` | `gcs.go` | Google Cloud Storage |
 | `s3` | `s3.go` | Amazon S3 or S3-compatible (`bucket`, `region`, `prefix`, `endpoint`, `force_path_style`) |
+| `postgres` | `postgres.go` | PostgreSQL (`url`, `max_conns`); `Transactional` and `Watchable`, safe for many replicas |
+
+### Capabilities and multi-replica safety
+
+Backends can implement two optional interfaces (`pkg/storage/txn.go`):
+
+- **`Transactional`** — `Txn(checks, ops)` applies several puts and deletes
+  atomically if each checked key is still at the version read. Every write gets
+  the next value of one storage-wide revision, which is each entry's `Version`.
+- **`Watchable`** — `Watch(ctx)` reports every committed change (revision and
+  key) in order, from any server sharing the storage.
+
+All read-modify-write sequences go through `storage.Update` (or
+`UpdateJSON`): a chamber write with its If-Match check and history entry, the
+catalog, and API keys. On a `Transactional` backend, `Update` version-checks
+the keys it read and retries with jittered backoff on conflict, so replicas
+need no shared lock. On other backends it holds a process-wide lock instead,
+which is why those backends are single-replica.
+
+The `postgres` backend keeps every entry in one table (`realm_entries`: key,
+value as bytes, revision), so its keys are the same as every other backend's.
+A one-row counter (`realm_revision`) issues revisions; taking it locks it
+until commit, so revisions commit in order. Each write also records its keys
+in `realm_changes` and sends `NOTIFY realm_changes`. A watcher holds a `LISTEN`
+connection, reads `realm_changes` past the last revision it saw whenever it is
+notified, every 5 seconds, and after reconnecting, and reports a change to `/`
+(everything) when the records it needed were already pruned (10,000 revisions
+are kept).
 
 Two wrappers compose backends:
 
 - **`cacheable`** (`cacheable.go`) — a write-through `cache` over a `source`
-  (e.g. `bigcache` over `boltdb`).
+  (e.g. `bigcache` over `boltdb`). It refuses a `postgres` source: another
+  replica's write would leave this replica's cache stale.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
   `Get`, merges a chamber with all of its ancestors along the path so child
   chambers inherit parent rules. This hierarchy is the current stand-in for
   "environments / zones". It implements `Unwrap()` so the server can reach the
   raw storage for ETags, history, and the catalog.
 
-Recommended production setup today: `cacheable` (`bigcache` over `s3`) as a
-single replica. SDKs evaluate in memory, so storage latency only affects
-writes and cold start. Running several replicas safely needs the planned
-Postgres backend (transactional compare-and-set and cross-replica fanout).
+Recommended production setups: `postgres` for several replicas, or
+`cacheable` (`bigcache` over `s3`) as a single replica. SDKs evaluate in
+memory, so storage latency only affects writes and cold start.
 
 Server config (`configs/realm.json`, parsed in `cmd/config.go`) selects the
 storage type and options, TLS cert/key, port, and `inheritable`.
@@ -176,9 +206,10 @@ Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
 | Attribute targeting (ordered rules on `EvaluationContext.Attributes`) | ✅ Done | `pkg/targeting.go`, `pkg/flag.go` |
 | Optimistic concurrency, change history, attribute catalog | ✅ Done | `http/meta.go`, `http/meta_handlers.go` |
 | S3 storage | ✅ Done | `pkg/storage/s3.go` |
-| Postgres storage + multi-replica safety | ⬜ Next | new backend; replaces per-process lock |
+| Postgres storage + multi-replica safety | ✅ Done | `pkg/storage/postgres.go`, `storage.Update` in `pkg/storage/txn.go` |
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
-| Cross-replica stream fanout (multi-instance) | ⬜ Next | broker is process-local today |
+| Cross-replica stream fanout (multi-instance) | ✅ Done | `Watchable` storage feeds the broker (`http/handler.go`) |
+| Revisioned streams (resume with `Last-Event-ID`, SDKs reject stale data) | ⬜ Next | builds on `StorageEntry.Version` |
 | SDK API keys + OIDC/GitHub sign-in for the UI, roles | ✅ Done | `auth/`, `http/auth.go` |
 | TypeScript SDK + server-side evaluation endpoint | ✅ Done | `sdk/typescript`, `http/evaluate.go`, shared cases in `sdk/conformance` |
 | Audit log of flag changes | ✅ Done | per-chamber history with the authenticated actor (`http/meta.go`) |

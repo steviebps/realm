@@ -46,6 +46,10 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 	if source == "" {
 		return nil, fmt.Errorf("'source' option for cacheable must be set")
 	}
+	if source == "postgres" {
+		// another server's write would leave this server's cache stale
+		return nil, fmt.Errorf("postgres cannot be a cacheable source: use the postgres storage type directly, which every server reads without a cache")
+	}
 
 	sourceCreator, exists := SourcableStorageOptions[source]
 	if !exists {

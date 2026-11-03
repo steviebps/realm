@@ -10,10 +10,7 @@ import (
 type testStorage struct{}
 
 func (f *testStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
-	return &StorageEntry{
-		"test",
-		[]byte{},
-	}, nil
+	return &StorageEntry{Key: "test", Value: []byte{}}, nil
 }
 
 func (f *testStorage) Put(ctx context.Context, e StorageEntry) error {

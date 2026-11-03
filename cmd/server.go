@@ -96,6 +96,7 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		defer stg.Close(ctx)
+		raw := stg
 
 		if serverConfig.Inheritable {
 			stg, err = storage.NewInheritableStorage(stg)
@@ -105,21 +106,22 @@ var serverCmd = &cobra.Command{
 			}
 		}
 
-		var notFoundErr *storage.NotFoundError
-		if _, err = stg.Get(ctx, "/"); errors.As(err, &notFoundErr) {
+		// Create the root chamber unless it exists; servers starting together
+		// against shared storage create it once.
+		root, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.Flag{}})
+		if err != nil {
+			logger.ErrorCtx(ctx).Msgf("failed to marshal root entry during startup: %s", err.Error())
+			os.Exit(1)
+		}
+		if err := storage.Update(ctx, raw, []string{"/"}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
+			if cur["/"] != nil {
+				return nil, nil
+			}
 			logger.DebugCtx(ctx).Msg("initializing root entry in storage")
-
-			b, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.Flag{}})
-			if err != nil {
-				logger.ErrorCtx(ctx).Msgf("failed to marshal root entry during startup: %s", err.Error())
-				os.Exit(1)
-			}
-
-			entry := storage.StorageEntry{Key: "/", Value: b}
-			if err := stg.Put(ctx, entry); err != nil {
-				logger.ErrorCtx(ctx).Msgf("failed to initialize root entry during startup: %s", err.Error())
-				os.Exit(1)
-			}
+			return []storage.Op{{Key: "/", Value: root}}, nil
+		}); err != nil {
+			logger.ErrorCtx(ctx).Msgf("failed to initialize root entry during startup: %s", err.Error())
+			os.Exit(1)
 		}
 
 		if serverConfig.Auth == nil {

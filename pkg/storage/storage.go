@@ -10,6 +10,9 @@ import (
 type StorageEntry struct {
 	Key   string
 	Value json.RawMessage
+	// Version is the storage-wide revision that last wrote the entry, on
+	// backends that track one (see Transactional); it is 0 otherwise.
+	Version uint64
 }
 
 // Storage is the interface for all storage backends
@@ -37,6 +40,7 @@ var StorageOptions = map[string]StorageCreator{
 	"gcs":       NewGCSStorage,
 	"s3":        NewS3Storage,
 	"boltdb":    NewBoltStorage,
+	"postgres":  NewPostgresStorage,
 }
 
 // SourcableStorageOptions is a map of available storage options specified at the server.options.cache config path
