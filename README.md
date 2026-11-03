@@ -430,6 +430,76 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
   -d '{"key": "user-123", "attributes": {"tenantId": "acme"}}'
 ```
 
+### Use the BrowserClient in React
+
+The SDK has no React package. A small module with one shared client and a few
+hooks is sufficient.
+
+1. Make a module that holds the client and the hooks:
+
+   ```tsx
+   // flags.ts
+   import { useSyncExternalStore } from 'react';
+   import { BrowserClient } from 'realm-sdk';
+
+   export const flags = new BrowserClient({
+     address: 'https://realm.example.com',
+     token: 'realm_…', // an evaluate key
+     path: '/prod/web/',
+   });
+
+   const subscribe = (onChange: () => void) => flags.subscribe(onChange);
+
+   export function useBoolFlag(flag: string, fallback: boolean): boolean {
+     return useSyncExternalStore(subscribe, () => flags.bool(flag, fallback), () => fallback);
+   }
+
+   export function useStringFlag(flag: string, fallback: string): string {
+     return useSyncExternalStore(subscribe, () => flags.string(flag, fallback), () => fallback);
+   }
+   ```
+
+2. Start the client before you render the app:
+
+   ```tsx
+   // main.tsx
+   import { createRoot } from 'react-dom/client';
+   import { App } from './App';
+   import { flags } from './flags';
+
+   // Until the first evaluation arrives, the hooks return their fallbacks.
+   flags.start().catch((err) => console.warn('realm:', err));
+
+   createRoot(document.getElementById('root')!).render(<App />);
+   ```
+
+3. Read flags in your components:
+
+   ```tsx
+   // Checkout.tsx
+   import { useBoolFlag } from './flags';
+
+   export function Checkout() {
+     const newCheckout = useBoolFlag('new-checkout', false);
+     return newCheckout ? <NewCheckout /> : <LegacyCheckout />;
+   }
+   ```
+
+4. When a user signs in, send the user to realm:
+
+   ```ts
+   await flags.identify({ key: user.id, attributes: { tenantId: user.tenantId } });
+   ```
+
+When a value changes on the server, or `identify` gives new values, React
+renders the components that use those flags again.
+
+> [!NOTE]
+> Do not use a new object or array as the fallback of `flags.json` in a hook.
+> `useSyncExternalStore` compares results by reference, so a new fallback on
+> each call makes React render again and again. Make the fallback a constant
+> outside the component.
+
 ## Authentication
 
 > [!WARNING]
