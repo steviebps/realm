@@ -35,7 +35,8 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
   return (
     <Modal show size="4xl" onClose={onCancel}>
       <ModalHeader>
-        {name} <span className="ml-2 text-sm font-normal text-gray-500">({draft.type})</span>
+        <span className="font-mono">{name}</span>{' '}
+        <span className="ml-2 text-sm font-normal text-gray-500 dark:text-gray-400">{draft.type}</span>
       </ModalHeader>
       <ModalBody>
         <div className="flex flex-col gap-4">

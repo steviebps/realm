@@ -59,7 +59,13 @@ export const RuleEditor = ({
           >
             <HiArrowDown />
           </Button>
-          <Button size="xs" color="red" outline onClick={onRemove} aria-label="Delete rule">
+          <Button
+            size="xs"
+            color="light"
+            className="text-gray-500 hover:text-red-700 dark:text-gray-400 dark:hover:text-red-400"
+            onClick={onRemove}
+            aria-label="Delete rule"
+          >
             <HiTrash />
           </Button>
         </div>
@@ -88,6 +94,7 @@ export const RuleEditor = ({
           >
             <TextInput
               sizing="sm"
+              className="[&_input]:font-mono"
               list={attrListId}
               placeholder="attribute"
               aria-label="Attribute"
@@ -112,6 +119,7 @@ export const RuleEditor = ({
             {isSemver(clause.op) ? (
               <TextInput
                 sizing="sm"
+                className="[&_input]:font-mono"
                 placeholder="v1.2.0"
                 aria-label="Version"
                 value={clause.values[0] ?? ''}
@@ -190,6 +198,7 @@ export const RuleEditor = ({
               <TextInput
                 id={`${attrListId}-by`}
                 sizing="sm"
+                className="[&_input]:font-mono"
                 list={attrListId}
                 placeholder="key"
                 value={rule.rollout.bucketBy ?? ''}

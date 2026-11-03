@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Badge, Button, Card, Label, Select, Spinner, TextInput } from 'flowbite-react';
+import { Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
 import { HiClock, HiPencil, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
-import { Chamber, Flag, RuleType } from '../models/response';
+import { Chamber, Flag, FlagValue, RuleType } from '../models/response';
 import { diffChambers, formatValue } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
@@ -38,9 +38,107 @@ const attributesIn = (chamber: Chamber | null) =>
     (f.targeting ?? []).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
   );
 
-const summarize = (flag: Flag) => {
-  const n = flag.targeting?.length ?? 0;
-  return `Default ${formatValue(flag.value)}${n ? ` · ${n} rule${n === 1 ? '' : 's'}` : ''}`;
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** Rows share the table's column tracks so every column lines up. */
+const ROW = 'sm:col-span-4 sm:grid sm:grid-cols-subgrid sm:items-center';
+
+/** A list of flags with a column header; rows are FlagRows. */
+const FlagTable = ({ children }: { children: React.ReactNode }) => (
+  <div role="table" className="sm:grid sm:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,3fr)_auto] sm:gap-x-4">
+    <div
+      role="row"
+      className={`hidden border-b border-gray-200 px-4 py-2 text-xs font-medium text-gray-500 dark:border-gray-700 dark:text-gray-400 ${ROW}`}
+    >
+      <span role="columnheader">Flag</span>
+      <span role="columnheader">Default</span>
+      <span role="columnheader">Targeting</span>
+      <span role="columnheader" className="sr-only">
+        Actions
+      </span>
+    </div>
+    <div role="rowgroup" className={`divide-y divide-gray-200 dark:divide-gray-700 ${ROW}`}>
+      {children}
+    </div>
+  </div>
+);
+
+/** One flag: its key and type, the value it serves by default, and its targeting at a glance. */
+const FlagRow = ({
+  name,
+  flag,
+  muted,
+  children,
+}: {
+  name: string;
+  flag: Flag;
+  muted?: boolean;
+  children?: React.ReactNode;
+}) => {
+  const rules = flag.targeting ?? [];
+  const rollouts = rules.filter((r) => r.rollout).length;
+  return (
+    <div
+      role="row"
+      className={`flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 ${ROW} ${muted ? 'text-gray-600 dark:text-gray-400' : ''}`}
+    >
+      <div role="cell" className="min-w-0 basis-full sm:basis-auto">
+        <div className="truncate font-mono text-sm font-semibold" title={name}>
+          {name}
+        </div>
+        <div className="text-xs text-gray-500 dark:text-gray-400">{flag.type}</div>
+      </div>
+      <div role="cell" className="min-w-0">
+        <FlagValueView type={flag.type} value={flag.value} />
+      </div>
+      <div role="cell" className={`text-sm text-gray-600 dark:text-gray-400 ${rules.length ? '' : 'hidden sm:block'}`}>
+        {rules.length === 0 ? (
+          <span className="text-gray-400 dark:text-gray-500">None</span>
+        ) : (
+          <>
+            {plural(rules.length, 'rule')}
+            {rollouts > 0 && (
+              <span className="block text-xs text-gray-500 dark:text-gray-400">
+                {rollouts === rules.length ? 'gradual rollout' : `${rollouts} with gradual rollout`}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      <div role="cell" className="ml-auto flex gap-1.5">
+        {children}
+      </div>
+    </div>
+  );
+};
+
+/** A served value: booleans as an on/off indicator, everything else as code. */
+const FlagValueView = ({ type, value }: { type: RuleType; value: FlagValue }) => {
+  if (type === 'boolean') {
+    const on = value === true;
+    return (
+      <span className="inline-flex items-center gap-2 font-mono text-sm">
+        <span
+          aria-hidden="true"
+          className={
+            on
+              ? 'h-2.5 w-2.5 rounded-full bg-primary-600 ring-2 ring-primary-100 dark:bg-primary-400 dark:ring-primary-900'
+              : 'h-2.5 w-2.5 rounded-full border-2 border-gray-400 dark:border-gray-500'
+          }
+        />
+        {on ? 'true' : 'false'}
+      </span>
+    );
+  }
+  const text = formatValue(value);
+  return (
+    <code
+      className="inline-block max-w-full truncate rounded-md bg-gray-100 px-1.5 py-0.5 align-middle text-sm text-gray-800 dark:bg-gray-700 dark:text-gray-200"
+      title={text}
+    >
+      {text}
+    </code>
+  );
 };
 
 export const ChamberView = ({ path }: { path: string }) => {
@@ -55,8 +153,14 @@ export const ChamberView = ({ path }: { path: string }) => {
   const [newType, setNewType] = useState<RuleType>('boolean');
 
   if (isLoading) return <Spinner aria-label="Loading chamber" size="lg" />;
-  if (error instanceof Error) return <p className="text-red-600">{error.message}</p>;
-  if (!data?.own) return <p className="text-gray-500">There is no chamber at this path yet.</p>;
+  if (error instanceof Error) return <p className="text-red-700 dark:text-red-400">{error.message}</p>;
+  if (!data?.own) {
+    return (
+      <p className="rounded-xl border border-dashed border-gray-300 px-4 py-6 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+        There is no chamber at this path yet.{canEdit && ' Use “New child chamber” to create one beneath it.'}
+      </p>
+    );
+  }
 
   const own = data.own;
   const ownNames = Object.keys(own.rules).sort();
@@ -104,115 +208,125 @@ export const ChamberView = ({ path }: { path: string }) => {
   };
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Flags</h2>
-        <Button size="sm" color="light" onClick={() => setHistoryOpen(true)}>
-          <HiClock className="mr-1" /> History
-        </Button>
-      </div>
+    <div className="flex flex-col gap-8">
+      <section aria-labelledby="flags-heading" className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 id="flags-heading" className="text-lg font-semibold">
+            Flags <span className="font-normal text-gray-500 dark:text-gray-400">{ownNames.length}</span>
+          </h2>
+          <Button size="xs" color="light" onClick={() => setHistoryOpen(true)}>
+            <HiClock className="mr-1" /> History
+          </Button>
+        </div>
 
-      {ownNames.length === 0 && <p className="text-gray-500">No flags defined in this chamber yet.</p>}
-      <ul className="grid list-none gap-3">
-        {ownNames.map((name) => {
-          const flag = own.rules[name];
-          return (
-            <li key={name}>
-              <Card className="[&>div]:p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="flex items-center gap-2 font-semibold">
-                      {name} <Badge color="gray">{flag.type}</Badge>
-                    </div>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">{summarize(flag)}</p>
-                  </div>
-                  {canEdit && (
-                    <div className="flex gap-2">
-                      <Button size="xs" onClick={() => setEditing({ name, flag, isNew: false })}>
-                        <HiPencil className="mr-1" /> Edit
-                      </Button>
-                      <Button
-                        size="xs"
-                        color="red"
-                        outline
-                        onClick={() =>
-                          propose(`Delete ${name}`, (c) => {
-                            delete c.rules[name];
-                            return c;
-                          })
-                        }
-                      >
-                        <HiTrash className="mr-1" /> Delete
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </Card>
-            </li>
-          );
-        })}
-      </ul>
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+          {ownNames.length > 0 ? (
+            <FlagTable>
+              {ownNames.map((name) => {
+                const flag = own.rules[name];
+                return (
+                  <FlagRow key={name} name={name} flag={flag}>
+                    {canEdit && (
+                      <>
+                        <Button size="xs" color="light" onClick={() => setEditing({ name, flag, isNew: false })}>
+                          <HiPencil className="mr-1" /> Edit
+                        </Button>
+                        <Button
+                          size="xs"
+                          color="light"
+                          aria-label={`Delete ${name}`}
+                          title={`Delete ${name}`}
+                          className="text-gray-500 hover:text-red-700 dark:text-gray-400 dark:hover:text-red-400"
+                          onClick={() =>
+                            propose(`Delete ${name}`, (c) => {
+                              delete c.rules[name];
+                              return c;
+                            })
+                          }
+                        >
+                          <HiTrash />
+                        </Button>
+                      </>
+                    )}
+                  </FlagRow>
+                );
+              })}
+            </FlagTable>
+          ) : (
+            <p className="px-4 py-6 text-sm text-gray-500 dark:text-gray-400">
+              No flags in this chamber yet.{canEdit && ' Add one below, or override an inherited flag.'}
+            </p>
+          )}
+
+          {canEdit && (
+            <form
+              className="grid grid-cols-1 items-end gap-3 border-t border-gray-200 bg-gray-50 p-4 sm:grid-cols-[2fr_1fr_auto] dark:border-gray-700 dark:bg-gray-800/60"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = newName.trim();
+                if (!name || name in own.rules) return;
+                setEditing({ name, flag: { type: newType, value: defaultValueFor(newType) }, isNew: true });
+                setNewName('');
+              }}
+            >
+              <div>
+                <Label htmlFor="new-flag">New flag</Label>
+                <TextInput
+                  id="new-flag"
+                  sizing="sm"
+                  className="[&_input]:font-mono"
+                  placeholder="checkout.newFlow"
+                  value={newName}
+                  color={newName.trim() in own.rules ? 'failure' : undefined}
+                  onChange={(e) => setNewName(e.target.value)}
+                />
+              </div>
+              <div>
+                <Label htmlFor="new-flag-type">Type</Label>
+                <Select
+                  id="new-flag-type"
+                  sizing="sm"
+                  value={newType}
+                  onChange={(e) => setNewType(e.target.value as RuleType)}
+                >
+                  <option value="boolean">boolean</option>
+                  <option value="string">string</option>
+                  <option value="number">number</option>
+                  <option value="custom">custom (JSON)</option>
+                </Select>
+              </div>
+              <Button type="submit" size="sm" disabled={!newName.trim() || newName.trim() in own.rules}>
+                <HiPlus className="mr-1" /> Add flag
+              </Button>
+            </form>
+          )}
+        </div>
+      </section>
 
       {inherited.length > 0 && (
-        <section>
-          <h3 className="mb-2 font-semibold">Inherited from parent chambers</h3>
-          <ul className="grid list-none gap-2">
-            {inherited.map(([name, flag]) => (
-              <li
-                key={name}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed border-gray-300 p-3 dark:border-gray-600"
-              >
-                <div>
-                  <div className="flex items-center gap-2 font-medium">
-                    {name} <Badge color="gray">{flag.type}</Badge> <Badge color="purple">inherited</Badge>
-                  </div>
-                  <p className="text-sm text-gray-500">{summarize(flag)}</p>
-                </div>
-                {canEdit && (
-                  <Button size="xs" color="light" onClick={() => setEditing({ name, flag, isNew: true })}>
-                    Override here
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+        <section aria-labelledby="inherited-heading" className="flex flex-col gap-3">
+          <div>
+            <h2 id="inherited-heading" className="text-lg font-semibold">
+              Inherited <span className="font-normal text-gray-500 dark:text-gray-400">{inherited.length}</span>
+            </h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Served here from parent chambers until this chamber overrides them.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-dashed border-gray-300 bg-white/50 dark:border-gray-600 dark:bg-gray-800/40">
+            <FlagTable>
+              {inherited.map(([name, flag]) => (
+                <FlagRow key={name} name={name} flag={flag} muted>
+                  {canEdit && (
+                    <Button size="xs" color="light" onClick={() => setEditing({ name, flag, isNew: true })}>
+                      Override here
+                    </Button>
+                  )}
+                </FlagRow>
+              ))}
+            </FlagTable>
+          </div>
         </section>
-      )}
-
-      {canEdit && (
-        <form
-          className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[2fr_1fr_auto]"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const name = newName.trim();
-            if (!name || name in own.rules) return;
-            setEditing({ name, flag: { type: newType, value: defaultValueFor(newType) }, isNew: true });
-            setNewName('');
-          }}
-        >
-          <div>
-            <Label htmlFor="new-flag">New flag</Label>
-            <TextInput
-              id="new-flag"
-              placeholder="checkout.newFlow"
-              value={newName}
-              color={newName.trim() in own.rules ? 'failure' : undefined}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-          </div>
-          <div>
-            <Label htmlFor="new-flag-type">Type</Label>
-            <Select id="new-flag-type" value={newType} onChange={(e) => setNewType(e.target.value as RuleType)}>
-              <option value="boolean">boolean</option>
-              <option value="string">string</option>
-              <option value="number">number</option>
-              <option value="custom">custom (JSON)</option>
-            </Select>
-          </div>
-          <Button type="submit" disabled={!newName.trim() || newName.trim() in own.rules}>
-            <HiPlus className="mr-1" /> Add flag
-          </Button>
-        </form>
       )}
 
       {editing && !proposal && (
