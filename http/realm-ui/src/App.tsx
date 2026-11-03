@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Badge, Breadcrumb, BreadcrumbItem, Button, Label, Spinner, TextInput } from 'flowbite-react';
 import { HiHome, HiKey, HiLogout } from 'react-icons/hi';
-import { QueryClient, QueryClientProvider, useMutation, useQuery } from 'react-query';
+import { QueryClient, QueryClientProvider, useMutation, useQuery } from '@tanstack/react-query';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeInit } from '../.flowbite-react/init';
 import { trimPrefix, trimSuffix } from './utils/strings';
@@ -49,12 +49,12 @@ export const App = () => {
 
 /** Shows the sign-in screen when the server requires it, otherwise provides the session. */
 const AuthGate = ({ children }: { children: React.ReactNode }) => {
-  const { data: me, error } = useQuery('me', getMe);
+  const { data: me, error } = useQuery({ queryKey: ['me'], queryFn: getMe });
 
   // Any request refused for lack of a session re-checks who is signed in,
   // which shows the sign-in screen once the session has ended.
   useEffect(() => {
-    const recheck = () => void queryClient.invalidateQueries('me');
+    const recheck = () => void queryClient.invalidateQueries({ queryKey: ['me'] });
     window.addEventListener(UNAUTHORIZED_EVENT, recheck);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, recheck);
   }, []);
@@ -95,7 +95,7 @@ const UserMenu = ({ path }: { path: string }) => {
         size="xs"
         color="light"
         onClick={() => {
-          void signOut().then(() => queryClient.invalidateQueries('me'));
+          void signOut().then(() => queryClient.invalidateQueries({ queryKey: ['me'] }));
         }}
       >
         <HiLogout className="mr-1" /> Sign out
@@ -134,18 +134,16 @@ const Content = () => {
   const navigate = useNavigate();
   const path = ensureTrailingSlash(location.pathname);
 
-  const { data: children = [] } = useQuery(['list', path], () => listChambers(path));
+  const { data: children = [] } = useQuery({ queryKey: ['list', path], queryFn: () => listChambers(path) });
 
-  const create = useMutation(
-    (name: string) => createChamber(path + ensureTrailingSlash(trimPrefix(name.trim(), '/'))),
-    {
-      onSuccess: (_, name) => {
-        setChamberName('');
-        void queryClient.invalidateQueries(['list', path]);
-        void navigate(path + trimSuffix(trimPrefix(name.trim(), '/'), '/'));
-      },
-    }
-  );
+  const create = useMutation({
+    mutationFn: (name: string) => createChamber(path + ensureTrailingSlash(trimPrefix(name.trim(), '/'))),
+    onSuccess: (_, name) => {
+      setChamberName('');
+      void queryClient.invalidateQueries({ queryKey: ['list', path] });
+      void navigate(path + trimSuffix(trimPrefix(name.trim(), '/'), '/'));
+    },
+  });
 
   const directories = children.filter((c) => c !== '.');
   const trimmed = trimSuffix(trimPrefix(location.pathname, '/'), '/');
@@ -188,7 +186,7 @@ const Content = () => {
                 value={chamberName}
                 onChange={(e) => setChamberName(e.target.value)}
               />
-              <Button type="submit" size="sm" disabled={create.isLoading}>
+              <Button type="submit" size="sm" disabled={create.isPending}>
                 Create chamber
               </Button>
               {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}

@@ -13,7 +13,7 @@ import {
   TextInput,
 } from 'flowbite-react';
 import { HiKey, HiTrash } from 'react-icons/hi';
-import { useMutation, useQuery, useQueryClient } from 'react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createKey, listKeys, revokeKey } from '../api';
 import { CreatedKey, KeyAccess } from '../models/response';
 
@@ -27,21 +27,23 @@ type Props = {
 /** Lets administrators create and revoke API keys. */
 export const KeysDrawer = ({ path, open, onClose }: Props) => {
   const queryClient = useQueryClient();
-  const { data: keys, isLoading, error } = useQuery('keys', listKeys, { enabled: open });
+  const { data: keys, isLoading, error } = useQuery({ queryKey: ['keys'], queryFn: listKeys, enabled: open });
   const [name, setName] = useState('');
   const [access, setAccess] = useState<KeyAccess>('read');
   const [scope, setScope] = useState(path);
   const [created, setCreated] = useState<CreatedKey | null>(null);
 
-  const create = useMutation(createKey, {
+  const create = useMutation({
+    mutationFn: createKey,
     onSuccess: (result) => {
       setCreated(result);
       setName('');
-      void queryClient.invalidateQueries('keys');
+      void queryClient.invalidateQueries({ queryKey: ['keys'] });
     },
   });
-  const revoke = useMutation(revokeKey, {
-    onSuccess: () => void queryClient.invalidateQueries('keys'),
+  const revoke = useMutation({
+    mutationFn: revokeKey,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['keys'] }),
   });
 
   const close = () => {
@@ -104,7 +106,7 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
             </div>
           </div>
           {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
-          <Button type="submit" size="sm" disabled={!name.trim() || create.isLoading}>
+          <Button type="submit" size="sm" disabled={!name.trim() || create.isPending}>
             Create key
           </Button>
         </form>
@@ -135,7 +137,7 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
                 size="xs"
                 color="red"
                 outline
-                disabled={revoke.isLoading}
+                disabled={revoke.isPending}
                 onClick={() => {
                   if (window.confirm(`Revoke “${key.name}”? Anything using it will lose access.`)) {
                     revoke.mutate(key.id);

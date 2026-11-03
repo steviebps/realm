@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { HelperText, Textarea, TextInput, ToggleSwitch } from 'flowbite-react';
 import { FlagValue, RuleType } from '../../models/response';
 
@@ -15,13 +15,14 @@ export const ValueInput = ({ id, type, value, onChange, onValidityChange }: Prop
   const [json, setJSON] = useState(() => JSON.stringify(value, null, 2));
   const [jsonError, setJSONError] = useState('');
 
-  useEffect(() => {
+  // Only resync when switching to a different flag/rule, not on every keystroke.
+  const [synced, setSynced] = useState({ id, type });
+  if (synced.id !== id || synced.type !== type) {
+    setSynced({ id, type });
     if (type === 'custom') {
       setJSON(JSON.stringify(value, null, 2));
     }
-    // only resync when switching to a different flag/rule, not on every keystroke
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, type]);
+  }
 
   switch (type) {
     case 'boolean':
@@ -32,7 +33,7 @@ export const ValueInput = ({ id, type, value, onChange, onValidityChange }: Prop
           id={id}
           type="number"
           step="any"
-          value={String(value as number)}
+          value={value as number}
           onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
         />
       );
