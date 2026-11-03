@@ -51,6 +51,8 @@ export class ServerClient {
         controller.signal,
       );
     } catch (e) {
+      // A stop aborted this load; the client may have been started again since.
+      if (controller.signal.aborted) return;
       this.#controller = undefined;
       throw e;
     }

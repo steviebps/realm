@@ -99,6 +99,12 @@ flags.subscribe(() => render());
 await flags.identify({ key: otherUser }); // re-evaluates for a new context
 ```
 
+`realm-sdk/react` wraps a `BrowserClient` for React 18+: a `RealmProvider`
+that starts the client and re-identifies when its `context` prop changes by
+value, and hooks (`useBoolFlag`, `useJsonFlag`, `useRealmStatus`, …) built
+on `useSyncExternalStore`. React is an optional peer dependency, so the main
+entry point keeps no runtime dependencies.
+
 Both clients stream by default and reconnect with capped exponential backoff
 (1 s to 30 s), keeping the last known values meanwhile. `streaming: false`
 switches to polling every `pollingInterval` milliseconds. Getters never

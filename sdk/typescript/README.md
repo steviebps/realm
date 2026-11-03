@@ -9,6 +9,9 @@ Node 18+, Bun, Deno, browsers, and edge runtimes.
 | `ServerClient` | backend services | `read` | downloads the chamber and evaluates locally, like the Go SDK |
 | `BrowserClient` | browsers, untrusted code | `evaluate` | the server evaluates for one context; rules never reach the client |
 
+`realm-sdk/react` adds a provider and hooks for a `BrowserClient`; React is an
+optional peer dependency, needed only if you import it.
+
 The package is not published to npm yet. Depend on it from this repository,
 for example with `"realm-sdk": "file:../realm/sdk/typescript"`; installing
 runs its build.
@@ -57,14 +60,54 @@ const unsubscribe = flags.subscribe(() => render()); // called when any value ch
 await flags.identify({ key: otherUser.id }); // re-evaluates for a new context
 ```
 
-In React, `subscribe` and `bool` fit `useSyncExternalStore` directly:
+## React
 
-```ts
-const enabled = useSyncExternalStore(
-  (cb) => flags.subscribe(cb),
-  () => flags.bool('new-checkout', false),
-);
+`realm-sdk/react` reads a `BrowserClient` from React 18 or later. Wrap the app
+in a `RealmProvider`, then read flags with hooks; a component renders again
+when a flag it reads changes.
+
+```tsx
+import { BrowserClient } from 'realm-sdk';
+import { RealmProvider, useBoolFlag, useRealmStatus } from 'realm-sdk/react';
+
+const flags = new BrowserClient({
+  address: 'https://realm.example.com',
+  token: 'realm_…', // an evaluate key
+  path: '/prod/web/',
+});
+
+export function App({ user }: { user: User }) {
+  return (
+    <RealmProvider client={flags} context={{ key: user.id, attributes: { tenantId: user.tenantId } }}>
+      <Checkout />
+    </RealmProvider>
+  );
+}
+
+function Checkout() {
+  const newCheckout = useBoolFlag('new-checkout', false);
+  const { ready } = useRealmStatus();
+  if (!ready) return <Spinner />; // optional: hooks return their fallbacks until then
+  return newCheckout ? <NewCheckout /> : <LegacyCheckout />;
+}
 ```
+
+The provider starts the client when it mounts and stops it when it unmounts.
+When `context` changes by value, every flag is evaluated again for the new
+context; an inline object that keeps the same value does not.
+
+| Hook | Returns |
+|---|---|
+| `useBoolFlag(flag, fallback)` | a boolean flag's value |
+| `useStringFlag(flag, fallback)` | a string flag's value |
+| `useNumberFlag(flag, fallback)` | a number flag's value |
+| `useJsonFlag<T>(flag, fallback)` | a custom (JSON) flag's value |
+| `useAllFlags()` | every flag's value |
+| `useRealmStatus()` | `{ ready, error }`: whether the first evaluation arrived, or why it failed |
+| `useRealmClient()` | the provider's `BrowserClient` |
+
+Hooks throw outside a `RealmProvider`. On the server (`renderToString` and
+friends), flag hooks return their fallbacks.
 
 ## Options
 
