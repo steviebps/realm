@@ -31,9 +31,10 @@ export const ConfirmChange = ({ title, changes, saving, error, rebased, onCancel
         {changes.map((change) => (
           <section key={change.flag}>
             <h4 className="mb-1 flex items-center gap-2 font-semibold">
-              {change.flag} <Badge color={kindColor[change.kind]}>{change.kind}</Badge>
+              <span className="font-mono text-sm">{change.flag}</span>{' '}
+              <Badge color={kindColor[change.kind]}>{change.kind}</Badge>
             </h4>
-            <ul className="rounded-lg border border-gray-200 font-mono text-sm dark:border-gray-700">
+            <ul className="overflow-hidden rounded-lg border border-gray-200 font-mono text-[0.8125rem] dark:border-gray-700">
               {change.lines.map((line, i) => (
                 <li
                   key={i}

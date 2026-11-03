@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Alert, Badge, Breadcrumb, BreadcrumbItem, Button, Label, Spinner, TextInput } from 'flowbite-react';
-import { HiHome, HiKey, HiLogout } from 'react-icons/hi';
+import { Alert, Badge, Button, Label, Spinner, TextInput, ThemeProvider } from 'flowbite-react';
+import { HiKey, HiLogout } from 'react-icons/hi';
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from '@tanstack/react-query';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeInit } from '../.flowbite-react/init';
@@ -12,6 +12,8 @@ import { ensureTrailingSlash } from './utils/path';
 import { SessionContext, useSession } from './session';
 import { SignIn } from './components/SignIn';
 import { KeysDrawer } from './components/KeysDrawer';
+import { RealmMark } from './components/RealmMark';
+import { realmTheme } from './theme';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -27,7 +29,7 @@ const queryClient = new QueryClient({
 
 export const App = () => {
   return (
-    <>
+    <ThemeProvider theme={realmTheme}>
       <ThemeInit />
       <QueryClientProvider client={queryClient}>
         <Router basename="/ui">
@@ -43,7 +45,7 @@ export const App = () => {
           </Routes>
         </Router>
       </QueryClientProvider>
-    </>
+    </ThemeProvider>
   );
 };
 
@@ -79,10 +81,13 @@ const UserMenu = ({ path }: { path: string }) => {
   const { isAdmin } = me;
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-sm" title={me.user.provider && `Signed in with ${me.user.provider}`}>
+      <span
+        className="text-sm text-gray-700 dark:text-gray-300"
+        title={me.user.provider && `Signed in with ${me.user.provider}`}
+      >
         {me.user.name || me.user.id}
       </span>
-      <Badge color={isAdmin ? 'purple' : 'gray'}>{me.user.role}</Badge>
+      <Badge color={isAdmin ? 'info' : 'gray'}>{me.user.role}</Badge>
       {isAdmin && (
         <>
           <Button size="xs" color="light" onClick={() => setKeysOpen(true)}>
@@ -150,53 +155,97 @@ const Content = () => {
   const up = trimmed !== '' ? trimmed.split('/') : [];
 
   return (
-    <div className="mx-auto my-5 flex w-full max-w-[1280px] flex-col gap-4 px-4">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">Realm</h1>
-        {me.authEnabled ? <UserMenu path={path} /> : <ActorField />}
-      </header>
-      <Breadcrumb aria-label="directory crumbs" className="py-1">
-        <BreadcrumbItem icon={HiHome}>
-          <Link to="/" relative="path">
-            Home
+    <div className="min-h-screen">
+      <header className="border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+        <div className="mx-auto flex w-full max-w-[1280px] flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <Link
+            to="/"
+            className="flex items-center gap-2 rounded-md text-lg font-semibold tracking-tight [font-stretch:92%] focus-visible:outline-2 focus-visible:outline-primary-500"
+          >
+            <RealmMark className="h-6 w-6 text-primary-700 dark:text-primary-400" />
+            realm
           </Link>
-        </BreadcrumbItem>
-        {up.map((segment, index) => (
-          <BreadcrumbItem key={index}>
-            <Link to={'/' + [...up.slice(0, index), segment].join('/')}>{segment}</Link>
-          </BreadcrumbItem>
-        ))}
-      </Breadcrumb>
-      <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
-        <aside className="flex flex-col gap-4 md:col-span-3">
-          {directories.length > 0 && <SideNav directories={directories} />}
-          {canEdit && (
-            <form
-              className="flex flex-col gap-2"
-              onSubmit={(e) => {
-                e.preventDefault();
-                create.mutate(chamberName);
-              }}
-            >
-              <Label htmlFor="chamber">New child chamber</Label>
-              <TextInput
-                id="chamber"
-                required
-                placeholder="prod"
-                value={chamberName}
-                onChange={(e) => setChamberName(e.target.value)}
-              />
-              <Button type="submit" size="sm" disabled={create.isPending}>
-                Create chamber
-              </Button>
-              {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
-            </form>
-          )}
-        </aside>
-        <main className="md:col-span-9">
-          <ChamberView key={path} path={path} />
-        </main>
+          {me.authEnabled ? <UserMenu path={path} /> : <ActorField />}
+        </div>
+      </header>
+      <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-6 px-4 py-6">
+        <ChamberPath segments={up} />
+        <div className="grid grid-cols-1 gap-8 md:grid-cols-12">
+          <aside className="flex flex-col gap-6 md:col-span-3">
+            {directories.length > 0 && <SideNav directories={directories} />}
+            {canEdit && (
+              <form
+                className="flex flex-col gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  create.mutate(chamberName);
+                }}
+              >
+                <Label htmlFor="chamber" className="text-gray-600 dark:text-gray-400">
+                  New child chamber
+                </Label>
+                <div className="flex gap-2">
+                  <TextInput
+                    id="chamber"
+                    sizing="sm"
+                    required
+                    className="min-w-0 flex-1 [&_input]:font-mono"
+                    placeholder="prod"
+                    value={chamberName}
+                    onChange={(e) => setChamberName(e.target.value)}
+                  />
+                  <Button type="submit" size="sm" color="light" disabled={create.isPending}>
+                    Create
+                  </Button>
+                </div>
+                {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
+              </form>
+            )}
+          </aside>
+          <main className="md:col-span-9">
+            <ChamberView key={path} path={path} />
+          </main>
+        </div>
       </div>
     </div>
+  );
+};
+
+/**
+ * The page heading: the chamber's path, with each ancestor linked so the
+ * inheritance chain reads left to right.
+ */
+const ChamberPath = ({ segments }: { segments: string[] }) => {
+  const slash = <span className="px-0.5 text-gray-400 dark:text-gray-500">/</span>;
+  return (
+    <nav aria-label="Chamber path">
+      <h1 className="flex flex-wrap items-baseline font-mono text-2xl font-medium tracking-tight sm:text-3xl">
+        {segments.length === 0 ? (
+          <span>/</span>
+        ) : (
+          <Link to="/" aria-label="All chambers" className="text-gray-400 hover:text-primary-700 dark:text-gray-500">
+            /
+          </Link>
+        )}
+        {segments.map((segment, index) => {
+          const last = index === segments.length - 1;
+          return (
+            <span key={index} className="flex items-baseline">
+              {index > 0 && slash}
+              {last ? (
+                <span aria-current="page">{segment}</span>
+              ) : (
+                <Link
+                  to={'/' + segments.slice(0, index + 1).join('/')}
+                  className="text-gray-500 hover:text-primary-700 dark:text-gray-400 dark:hover:text-primary-300"
+                >
+                  {segment}
+                </Link>
+              )}
+            </span>
+          );
+        })}
+      </h1>
+    </nav>
   );
 };
