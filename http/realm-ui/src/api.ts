@@ -60,6 +60,14 @@ const errorFrom = async (res: Response) => {
   }
 };
 
+/** Returns the data in a response's envelope, or throws the error it carries. */
+const dataFrom = async <T>(res: Response): Promise<T> => {
+  if (!res.ok) {
+    throw await errorFrom(res);
+  }
+  return ((await res.json()) as { data: T }).data;
+};
+
 const apiURL = (route: string, path: string, query = '') =>
   `/v1/${route}${encodePath(ensureTrailingSlash(path))}${query}`;
 const chamberURL = (path: string, query = '') => apiURL('chambers', path, query);
@@ -124,21 +132,11 @@ export const saveChamber = async (path: string, chamber: Chamber, etag: string |
 
 export const createChamber = (path: string) => saveChamber(path, { rules: {} }, null);
 
-export const getHistory = async (path: string): Promise<Revision[]> => {
-  const res = await fetch(historyURL(path));
-  if (!res.ok) {
-    throw await errorFrom(res);
-  }
-  return ((await res.json()) as { data?: Revision[] }).data ?? [];
-};
+export const getHistory = async (path: string) =>
+  (await dataFrom<Revision[] | undefined>(await fetch(historyURL(path)))) ?? [];
 
-export const getRevision = async (path: string, revision: number): Promise<Revision> => {
-  const res = await fetch(historyURL(path, `?revision=${revision}`));
-  if (!res.ok) {
-    throw await errorFrom(res);
-  }
-  return ((await res.json()) as { data: Revision }).data;
-};
+export const getRevision = async (path: string, revision: number) =>
+  dataFrom<Revision>(await fetch(historyURL(path, `?revision=${revision}`)));
 
 export const getCatalog = async (): Promise<Catalog> => {
   const res = await fetch('/v1/catalog');
@@ -151,13 +149,7 @@ export const getCatalog = async (): Promise<Catalog> => {
   return ((await res.json()) as { data?: Catalog }).data ?? {};
 };
 
-export const getMe = async (): Promise<Me> => {
-  const res = await fetch('/v1/auth/me');
-  if (!res.ok) {
-    throw await errorFrom(res);
-  }
-  return ((await res.json()) as { data: Me }).data;
-};
+export const getMe = async () => dataFrom<Me>(await fetch('/v1/auth/me'));
 
 /** Where to send the browser to sign in with a provider, returning here afterwards. */
 export const signInURL = (provider: string) =>
@@ -167,25 +159,16 @@ export const signOut = async () => {
   await fetch('/v1/auth/logout', { method: 'POST' });
 };
 
-export const listKeys = async (): Promise<ApiKey[]> => {
-  const res = await fetch('/v1/keys');
-  if (!res.ok) {
-    throw await errorFrom(res);
-  }
-  return ((await res.json()) as { data?: ApiKey[] }).data ?? [];
-};
+export const listKeys = async () => (await dataFrom<ApiKey[] | undefined>(await fetch('/v1/keys'))) ?? [];
 
-export const createKey = async (key: { name: string; access: KeyAccess; path: string }): Promise<CreatedKey> => {
-  const res = await fetch('/v1/keys', {
-    method: 'POST',
-    body: JSON.stringify(key),
-    headers: { 'Content-Type': 'application/json' },
-  });
-  if (!res.ok) {
-    throw await errorFrom(res);
-  }
-  return ((await res.json()) as { data: CreatedKey }).data;
-};
+export const createKey = async (key: { name: string; access: KeyAccess; path: string }) =>
+  dataFrom<CreatedKey>(
+    await fetch('/v1/keys', {
+      method: 'POST',
+      body: JSON.stringify(key),
+      headers: { 'Content-Type': 'application/json' },
+    })
+  );
 
 export const revokeKey = async (id: string) => {
   const res = await fetch(`/v1/keys/${encodeURIComponent(id)}`, { method: 'DELETE' });

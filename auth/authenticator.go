@@ -37,7 +37,6 @@ type Authenticator struct {
 	keys      *KeyStore
 	sealer    *sealer
 	providers map[string]provider
-	order     []string
 }
 
 // New returns an Authenticator for cfg whose API keys live in strg, which
@@ -55,7 +54,6 @@ func New(cfg Config, strg storage.Storage) (*Authenticator, error) {
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
 		a.providers[p.Name] = newProvider(p, client)
-		a.order = append(a.order, p.Name)
 	}
 	return a, nil
 }
@@ -72,9 +70,8 @@ type ProviderInfo struct {
 
 // Providers lists the configured sign-in providers in configuration order.
 func (a *Authenticator) Providers() []ProviderInfo {
-	list := make([]ProviderInfo, 0, len(a.order))
-	for _, name := range a.order {
-		c := a.providers[name].config()
+	list := make([]ProviderInfo, 0, len(a.cfg.Providers))
+	for _, c := range a.cfg.Providers {
 		list = append(list, ProviderInfo{Name: c.Name, DisplayName: c.DisplayName, Type: c.Type})
 	}
 	return list

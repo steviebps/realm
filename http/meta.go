@@ -17,25 +17,14 @@ import (
 	"github.com/steviebps/realm/pkg/storage"
 )
 
-// reservedPrefix is the storage prefix under which realm keeps its own
-// metadata (history, catalog). Chamber APIs reject paths beneath it.
-const reservedPrefix = "/_realm/"
-
 // maxHistory is the number of revisions retained per chamber.
 const maxHistory = 200
 
 // ActorHeader identifies who made a change, recorded in chamber history.
 const ActorHeader = "X-Realm-Actor"
 
-const defaultActor = "anonymous"
-
 // reservedName is the root-level storage name of realm's metadata.
-var reservedName = strings.Trim(reservedPrefix, "/")
-
-// isReservedPath reports whether p falls under realm's metadata prefix.
-func isReservedPath(p string) bool {
-	return strings.HasPrefix(p, reservedPrefix) || p == "/"+reservedName
-}
+var reservedName = strings.Trim(storage.ReservedPrefix, "/")
 
 // isReservedName reports whether a root listing entry is realm's metadata.
 // Backends format directory names differently ("_realm", "_realm/", or a
@@ -108,7 +97,7 @@ type metaStore struct {
 // historyIndexKey encodes the chamber path as a single storage segment so
 // nested chambers never collide with one another's history.
 func historyIndexKey(chamberPath string) string {
-	return reservedPrefix + "history/" + url.PathEscape(chamberPath) + "/"
+	return storage.ReservedPrefix + "history/" + url.PathEscape(chamberPath) + "/"
 }
 
 func revisionKey(chamberPath string, rev int) string {
@@ -125,27 +114,10 @@ func (m *metaStore) get(ctx context.Context, key string) (*storage.StorageEntry,
 	return entry, err
 }
 
-// readJSON loads the value at key into v. found is false when it does not exist.
-func (m *metaStore) readJSON(ctx context.Context, key string, v any) (found bool, err error) {
-	entry, err := m.get(ctx, key)
-	if entry == nil || err != nil {
-		return false, err
-	}
-	return true, json.Unmarshal(entry.Value, v)
-}
-
-func (m *metaStore) writeJSON(ctx context.Context, key string, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	return m.strg.Put(ctx, storage.StorageEntry{Key: key, Value: b})
-}
-
 // appendHistory records a change. Callers must hold the path lock.
 func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev Revision) error {
 	var idx historyIndex
-	if _, err := m.readJSON(ctx, historyIndexKey(chamberPath), &idx); err != nil {
+	if _, err := storage.ReadJSON(ctx, m.strg, historyIndexKey(chamberPath), &idx); err != nil {
 		return fmt.Errorf("could not read history index: %w", err)
 	}
 
@@ -153,7 +125,7 @@ func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev R
 	if len(idx.Revisions) > 0 {
 		rev.Revision = idx.Revisions[0].Revision + 1
 	}
-	if err := m.writeJSON(ctx, revisionKey(chamberPath, rev.Revision), rev); err != nil {
+	if err := storage.WriteJSON(ctx, m.strg, revisionKey(chamberPath, rev.Revision), rev); err != nil {
 		return fmt.Errorf("could not write revision: %w", err)
 	}
 
@@ -165,7 +137,7 @@ func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev R
 		expired = idx.Revisions[maxHistory:]
 		idx.Revisions = idx.Revisions[:maxHistory]
 	}
-	if err := m.writeJSON(ctx, historyIndexKey(chamberPath), idx); err != nil {
+	if err := storage.WriteJSON(ctx, m.strg, historyIndexKey(chamberPath), idx); err != nil {
 		return fmt.Errorf("could not write history index: %w", err)
 	}
 	for _, old := range expired {
@@ -177,7 +149,7 @@ func (m *metaStore) appendHistory(ctx context.Context, chamberPath string, rev R
 // history returns revision summaries, newest first.
 func (m *metaStore) history(ctx context.Context, chamberPath string) ([]Revision, error) {
 	var idx historyIndex
-	if _, err := m.readJSON(ctx, historyIndexKey(chamberPath), &idx); err != nil {
+	if _, err := storage.ReadJSON(ctx, m.strg, historyIndexKey(chamberPath), &idx); err != nil {
 		return nil, err
 	}
 	if idx.Revisions == nil {
@@ -189,7 +161,7 @@ func (m *metaStore) history(ctx context.Context, chamberPath string) ([]Revision
 // revision returns one revision including its chamber.
 func (m *metaStore) revision(ctx context.Context, chamberPath string, rev int) (*Revision, error) {
 	var r Revision
-	found, err := m.readJSON(ctx, revisionKey(chamberPath, rev), &r)
+	found, err := storage.ReadJSON(ctx, m.strg, revisionKey(chamberPath, rev), &r)
 	if err != nil {
 		return nil, err
 	}
@@ -203,11 +175,11 @@ func (m *metaStore) revision(ctx context.Context, chamberPath string, rev int) (
 // labels, for example {"locationId": {"7f3c…": "Downtown"}}.
 type Catalog map[string]map[string]string
 
-const catalogKey = reservedPrefix + "catalog/"
+const catalogKey = storage.ReservedPrefix + "catalog/"
 
 func (m *metaStore) catalog(ctx context.Context) (Catalog, error) {
 	c := Catalog{}
-	if _, err := m.readJSON(ctx, catalogKey, &c); err != nil {
+	if _, err := storage.ReadJSON(ctx, m.strg, catalogKey, &c); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -225,5 +197,5 @@ func (m *metaStore) updateCatalog(ctx context.Context, fn func(Catalog) error) (
 	if err := fn(c); err != nil {
 		return nil, err
 	}
-	return c, m.writeJSON(ctx, catalogKey, c)
+	return c, storage.WriteJSON(ctx, m.strg, catalogKey, c)
 }

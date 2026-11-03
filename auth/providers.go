@@ -27,7 +27,6 @@ type Identity struct {
 // provider runs the authorization-code flow (with PKCE) for one sign-in
 // provider.
 type provider interface {
-	config() *ProviderConfig
 	// authURL returns where to send the browser to sign in.
 	authURL(ctx context.Context, redirectURL, state, verifier, nonce string) (string, error)
 	// identify exchanges the callback's code for the user's identity.
@@ -50,8 +49,6 @@ type oidcProvider struct {
 	mu       sync.Mutex
 	provider *oidc.Provider
 }
-
-func (p *oidcProvider) config() *ProviderConfig { return p.cfg }
 
 func (p *oidcProvider) discover(ctx context.Context) (*oidc.Provider, error) {
 	p.mu.Lock()
@@ -137,8 +134,6 @@ type githubProvider struct {
 	endpoint oauth2.Endpoint
 	apiURL   string
 }
-
-func (p *githubProvider) config() *ProviderConfig { return p.cfg }
 
 func (p *githubProvider) oauth(redirectURL string) *oauth2.Config {
 	scopes := p.cfg.Scopes

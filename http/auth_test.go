@@ -158,8 +158,17 @@ func TestRoles(t *testing.T) {
 	viewer := srv.signIn(t, "viewer@example.com")
 	chamber := srv.URL + "/v1/chambers/app/"
 
-	if _, out := call(t, editor, http.MethodGet, srv.URL+"/v1/auth/me", "", ""); !strings.Contains(string(out.Data), `"role":"editor"`) {
-		t.Fatalf("me = %s", out.Data)
+	for _, tt := range []struct {
+		client *http.Client
+		want   string
+	}{
+		{viewer, `"role":"viewer"},"canEdit":false,"isAdmin":false`},
+		{editor, `"role":"editor"},"canEdit":true,"isAdmin":false`},
+		{admin, `"role":"admin"},"canEdit":true,"isAdmin":true`},
+	} {
+		if _, out := call(t, tt.client, http.MethodGet, srv.URL+"/v1/auth/me", "", ""); !strings.Contains(string(out.Data), tt.want) {
+			t.Errorf("me = %s, want it to contain %s", out.Data, tt.want)
+		}
 	}
 
 	if status, _ := call(t, viewer, http.MethodPost, chamber, chamberBody, ""); status != http.StatusForbidden {

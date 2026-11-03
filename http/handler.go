@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -83,19 +82,20 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	meta := &metaStore{strg: rawStorage(hc.Storage)}
 	locks := &pathLocks{}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(requireAuth(handleChambers(hc.Storage, meta, locks, brk)), "/v1/chambers/"))
-	mux.Handle("/v1/history/", otelhttp.NewHandler(requireAuth(handleHistory(meta)), "/v1/history/"))
-	mux.Handle("/v1/catalog", otelhttp.NewHandler(requireAuth(handleCatalog(meta)), "/v1/catalog"))
-	mux.Handle("/v1/catalog/", otelhttp.NewHandler(requireAuth(handleCatalog(meta)), "/v1/catalog/"))
+	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, meta, locks, brk), "/v1/chambers/"))
+	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
+	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
+	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
 	mux.Handle("/v1/auth/me", otelhttp.NewHandler(handleMe(authn), "/v1/auth/me"))
 	if authn != nil {
 		mux.Handle("/v1/auth/", otelhttp.NewHandler(authn.Handler(), "/v1/auth/"))
-		keys := requireAuth(handleKeys(authn.Keys()))
+		keys := requireAdmin(handleKeys(authn.Keys()))
 		mux.Handle("/v1/keys", otelhttp.NewHandler(keys, "/v1/keys"))
 		mux.Handle("/v1/keys/", otelhttp.NewHandler(keys, "/v1/keys/"))
 	}
 	// Liveness for orchestrators (e.g. Kubernetes probes); deliberately not
-	// traced or authenticated so frequent probes stay cheap.
+	// traced so frequent probes do not flood trace exports. It is public (see
+	// publicPaths).
 	mux.HandleFunc("GET /healthz", handleHealth)
 
 	timeoutHandler := wrapWithTimeout(withPrincipal(authn, mux), hc.RequestTimeout)
@@ -168,12 +168,18 @@ func handleOk(w http.ResponseWriter, body interface{}) {
 
 // handleOkJSON marshals v as the response data, or responds 500 if it cannot.
 func handleOkJSON(ctx context.Context, w http.ResponseWriter, v any) {
+	handleJSON(ctx, w, http.StatusOK, v)
+}
+
+// handleJSON marshals v as the response data with status, or responds 500 if
+// it cannot.
+func handleJSON(ctx context.Context, w http.ResponseWriter, status int, v any) {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 		return
 	}
-	handleOk(w, createResponseWithErrors(raw, nil))
+	handleWithStatus(w, status, createResponseWithErrors(raw, nil))
 }
 
 func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
@@ -207,19 +213,6 @@ func rawStorage(s storage.Storage) storage.Storage {
 	}
 }
 
-// actorFrom returns the identity recorded in history for a request: the
-// authenticated principal, or when authentication is off, the self-reported
-// ActorHeader.
-func actorFrom(r *http.Request) string {
-	if p := auth.FromContext(r.Context()); p != nil && p.Kind != auth.KindAnonymous {
-		return p.Actor()
-	}
-	if a := strings.TrimSpace(r.Header.Get(ActorHeader)); a != "" {
-		return a
-	}
-	return defaultActor
-}
-
 // hasPrecondition reports whether the request carries If-Match or If-None-Match.
 func hasPrecondition(r *http.Request) bool {
 	return r.Header.Get("If-Match") != "" || r.Header.Get("If-None-Match") != ""
@@ -249,8 +242,8 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 		req := buildAgentRequest(r)
 		span.SetAttributes(attribute.String("realm.server.logicalPath", req.Path), attribute.String("realm.server.operation", string(req.Operation)))
 
-		if isReservedPath(req.Path) {
-			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{fmt.Sprintf("paths under %q are reserved", reservedPrefix)}))
+		if storage.IsReservedPath(req.Path) {
+			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{fmt.Sprintf("paths under %q are reserved", storage.ReservedPrefix)}))
 			return
 		}
 
@@ -337,7 +330,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 				return false
 			}
 
-			rev := Revision{Time: time.Now().UTC(), Actor: actorFrom(r), Operation: req.Operation}
+			rev := Revision{Time: time.Now().UTC(), Actor: auth.FromContext(ctx).Actor(), Operation: req.Operation}
 			if value != nil {
 				rev.ETag = etagOf(value)
 				rev.Chamber = value

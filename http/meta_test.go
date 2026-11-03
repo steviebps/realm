@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/steviebps/realm/api"
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/pkg/storage"
 )
 
@@ -199,7 +200,7 @@ func TestHistoryRecordsChanges(t *testing.T) {
 		rev   int
 		actor string
 		op    Operation
-	}{{3, defaultActor, DeleteOperation}, {2, "bob@example.com", PutOperation}, {1, "alice@example.com", PutOperation}}
+	}{{3, auth.Anonymous.ID, DeleteOperation}, {2, "bob@example.com", PutOperation}, {1, "alice@example.com", PutOperation}}
 	for i, w := range want {
 		if revs[i].Revision != w.rev || revs[i].Actor != w.actor || revs[i].Operation != w.op {
 			t.Errorf("revision[%d] = %+v, want %+v", i, revs[i], w)

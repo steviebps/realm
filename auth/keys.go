@@ -6,12 +6,12 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/steviebps/realm/pkg/storage"
@@ -23,7 +23,7 @@ const TokenPrefix = "realm_"
 
 // keysKey is where API keys are stored, beneath realm's reserved metadata
 // prefix. Only hashes of the secrets are kept.
-const keysKey = "/_realm/keys/"
+const keysKey = storage.ReservedPrefix + "keys/"
 
 // keyCacheTTL bounds how long a key revoked by another process (such as the
 // `realm keys` CLI) keeps working in a running server.
@@ -33,8 +33,12 @@ const keyCacheTTL = 30 * time.Second
 // guessed tokens cannot turn into a storage read per request.
 const keyRefreshInterval = 5 * time.Second
 
-// ErrInvalidKey is returned for a token that is malformed, unknown, or revoked.
-var ErrInvalidKey = errors.New("invalid API key")
+var (
+	// ErrInvalidKey is returned for a token that is malformed, unknown, or revoked.
+	ErrInvalidKey = errors.New("invalid API key")
+	// ErrInvalidKeyRequest wraps the reason a NewKeyRequest was rejected.
+	ErrInvalidKeyRequest = errors.New("invalid key request")
+)
 
 // Key is an API key. Its secret is shown once, when it is created.
 type Key struct {
@@ -57,7 +61,15 @@ func (k *Key) Principal() *Principal {
 type KeyStore struct {
 	strg storage.Storage
 
-	mu       sync.Mutex
+	// mu serializes changes to the stored keys.
+	mu sync.Mutex
+	// refreshMu lets one request at a time reload the snapshot.
+	refreshMu sync.Mutex
+	// snap is the immutable set of keys that Verify reads without locking.
+	snap atomic.Pointer[keySnapshot]
+}
+
+type keySnapshot struct {
 	keys     map[string]Key
 	loadedAt time.Time
 }
@@ -74,8 +86,8 @@ type NewKeyRequest struct {
 	Path   string `json:"path"`
 }
 
-// Validate checks the request and normalizes its path.
-func (r *NewKeyRequest) Validate() error {
+// validate checks the request and normalizes its path.
+func (r *NewKeyRequest) validate() error {
 	r.Name = strings.TrimSpace(r.Name)
 	if r.Name == "" || len(r.Name) > 64 {
 		return errors.New("name must be between 1 and 64 characters")
@@ -90,17 +102,18 @@ func (r *NewKeyRequest) Validate() error {
 		return err
 	}
 	r.Path = NormalizePath(r.Path)
-	if strings.HasPrefix(r.Path, "/_realm/") {
-		return errors.New("path must not be under /_realm/")
+	if storage.IsReservedPath(r.Path) {
+		return fmt.Errorf("path must not be under %s", storage.ReservedPrefix)
 	}
 	return nil
 }
 
 // Create stores a new key and returns it with its token, which is not
-// recoverable afterwards.
+// recoverable afterwards. An invalid request returns an error wrapping
+// ErrInvalidKeyRequest.
 func (s *KeyStore) Create(ctx context.Context, req NewKeyRequest, createdBy string) (Key, string, error) {
-	if err := req.Validate(); err != nil {
-		return Key{}, "", err
+	if err := req.validate(); err != nil {
+		return Key{}, "", fmt.Errorf("%w: %w", ErrInvalidKeyRequest, err)
 	}
 	id, err := randomHex(8)
 	if err != nil {
@@ -132,7 +145,7 @@ func (s *KeyStore) Create(ctx context.Context, req NewKeyRequest, createdBy stri
 
 // List returns every key, oldest first, without secret hashes.
 func (s *KeyStore) List(ctx context.Context) ([]Key, error) {
-	keys, err := s.read(ctx)
+	keys, err := s.load(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -168,17 +181,28 @@ func (s *KeyStore) Verify(ctx context.Context, token string) (*Key, error) {
 		return nil, ErrInvalidKey
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	key, found := s.keys[id]
-	age := time.Since(s.loadedAt)
-	if s.keys == nil || age > keyCacheTTL || (!found && age > keyRefreshInterval) {
-		keys, err := s.load(ctx)
-		if err != nil {
-			return nil, err
+	snap := s.snap.Load()
+	var key Key
+	found := false
+	if snap != nil {
+		key, found = snap.keys[id]
+	}
+	if snap == nil || time.Since(snap.loadedAt) > keyCacheTTL || (!found && time.Since(snap.loadedAt) > keyRefreshInterval) {
+		// A known key keeps working on the stale snapshot while another
+		// request reloads it; an unknown key waits for the reload.
+		locked := s.refreshMu.TryLock()
+		if !locked && !found {
+			s.refreshMu.Lock()
+			locked = true
 		}
-		s.keys, s.loadedAt = keys, time.Now()
-		key, found = keys[id]
+		if locked {
+			fresh, err := s.reload(ctx)
+			s.refreshMu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			key, found = fresh.keys[id]
+		}
 	}
 	if !found || subtle.ConstantTimeCompare([]byte(key.Hash), []byte(hashSecret(secret))) != 1 {
 		return nil, ErrInvalidKey
@@ -186,16 +210,19 @@ func (s *KeyStore) Verify(ctx context.Context, token string) (*Key, error) {
 	return &key, nil
 }
 
-// read returns the stored keys, refreshing the cache.
-func (s *KeyStore) read(ctx context.Context) (map[string]Key, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// reload replaces the snapshot from storage, unless another request just did.
+// Callers must hold s.refreshMu.
+func (s *KeyStore) reload(ctx context.Context) (*keySnapshot, error) {
+	if snap := s.snap.Load(); snap != nil && time.Since(snap.loadedAt) < keyRefreshInterval {
+		return snap, nil
+	}
 	keys, err := s.load(ctx)
 	if err != nil {
 		return nil, err
 	}
-	s.keys, s.loadedAt = keys, time.Now()
-	return keys, nil
+	snap := &keySnapshot{keys: keys, loadedAt: time.Now()}
+	s.snap.Store(snap)
+	return snap, nil
 }
 
 // update applies fn to the stored keys and persists the result.
@@ -209,29 +236,17 @@ func (s *KeyStore) update(ctx context.Context, fn func(map[string]Key) error) er
 	if err := fn(keys); err != nil {
 		return err
 	}
-	b, err := json.Marshal(keys)
-	if err != nil {
+	if err := storage.WriteJSON(ctx, s.strg, keysKey, keys); err != nil {
 		return err
 	}
-	if err := s.strg.Put(ctx, storage.StorageEntry{Key: keysKey, Value: b}); err != nil {
-		return err
-	}
-	s.keys, s.loadedAt = keys, time.Now()
+	s.snap.Store(&keySnapshot{keys: keys, loadedAt: time.Now()})
 	return nil
 }
 
-// load reads the stored keys. Callers must hold s.mu.
+// load reads the stored keys.
 func (s *KeyStore) load(ctx context.Context) (map[string]Key, error) {
 	keys := map[string]Key{}
-	entry, err := s.strg.Get(ctx, keysKey)
-	var nf *storage.NotFoundError
-	if errors.As(err, &nf) {
-		return keys, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("could not read API keys: %w", err)
-	}
-	if err := json.Unmarshal(entry.Value, &keys); err != nil {
+	if _, err := storage.ReadJSON(ctx, s.strg, keysKey, &keys); err != nil {
 		return nil, fmt.Errorf("could not read API keys: %w", err)
 	}
 	return keys, nil

@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
@@ -89,7 +87,7 @@ func handleCatalog(meta *metaStore) http.Handler {
 		errorLog := logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
-		attr, _ := url.PathUnescape(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/catalog"), "/"))
+		attr := routeParam(r, "/v1/catalog")
 		span.SetAttributes(attribute.String("realm.server.catalog.attribute", attr))
 
 		fail := func(status int, err error) {

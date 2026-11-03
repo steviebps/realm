@@ -220,7 +220,7 @@ func TestKeyStore(t *testing.T) {
 		t.Errorf("revoked key still verifies: %v", err)
 	}
 	// the other process notices once its cache expires
-	other.loadedAt = time.Now().Add(-keyCacheTTL - time.Second)
+	other.snap.Store(&keySnapshot{keys: other.snap.Load().keys, loadedAt: time.Now().Add(-keyCacheTTL - time.Second)})
 	if _, err := other.Verify(ctx, token); !errors.Is(err, ErrInvalidKey) {
 		t.Errorf("revoked key still verifies in another process: %v", err)
 	}

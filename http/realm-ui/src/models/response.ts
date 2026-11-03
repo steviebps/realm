@@ -78,6 +78,10 @@ export type Provider = {
 export type Me = {
   authEnabled: boolean;
   user: Principal | null;
+  /** Whether the caller may change chambers. */
+  canEdit: boolean;
+  /** Whether the caller may manage API keys and the catalog. */
+  isAdmin: boolean;
   providers: Provider[];
 };
 

@@ -9,7 +9,7 @@ import { SideNav } from './components/side-nav';
 import { ChamberView } from './components/ChamberView';
 import { UNAUTHORIZED_EVENT, createChamber, getActor, getMe, listChambers, setActor, signOut } from './api';
 import { ensureTrailingSlash } from './utils/path';
-import { SessionContext, sessionFor, useSession } from './session';
+import { SessionContext, useSession } from './session';
 import { SignIn } from './components/SignIn';
 import { KeysDrawer } from './components/KeysDrawer';
 
@@ -68,14 +68,15 @@ const AuthGate = ({ children }: { children: React.ReactNode }) => {
   if (me.authEnabled && !me.user) {
     return <SignIn providers={me.providers} />;
   }
-  return <SessionContext.Provider value={sessionFor(me)}>{children}</SessionContext.Provider>;
+  return <SessionContext.Provider value={me}>{children}</SessionContext.Provider>;
 };
 
 /** The signed-in user, with sign-out and (for admins) API key management. */
 const UserMenu = ({ path }: { path: string }) => {
-  const { me, isAdmin } = useSession();
+  const me = useSession();
   const [keysOpen, setKeysOpen] = useState(false);
   if (!me.user) return null;
+  const { isAdmin } = me;
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-sm" title={me.user.provider && `Signed in with ${me.user.provider}`}>
@@ -126,7 +127,8 @@ const ActorField = () => {
 };
 
 const Content = () => {
-  const { me, canEdit } = useSession();
+  const me = useSession();
+  const { canEdit } = me;
   const [chamberName, setChamberName] = useState('');
   const location = useLocation();
   const navigate = useNavigate();

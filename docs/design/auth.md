@@ -145,7 +145,7 @@ config file.
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `GET /v1/auth/me` | none | `{authEnabled, user, providers}`; the UI starts here |
+| `GET /v1/auth/me` | none | `{authEnabled, user, canEdit, isAdmin, providers}`; the UI starts here |
 | `GET /v1/auth/login/<provider>?returnTo=/ui/…` | none | starts sign-in (`returnTo` must be a local path) |
 | `GET /v1/auth/callback/<provider>` | none | finishes sign-in, sets the session cookie |
 | `POST /v1/auth/logout` | none | clears the session cookie |
@@ -154,7 +154,9 @@ config file.
 | `/v1/keys…` | admin session | key management |
 | `/ui/` | none | static assets; the app shows the sign-in screen |
 
-Requests with no credentials get `401`. Requests with credentials that lack
+Routes are private by default: only `/healthz`, `/ui/`, and `/v1/auth/` are
+reachable without credentials (`publicPaths` in `http/auth.go`), so a new
+route needs no opt-in to be protected. Requests with no credentials get `401`. Requests with credentials that lack
 permission get `403`. When auth is on, history records the authenticated
 identity (an email, or `key:<name>`) and ignores the self-reported
 `X-Realm-Actor` header.
