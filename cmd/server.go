@@ -96,7 +96,6 @@ var serverCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		defer stg.Close(ctx)
-		raw := stg
 
 		if serverConfig.Inheritable {
 			stg, err = storage.NewInheritableStorage(stg)
@@ -113,7 +112,7 @@ var serverCmd = &cobra.Command{
 			logger.ErrorCtx(ctx).Msgf("failed to marshal root entry during startup: %s", err.Error())
 			os.Exit(1)
 		}
-		if err := storage.Update(ctx, raw, []string{"/"}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
+		if err := storage.Update(ctx, stg, []string{"/"}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
 			if cur["/"] != nil {
 				return nil, nil
 			}

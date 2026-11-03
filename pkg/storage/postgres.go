@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"slices"
 	"strconv"
 	"strings"
@@ -186,7 +185,7 @@ func (p *PostgresStorage) Put(ctx context.Context, e StorageEntry) error {
 		// a nil Value deletes in a transaction; Put always stores
 		value = []byte{}
 	}
-	_, err := p.commit(ctx, nil, []Op{{Key: e.Key, Value: value}}, false)
+	err := p.commit(ctx, nil, []Op{{Key: e.Key, Value: value}}, false)
 	if err != nil {
 		span.RecordError(err)
 	}
@@ -203,7 +202,7 @@ func (p *PostgresStorage) Delete(ctx context.Context, logicalPath string) error 
 		span.RecordError(err)
 		return err
 	}
-	_, err := p.commit(ctx, nil, []Op{{Key: logicalPath}}, true)
+	err := p.commit(ctx, nil, []Op{{Key: logicalPath}}, true)
 	if err != nil {
 		span.RecordError(err)
 	}
@@ -227,138 +226,104 @@ func (p *PostgresStorage) List(ctx context.Context, prefix string) ([]string, er
 	// keys beginning with lower sort below lower with its final "/"
 	// replaced by the next byte, "0" (the column uses byte order)
 	upper := strings.TrimSuffix(lower, "/") + "0"
-	rows, err := p.pool.Query(ctx, "SELECT key FROM realm_entries WHERE key >= $1 AND key < $2", lower, upper)
+	rows, err := p.pool.Query(ctx, `SELECT DISTINCT CASE WHEN key = $1 THEN '.'
+		ELSE split_part(substr(key, length($1) + 1), '/', 1) || '/' END AS name
+		FROM realm_entries WHERE key >= $1 AND key < $2 ORDER BY name`, lower, upper)
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
 	}
-	keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
 		span.RecordError(err)
 		return nil, err
 	}
-
-	names := make([]string, 0)
-	for _, k := range keys {
-		name := "."
-		if rest := strings.TrimPrefix(k, lower); rest != "" {
-			child, _, _ := strings.Cut(rest, "/")
-			name = child + "/"
-		}
-		if !slices.Contains(names, name) {
-			names = append(names, name)
-		}
+	if names == nil {
+		names = []string{}
 	}
-	slices.Sort(names)
 	return names, nil
 }
 
 // Txn applies ops atomically if every check holds.
-func (p *PostgresStorage) Txn(ctx context.Context, checks []Check, ops []Op) (uint64, error) {
+func (p *PostgresStorage) Txn(ctx context.Context, checks []Check, ops []Op) error {
 	ctx, span := p.tracer.Start(ctx, "PostgresStorage Txn", trace.WithAttributes(attribute.Int("realm.postgres.checks", len(checks)), attribute.Int("realm.postgres.ops", len(ops))))
 	defer span.End()
 
 	for _, k := range append(checkKeys(checks), opKeys(ops)...) {
 		if err := ValidatePath(k); err != nil {
 			span.RecordError(err)
-			return 0, err
+			return err
 		}
 	}
-	rev, err := p.commit(ctx, checks, ops, false)
+	err := p.commit(ctx, checks, ops, false)
 	if err != nil && !errors.Is(err, ErrConflict) {
 		span.RecordError(err)
 	}
-	return rev, err
+	return err
 }
 
-// commit runs one write transaction. When mustExist is set, deleting a key
-// that does not exist returns a NotFoundError (Storage.Delete's contract).
-func (p *PostgresStorage) commit(ctx context.Context, checks []Check, ops []Op, mustExist bool) (uint64, error) {
-	var rev uint64
-	err := pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
+// commit runs one write transaction in two round trips (plus BEGIN and
+// COMMIT): one that locks the keys and reads the checked versions, and one
+// that writes. When mustExist is set, deleting a key that does not exist
+// returns a NotFoundError (Storage.Delete's contract).
+func (p *PostgresStorage) commit(ctx context.Context, checks []Check, ops []Op, mustExist bool) error {
+	return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
 		// Lock every key involved, in a fixed order so transactions cannot
 		// deadlock. Advisory locks also cover keys that do not exist yet,
-		// which row locks cannot.
-		if err := lockKeys(ctx, tx, append(checkKeys(checks), opKeys(ops)...)); err != nil {
-			return err
-		}
-
-		if len(checks) > 0 {
-			current := map[string]uint64{}
-			rows, err := tx.Query(ctx, "SELECT key, rev FROM realm_entries WHERE key = ANY($1)", normalize(checkKeys(checks)))
-			if err != nil {
-				return err
-			}
-			var k string
-			var v uint64
-			if _, err := pgx.ForEachRow(rows, []any{&k, &v}, func() error {
-				current[k] = v
-				return nil
-			}); err != nil {
-				return err
-			}
-			for _, c := range checks {
-				if current[key(c.Key)] != c.Version {
-					return ErrConflict
-				}
-			}
-		}
-
-		if len(ops) == 0 {
-			return tx.QueryRow(ctx, "SELECT rev FROM realm_revision").Scan(&rev)
-		}
-		// Taking the next revision locks the counter until commit, so
-		// revisions commit in order.
-		if err := tx.QueryRow(ctx, "UPDATE realm_revision SET rev = rev + 1 RETURNING rev").Scan(&rev); err != nil {
-			return err
-		}
-
+		// which row locks cannot. A batch runs its statements in order.
 		batch := &pgx.Batch{}
+		for _, id := range lockOrder(normalize(append(checkKeys(checks), opKeys(ops)...))) {
+			batch.Queue("SELECT pg_advisory_xact_lock($1, $2)", lockClass, int32(id))
+		}
+		current := map[string]uint64{}
+		if len(checks) > 0 {
+			batch.Queue("SELECT key, rev FROM realm_entries WHERE key = ANY($1)", normalize(checkKeys(checks))).Query(func(rows pgx.Rows) error {
+				var k string
+				var v uint64
+				_, err := pgx.ForEachRow(rows, []any{&k, &v}, func() error {
+					current[k] = v
+					return nil
+				})
+				return err
+			})
+		}
+		if err := tx.SendBatch(ctx, batch).Close(); err != nil {
+			return err
+		}
+		for _, c := range checks {
+			if current[key(c.Key)] != c.Version {
+				return ErrConflict
+			}
+		}
+		if len(ops) == 0 {
+			return nil
+		}
+
+		// Taking the next revision locks the counter until commit, so
+		// revisions commit in order. Later statements read it back.
+		const rev = "(SELECT rev FROM realm_revision)"
+		batch = &pgx.Batch{}
+		batch.Queue("UPDATE realm_revision SET rev = rev + 1")
 		for _, op := range ops {
 			if op.Value == nil {
-				batch.Queue("DELETE FROM realm_entries WHERE key = $1", key(op.Key))
+				q := batch.Queue("DELETE FROM realm_entries WHERE key = $1", key(op.Key))
+				if mustExist {
+					q.Exec(func(tag pgconn.CommandTag) error {
+						if tag.RowsAffected() == 0 {
+							return &NotFoundError{Key: op.Key}
+						}
+						return nil
+					})
+				}
 				continue
 			}
-			batch.Queue(`INSERT INTO realm_entries (key, value, rev) VALUES ($1, $2, $3)
-				ON CONFLICT (key) DO UPDATE SET value = excluded.value, rev = excluded.rev`, key(op.Key), []byte(op.Value), rev)
+			batch.Queue(`INSERT INTO realm_entries (key, value, rev) VALUES ($1, $2, `+rev+`)
+				ON CONFLICT (key) DO UPDATE SET value = excluded.value, rev = excluded.rev`, key(op.Key), []byte(op.Value))
 		}
-		for _, k := range slices.Compact(slices.Sorted(slices.Values(normalize(opKeys(ops))))) {
-			batch.Queue("INSERT INTO realm_changes (rev, key) VALUES ($1, $2)", rev, k)
-		}
-		batch.Queue("SELECT pg_notify($1, $2)", notifyChannel, strconv.FormatUint(rev, 10))
-
-		results := tx.SendBatch(ctx, batch)
-		for _, op := range ops {
-			tag, err := results.Exec()
-			if err != nil {
-				_ = results.Close()
-				return err
-			}
-			if mustExist && op.Value == nil && tag.RowsAffected() == 0 {
-				_ = results.Close()
-				return &NotFoundError{Key: op.Key}
-			}
-		}
-		return results.Close()
+		batch.Queue("INSERT INTO realm_changes (rev, key) SELECT "+rev+", k FROM unnest($1::text[]) AS k", slices.Compact(slices.Sorted(slices.Values(normalize(opKeys(ops))))))
+		batch.Queue("SELECT pg_notify($1, rev::text) FROM realm_revision", notifyChannel)
+		return tx.SendBatch(ctx, batch).Close()
 	})
-	return rev, err
-}
-
-// lockKeys takes a transaction-scoped advisory lock for each key.
-func lockKeys(ctx context.Context, tx pgx.Tx, keys []string) error {
-	ids := make([]int32, 0, len(keys))
-	for _, k := range keys {
-		h := fnv.New32a()
-		_, _ = h.Write([]byte(key(k)))
-		ids = append(ids, int32(h.Sum32()))
-	}
-	slices.Sort(ids)
-	for _, id := range slices.Compact(ids) {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1, $2)", lockClass, id); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func checkKeys(checks []Check) []string {
@@ -454,14 +419,26 @@ func (w *watcher) listen(ctx context.Context) error {
 		if err := w.catchUp(ctx, conn); err != nil {
 			return err
 		}
-		wctx, cancel := context.WithTimeout(ctx, watchPollInterval)
-		_, err := conn.WaitForNotification(wctx)
-		cancel()
-		// a timeout leaves the connection usable: poll, then wait again
-		if err != nil && (ctx.Err() != nil || !pgconn.Timeout(err)) {
-			return err
+		for {
+			wctx, cancel := context.WithTimeout(ctx, watchPollInterval)
+			n, err := conn.WaitForNotification(wctx)
+			cancel()
+			// a timeout leaves the connection usable: poll, then wait again
+			if err != nil && (ctx.Err() != nil || !pgconn.Timeout(err)) {
+				return err
+			}
+			// a revision an earlier catch-up already reported needs none
+			if err != nil || !w.seen(n.Payload) {
+				break
+			}
 		}
 	}
+}
+
+// seen reports whether a notification's revision was already reported.
+func (w *watcher) seen(payload string) bool {
+	rev, err := strconv.ParseUint(payload, 10, 64)
+	return err == nil && rev <= w.last
 }
 
 // catchUp reports the changes after w.last.

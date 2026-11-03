@@ -62,7 +62,7 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 	var authn *auth.Authenticator
 	if config.Auth != nil {
 		var err error
-		if authn, err = auth.New(*config.Auth, rawStorage(config.Storage)); err != nil {
+		if authn, err = auth.New(*config.Auth, storage.Raw(config.Storage)); err != nil {
 			return nil, err
 		}
 	}
@@ -80,7 +80,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
 	}
 
-	meta := &metaStore{strg: rawStorage(hc.Storage)}
+	meta := &metaStore{strg: storage.Raw(hc.Storage)}
 
 	// A backend that reports every change, including other servers' writes,
 	// drives the broker; otherwise the handler notifies it after each write.
@@ -89,7 +89,10 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 		notify = func(string) {}
 		go func() {
 			for c := range feed.Watch(ctx) {
-				brk.Notify(c.Key)
+				// metadata keys never match a chamber watcher
+				if !storage.IsReservedPath(c.Key) {
+					brk.Notify(c.Key)
+				}
 			}
 		}()
 	}
@@ -208,24 +211,6 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = utils.WriteInterfaceWith(w, resp, true)
-}
-
-// unwrapper is implemented by storage wrappers that transform reads (such as
-// inheritance) and can expose the storage they wrap.
-type unwrapper interface {
-	Unwrap() storage.Storage
-}
-
-// rawStorage returns the innermost storage beneath any transforming wrappers,
-// so metadata and ETags reflect exactly what is stored at a path.
-func rawStorage(s storage.Storage) storage.Storage {
-	for {
-		u, ok := s.(unwrapper)
-		if !ok {
-			return s
-		}
-		s = u.Unwrap()
-	}
 }
 
 // preconditionFailed reports whether the request's If-Match / If-None-Match

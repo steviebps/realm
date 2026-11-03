@@ -35,9 +35,9 @@ type Check struct {
 type Transactional interface {
 	Storage
 	// Txn applies ops atomically if every check holds, or returns
-	// ErrConflict and applies nothing. It returns the revision that wrote the
-	// ops. Deleting a key that does not exist is not an error.
-	Txn(ctx context.Context, checks []Check, ops []Op) (uint64, error)
+	// ErrConflict and applies nothing. Deleting a key that does not exist is
+	// not an error.
+	Txn(ctx context.Context, checks []Check, ops []Op) error
 }
 
 // Change reports that the entry at Key was written or deleted at revision
@@ -65,17 +65,14 @@ const maxUpdateAttempts = 10
 // it must not have side effects; an error from fn aborts the update and is
 // returned as is.
 //
-// On a Transactional backend each read key is version-checked when the ops
-// are applied, and fn is retried when another writer got there first; after
-// repeated conflicts Update returns ErrConflict. Other backends are only safe
-// within one process: Update holds a process-wide lock on the keys and
-// applies the ops one at a time.
+// Update works on the entries as stored (see Raw), beneath any wrapper that
+// transforms reads. On a Transactional backend each read key is
+// version-checked when the ops are applied, and fn is retried when another
+// writer got there first; after repeated conflicts Update returns
+// ErrConflict. Other backends are only safe within one process: Update holds
+// a process-wide lock on the keys and applies the ops one at a time.
 func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*StorageEntry) ([]Op, error)) error {
-	for _, k := range keys {
-		if err := ValidatePath(k); err != nil {
-			return err
-		}
-	}
+	s = Raw(s)
 	if t, ok := s.(Transactional); ok {
 		return updateTransactional(ctx, t, keys, fn)
 	}
@@ -90,9 +87,6 @@ func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*S
 		return err
 	}
 	for _, op := range ops {
-		if err := ValidatePath(op.Key); err != nil {
-			return err
-		}
 		if op.Value == nil {
 			err = s.Delete(ctx, op.Key)
 			var nf *NotFoundError
@@ -125,13 +119,8 @@ func updateTransactional(ctx context.Context, t Transactional, keys []string, fn
 			return err
 		}
 		ops, err := fn(current)
-		if err != nil {
+		if err != nil || len(ops) == 0 {
 			return err
-		}
-		for _, op := range ops {
-			if err := ValidatePath(op.Key); err != nil {
-				return err
-			}
 		}
 		// version-check every key that was read, so fn's view still holds
 		checks := make([]Check, 0, len(keys))
@@ -142,7 +131,7 @@ func updateTransactional(ctx context.Context, t Transactional, keys []string, fn
 			}
 			checks = append(checks, Check{Key: k, Version: v})
 		}
-		if _, err = t.Txn(ctx, checks, ops); !errors.Is(err, ErrConflict) {
+		if err = t.Txn(ctx, checks, ops); !errors.Is(err, ErrConflict) {
 			return err
 		}
 	}
@@ -153,18 +142,27 @@ func updateTransactional(ctx context.Context, t Transactional, keys []string, fn
 func readEntries(ctx context.Context, s Storage, keys []string) (map[string]*StorageEntry, error) {
 	out := make(map[string]*StorageEntry, len(keys))
 	for _, k := range keys {
-		e, err := s.Get(ctx, k)
-		var nf *NotFoundError
-		if errors.As(err, &nf) {
-			out[k] = nil
-			continue
-		}
+		e, err := getOptional(ctx, s, k)
 		if err != nil {
 			return nil, err
 		}
 		out[k] = e
 	}
 	return out, nil
+}
+
+// lockOrder returns a 32-bit hash of each key, sorted and without
+// duplicates: the order in which locks on the keys are taken, so that
+// transactions locking overlapping keys cannot deadlock.
+func lockOrder(keys []string) []uint32 {
+	ids := make([]uint32, 0, len(keys))
+	for _, k := range keys {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(k))
+		ids = append(ids, h.Sum32())
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
 }
 
 // localLocks serializes Updates of the same keys within this process, for
@@ -179,11 +177,10 @@ type stripedLocks struct {
 // keys cannot deadlock, and returns a function that releases them.
 func (l *stripedLocks) lock(keys []string) func() {
 	idx := make([]int, 0, len(keys))
-	for _, k := range keys {
-		h := fnv.New32a()
-		_, _ = h.Write([]byte(k))
-		idx = append(idx, int(h.Sum32()%uint32(len(l.stripes))))
+	for _, id := range lockOrder(keys) {
+		idx = append(idx, int(id%uint32(len(l.stripes))))
 	}
+	// sorting again keeps the stripes ordered after the modulo
 	slices.Sort(idx)
 	idx = slices.Compact(idx)
 	for _, i := range idx {

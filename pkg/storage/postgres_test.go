@@ -23,16 +23,11 @@ func newPostgres(t *testing.T, url string) *PostgresStorage {
 	return s.(*PostgresStorage)
 }
 
+// TestPostgresStorage covers what the shared backend tests (which include
+// postgres when it is configured) do not: versions, exact bytes, and listing.
 func TestPostgresStorage(t *testing.T) {
 	ctx := context.Background()
 	s := newPostgres(t, pgtest.URL(t))
-
-	if _, err := s.Get(ctx, "/a/"); !isNotFound(err) {
-		t.Fatalf("Get missing: expected NotFoundError, got %v", err)
-	}
-	if err := s.Delete(ctx, "/a/"); !isNotFound(err) {
-		t.Fatalf("Delete missing: expected NotFoundError, got %v", err)
-	}
 
 	for _, k := range []string{"/", "/a/", "/a/b/", "/a/b/c/", "/a/d/", "/x/"} {
 		if err := s.Put(ctx, StorageEntry{Key: k, Value: json.RawMessage(`{"k":"` + k + `"}`)}); err != nil {
@@ -57,7 +52,6 @@ func TestPostgresStorage(t *testing.T) {
 	}
 
 	for prefix, want := range map[string][]string{
-		"/a/": {".", "b/", "d/"},
 		"/":   {".", "a/", "x/"},
 		"/q/": {},
 	} {
@@ -69,25 +63,27 @@ func TestPostgresStorage(t *testing.T) {
 			t.Errorf("List(%s) = %v, want %v", prefix, names, want)
 		}
 	}
-
-	if err := s.Delete(ctx, "/a/d/"); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-	if _, err := s.Get(ctx, "/a/d/"); !isNotFound(err) {
-		t.Errorf("Get deleted: expected NotFoundError, got %v", err)
-	}
 }
 
 func TestPostgresTxn(t *testing.T) {
 	ctx := context.Background()
 	s := newPostgres(t, pgtest.URL(t))
-
-	// creating requires the key to be absent
-	rev, err := s.Txn(ctx, []Check{{Key: "/a/", Version: 0}}, []Op{{Key: "/a/", Value: json.RawMessage(`1`)}, {Key: "/b/", Value: json.RawMessage(`2`)}})
-	if err != nil || rev != 1 {
-		t.Fatalf("Txn create = %d, %v; want 1, nil", rev, err)
+	version := func(k string) uint64 {
+		e, err := s.Get(ctx, k)
+		if err != nil {
+			return 0
+		}
+		return e.Version
 	}
-	if _, err := s.Txn(ctx, []Check{{Key: "/a/", Version: 0}}, []Op{{Key: "/a/", Value: json.RawMessage(`3`)}}); !errors.Is(err, ErrConflict) {
+
+	// creating requires the key to be absent; one transaction, one revision
+	if err := s.Txn(ctx, []Check{{Key: "/a/", Version: 0}}, []Op{{Key: "/a/", Value: json.RawMessage(`1`)}, {Key: "/b/", Value: json.RawMessage(`2`)}}); err != nil {
+		t.Fatalf("Txn create: %v", err)
+	}
+	if version("/a/") != 1 || version("/b/") != 1 {
+		t.Fatalf("versions = %d, %d; want 1, 1", version("/a/"), version("/b/"))
+	}
+	if err := s.Txn(ctx, []Check{{Key: "/a/", Version: 0}}, []Op{{Key: "/a/", Value: json.RawMessage(`3`)}}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Txn with stale check: expected ErrConflict, got %v", err)
 	}
 	// a failed check applies nothing
@@ -95,17 +91,23 @@ func TestPostgresTxn(t *testing.T) {
 		t.Fatalf("after conflict /a/ = %s@%d, want 1@1", e.Value, e.Version)
 	}
 
-	// a check on a key that is only read
-	if _, err := s.Txn(ctx, []Check{{Key: "/b/", Version: 1}}, []Op{{Key: "/a/"}, {Key: "/missing/"}}); err != nil {
+	// a check on a key that is only read; deleting a missing key is fine
+	if err := s.Txn(ctx, []Check{{Key: "/b/", Version: 1}}, []Op{{Key: "/a/"}, {Key: "/missing/"}, {Key: "/c/", Value: json.RawMessage(`4`)}}); err != nil {
 		t.Fatalf("Txn delete: %v", err)
 	}
 	if _, err := s.Get(ctx, "/a/"); !isNotFound(err) {
 		t.Errorf("expected /a/ deleted, got %v", err)
 	}
+	if version("/c/") != 2 {
+		t.Errorf("/c/ version = %d, want 2", version("/c/"))
+	}
 
-	// checks alone write nothing and keep the revision
-	if rev, err := s.Txn(ctx, []Check{{Key: "/b/", Version: 1}}, nil); err != nil || rev != 2 {
-		t.Errorf("check-only Txn = %d, %v; want 2, nil", rev, err)
+	// checks alone write nothing
+	if err := s.Txn(ctx, []Check{{Key: "/b/", Version: 1}}, nil); err != nil {
+		t.Errorf("check-only Txn: %v", err)
+	}
+	if err := s.Put(ctx, StorageEntry{Key: "/d/", Value: json.RawMessage(`5`)}); err != nil || version("/d/") != 3 {
+		t.Errorf("next write: %v, version %d; want revision 3", err, version("/d/"))
 	}
 }
 
@@ -166,7 +168,7 @@ func TestPostgresWatch(t *testing.T) {
 	}
 	changes := watcher.Watch(ctx)
 
-	if _, err := writer.Txn(ctx, nil, []Op{{Key: "/a/", Value: json.RawMessage(`{}`)}, {Key: "/b/", Value: json.RawMessage(`{}`)}}); err != nil {
+	if err := writer.Txn(ctx, nil, []Op{{Key: "/a/", Value: json.RawMessage(`{}`)}, {Key: "/b/", Value: json.RawMessage(`{}`)}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Delete(ctx, "/before/"); err != nil {

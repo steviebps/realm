@@ -46,23 +46,19 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 	if source == "" {
 		return nil, fmt.Errorf("'source' option for cacheable must be set")
 	}
-	if source == "postgres" {
-		// another server's write would leave this server's cache stale
-		return nil, fmt.Errorf("postgres cannot be a cacheable source: use the postgres storage type directly, which every server reads without a cache")
-	}
 
-	sourceCreator, exists := SourcableStorageOptions[source]
-	if !exists {
-		return nil, fmt.Errorf("storage type %q does not exist", source)
+	sourceCreator, err := sourcable(source)
+	if err != nil {
+		return nil, err
 	}
 	srcStg, err := sourceCreator(conf)
 	if err != nil {
 		return nil, err
 	}
 
-	cacheCreator, exists := SourcableStorageOptions[cache]
-	if !exists {
-		return nil, fmt.Errorf("storage type %q does not exist", cache)
+	cacheCreator, err := sourcable(cache)
+	if err != nil {
+		return nil, err
 	}
 	cacheStg, err := cacheCreator(conf)
 	if err != nil {
@@ -70,6 +66,19 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 	}
 
 	return NewCacheableStorage(cacheStg, srcStg)
+}
+
+// sourcable returns the creator of a storage type that can be cached or act as
+// a cache. Backends shared by several servers (postgres) are not: another
+// server's write would leave this server's cache stale.
+func sourcable(name string) (StorageCreator, error) {
+	if create, ok := SourcableStorageOptions[name]; ok {
+		return create, nil
+	}
+	if _, ok := StorageOptions[name]; ok {
+		return nil, fmt.Errorf("storage type %q cannot be used with cacheable", name)
+	}
+	return nil, fmt.Errorf("storage type %q does not exist", name)
 }
 
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
