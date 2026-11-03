@@ -28,6 +28,7 @@ func newStorage(t *testing.T) storage.Storage {
 }
 
 func TestPrincipalPermissions(t *testing.T) {
+	evalKey := &Principal{Kind: KindKey, Access: AccessEvaluate, Path: "/prod/"}
 	readKey := &Principal{Kind: KindKey, Access: AccessRead, Path: "/prod/"}
 	writeKey := &Principal{Kind: KindKey, Access: AccessWrite, Path: "/prod/"}
 	rootKey := &Principal{Kind: KindKey, Access: AccessWrite, Path: "/"}
@@ -41,20 +42,23 @@ func TestPrincipalPermissions(t *testing.T) {
 		p               *Principal
 		path            string
 		read, write, ad bool
+		eval            bool
 	}{
-		{"read key in scope", readKey, "/prod/app/", true, false, false},
-		{"read key at scope", readKey, "/prod", true, false, false},
-		{"read key out of scope", readKey, "/staging/", false, false, false},
-		{"read key prefix lookalike", readKey, "/production/", false, false, false},
-		{"read key parent", readKey, "/", false, false, false},
-		{"write key in scope", writeKey, "/prod/app/", true, true, false},
-		{"write key out of scope", writeKey, "/dev/", false, false, false},
-		{"root key", rootKey, "/anything/", true, true, false},
-		{"viewer", viewer, "/prod/", true, false, false},
-		{"editor", editor, "/prod/", true, true, false},
-		{"admin", admin, "/prod/", true, true, true},
-		{"anonymous", Anonymous, "/prod/", true, true, true},
-		{"nil", none, "/prod/", false, false, false},
+		{"evaluate key in scope", evalKey, "/prod/app/", false, false, false, true},
+		{"evaluate key out of scope", evalKey, "/staging/", false, false, false, false},
+		{"read key in scope", readKey, "/prod/app/", true, false, false, true},
+		{"read key at scope", readKey, "/prod", true, false, false, true},
+		{"read key out of scope", readKey, "/staging/", false, false, false, false},
+		{"read key prefix lookalike", readKey, "/production/", false, false, false, false},
+		{"read key parent", readKey, "/", false, false, false, false},
+		{"write key in scope", writeKey, "/prod/app/", true, true, false, true},
+		{"write key out of scope", writeKey, "/dev/", false, false, false, false},
+		{"root key", rootKey, "/anything/", true, true, false, true},
+		{"viewer", viewer, "/prod/", true, false, false, true},
+		{"editor", editor, "/prod/", true, true, false, true},
+		{"admin", admin, "/prod/", true, true, true, true},
+		{"anonymous", Anonymous, "/prod/", true, true, true, true},
+		{"nil", none, "/prod/", false, false, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -66,6 +70,12 @@ func TestPrincipalPermissions(t *testing.T) {
 			}
 			if got := tt.p.IsAdmin(); got != tt.ad {
 				t.Errorf("IsAdmin = %v, want %v", got, tt.ad)
+			}
+			if got := tt.p.CanEvaluate(tt.path); got != tt.eval {
+				t.Errorf("CanEvaluate = %v, want %v", got, tt.eval)
+			}
+			if got, want := tt.p.CanReadCatalog(), tt.p != nil && tt.p != evalKey; got != want {
+				t.Errorf("CanReadCatalog = %v, want %v", got, want)
 			}
 		})
 	}

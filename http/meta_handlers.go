@@ -95,7 +95,12 @@ func handleCatalog(meta *metaStore) http.Handler {
 			errorLog.Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 		}
-		if r.Method != http.MethodGet && !auth.FromContext(ctx).IsAdmin() {
+		p := auth.FromContext(ctx)
+		if !p.CanReadCatalog() {
+			forbidden(w, r, "not allowed to read the catalog")
+			return
+		}
+		if r.Method != http.MethodGet && !p.IsAdmin() {
 			forbidden(w, r, "only administrators may change the catalog")
 			return
 		}

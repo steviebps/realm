@@ -51,6 +51,9 @@ func (r *Role) UnmarshalText(b []byte) error {
 type Access string
 
 const (
+	// AccessEvaluate allows only evaluating flags for a context. Evaluate keys
+	// are meant for browsers: they reveal values, never the rules behind them.
+	AccessEvaluate Access = "evaluate"
 	// AccessRead allows reading and watching chambers and their history.
 	AccessRead Access = "read"
 	// AccessWrite also allows creating, changing, and deleting chambers.
@@ -58,7 +61,7 @@ const (
 )
 
 func (a Access) valid() bool {
-	return a == AccessRead || a == AccessWrite
+	return a == AccessEvaluate || a == AccessRead || a == AccessWrite
 }
 
 // Kind identifies how a principal authenticated.
@@ -93,6 +96,24 @@ var Anonymous = &Principal{Kind: KindAnonymous, ID: "anonymous", Role: RoleAdmin
 
 // CanRead reports whether p may read the chamber at path (and its history).
 func (p *Principal) CanRead(path string) bool {
+	if p == nil {
+		return false
+	}
+	if p.Kind == KindKey {
+		return (p.Access == AccessRead || p.Access == AccessWrite) && covers(p.Path, path)
+	}
+	return p.Role >= RoleViewer
+}
+
+// CanReadCatalog reports whether p may read the attribute catalog, which maps
+// attribute values to labels. Evaluate keys may not: they are public.
+func (p *Principal) CanReadCatalog() bool {
+	return p != nil && (p.Kind != KindKey || p.Access != AccessEvaluate)
+}
+
+// CanEvaluate reports whether p may evaluate the flags of the chamber at path
+// for a context. Every key covering path may, whatever its access.
+func (p *Principal) CanEvaluate(path string) bool {
 	if p == nil {
 		return false
 	}

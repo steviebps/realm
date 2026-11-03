@@ -64,7 +64,9 @@ the storage named by a server config. It needs no running server and no
 sign-in.
 
 ```bash
-# read keys for SDKs, write keys for automation; a key covers its path and everything beneath it
+# evaluate keys for browsers, read keys for server SDKs, write keys for automation;
+# a key covers its path and everything beneath it
+realm keys create --config realm.json --name web --access evaluate --path /prod/
 realm keys create --config realm.json --name checkout --access read --path /prod/
 realm keys create --config realm.json --name ci --access write --path /
 
@@ -246,8 +248,8 @@ curl -N 'http://localhost:8080/v1/chambers/root?watch=true'
 
 Add an `auth` block to the server config to require sign-in for the UI
 (any OIDC provider, or GitHub) with viewer / editor / admin roles, and API keys
-for applications and automation. Keys are `read` or `write` and limited to a
-chamber path:
+for applications and automation. Keys are `evaluate` (browsers), `read`, or
+`write`, and limited to a chamber path:
 
 ```bash
 realm keys create --config realm.json --name checkout --access read --path /prod/
@@ -262,3 +264,26 @@ client, _ := client.NewHttpClient(&client.HttpClientConfig{
 
 Without an `auth` block the server is open to anyone who can reach it. See
 [docs/design/auth.md](docs/design/auth.md).
+
+### TypeScript and browsers
+
+[`sdk/typescript`](sdk/typescript) has two clients. `ServerClient` evaluates
+locally with a `read` key, like the Go SDK. `BrowserClient` asks the server to
+evaluate for one context with an `evaluate` key, so rules never reach the
+browser:
+
+```ts
+const flags = new BrowserClient({ address, token, path: '/prod/web/', context: { key: userId } });
+await flags.start();
+flags.bool('new-checkout', false);
+```
+
+Other languages can call the endpoint directly:
+
+```bash
+curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
+  -H "Authorization: Bearer $REALM_TOKEN" \
+  -d '{"key": "user-123", "attributes": {"tenantId": "acme"}}'
+```
+
+See [docs/design/evaluation.md](docs/design/evaluation.md).
