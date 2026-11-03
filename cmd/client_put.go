@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -65,7 +66,7 @@ var clientPut = &cobra.Command{
 
 		if len(httpRes.Errors) > 0 {
 			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not put %q: %s", args[0], httpRes.Errors))
-			return err
+			return errors.New(strings.Join(httpRes.Errors, "; "))
 		}
 
 		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)

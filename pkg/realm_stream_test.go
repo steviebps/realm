@@ -133,3 +133,19 @@ func TestRealmStreamingFallsBackToPolling(t *testing.T) {
 		t.Fatal("expected polling fallback to pick up the update")
 	}
 }
+
+// TestRealmStopIsIdempotent verifies Stop can be called more than once (for
+// example a deferred Stop plus an explicit one) without panicking.
+func TestRealmStopIsIdempotent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `{"data":%s}`, chamberJSON("one"))
+	}))
+	defer srv.Close()
+
+	rlm := newStreamingRealm(t, srv.URL, time.Hour)
+	if err := rlm.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	rlm.Stop()
+	rlm.Stop()
+}
