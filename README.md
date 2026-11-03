@@ -10,7 +10,7 @@ One binary gives you three things:
 - **A Go SDK** that your application embeds to read flags from a local snapshot.
 
 A TypeScript SDK in [`sdk/typescript`](sdk/typescript) reads flags in Node
-services and in browsers.
+services and in browsers, with hooks for React.
 
 ## Features
 
@@ -432,52 +432,37 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
 
 ### Use the BrowserClient in React
 
-The SDK has no React package. A small module with one shared client and a few
-hooks is sufficient.
+`realm-sdk/react` has a provider and hooks for a `BrowserClient`.
 
-1. Make a module that holds the client and the hooks:
+1. Make the client and wrap the app in a `RealmProvider`. The provider starts
+   the client, and evaluates again when `context` changes, for example when a
+   user signs in:
 
    ```tsx
-   // flags.ts
-   import { useSyncExternalStore } from 'react';
+   // App.tsx
    import { BrowserClient } from 'realm-sdk';
+   import { RealmProvider } from 'realm-sdk/react';
 
-   export const flags = new BrowserClient({
+   const flags = new BrowserClient({
      address: 'https://realm.example.com',
      token: 'realm_…', // an evaluate key
      path: '/prod/web/',
    });
 
-   const subscribe = (onChange: () => void) => flags.subscribe(onChange);
-
-   export function useBoolFlag(flag: string, fallback: boolean): boolean {
-     return useSyncExternalStore(subscribe, () => flags.bool(flag, fallback), () => fallback);
-   }
-
-   export function useStringFlag(flag: string, fallback: string): string {
-     return useSyncExternalStore(subscribe, () => flags.string(flag, fallback), () => fallback);
+   export function App({ user }: { user: User }) {
+     return (
+       <RealmProvider client={flags} context={{ key: user.id, attributes: { tenantId: user.tenantId } }}>
+         <Checkout />
+       </RealmProvider>
+     );
    }
    ```
 
-2. Start the client before you render the app:
-
-   ```tsx
-   // main.tsx
-   import { createRoot } from 'react-dom/client';
-   import { App } from './App';
-   import { flags } from './flags';
-
-   // Until the first evaluation arrives, the hooks return their fallbacks.
-   flags.start().catch((err) => console.warn('realm:', err));
-
-   createRoot(document.getElementById('root')!).render(<App />);
-   ```
-
-3. Read flags in your components:
+2. Read flags in your components:
 
    ```tsx
    // Checkout.tsx
-   import { useBoolFlag } from './flags';
+   import { useBoolFlag } from 'realm-sdk/react';
 
    export function Checkout() {
      const newCheckout = useBoolFlag('new-checkout', false);
@@ -485,20 +470,10 @@ hooks is sufficient.
    }
    ```
 
-4. When a user signs in, send the user to realm:
-
-   ```ts
-   await flags.identify({ key: user.id, attributes: { tenantId: user.tenantId } });
-   ```
-
-When a value changes on the server, or `identify` gives new values, React
-renders the components that use those flags again.
-
-> [!NOTE]
-> Do not use a new object or array as the fallback of `flags.json` in a hook.
-> `useSyncExternalStore` compares results by reference, so a new fallback on
-> each call makes React render again and again. Make the fallback a constant
-> outside the component.
+Until the first evaluation arrives, the hooks return their fallbacks;
+`useRealmStatus()` tells you when it has. When a value changes on the server,
+React renders the components that use that flag again. For every hook, refer
+to [sdk/typescript/README.md](sdk/typescript/README.md#react).
 
 ## Authentication
 
@@ -512,8 +487,9 @@ Authentication has two parts:
   the role `viewer`, `editor`, or `admin`.
 - **API keys** for applications and automation. An `evaluate` key is for
   browsers: it can only evaluate flags, so you can put it in front-end code. A
-  `read` key is for server SDKs. A `write` key is for automation. A key gives
-  access to its path and to all chambers below it.
+  `read` key is for server SDKs. A `write` key is for automation. Keep `read`
+  and `write` keys secret: the server refuses them on requests from browsers.
+  A key gives access to its path and to all chambers below it.
 
 For the `auth` config block, refer to [docs/design/auth.md](docs/design/auth.md).
 

@@ -39,12 +39,7 @@ export class BrowserClient {
    */
   async start(): Promise<void> {
     if (this.#controller) return;
-    try {
-      await this.#connect();
-    } catch (e) {
-      this.#controller = undefined;
-      throw e;
-    }
+    await this.#connect();
   }
 
   /** Switches to a new context and re-evaluates every flag for it. */
@@ -100,14 +95,21 @@ export class BrowserClient {
     this.#controller?.abort();
     const controller = new AbortController();
     this.#controller = controller;
-    await this.#transport.follow(
-      'evaluate',
-      { method: 'POST', body: JSON.stringify(this.#context) },
-      'flags',
-      this.#evaluation,
-      this.#options.streaming ?? true,
-      this.#options.pollingInterval ?? defaultPollingInterval,
-      controller.signal,
-    );
+    try {
+      await this.#transport.follow(
+        'evaluate',
+        { method: 'POST', body: JSON.stringify(this.#context) },
+        'flags',
+        this.#evaluation,
+        this.#options.streaming ?? true,
+        this.#options.pollingInterval ?? defaultPollingInterval,
+        controller.signal,
+      );
+    } catch (e) {
+      // identify or stop aborted this evaluation and may have started another.
+      if (controller.signal.aborted) return;
+      this.#controller = undefined;
+      throw e;
+    }
   }
 }

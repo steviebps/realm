@@ -56,6 +56,15 @@ nothing else: it cannot read chambers, their history, or the catalog. It is
 meant to be shipped in front-end code, so treat it as public. It reveals the
 values a context would receive, never the rules behind them.
 
+`read` and `write` keys may call `/v1/evaluate/` too, so backends in other
+languages can evaluate without porting the rules engine, but never from a
+browser: a key request that carries an `Origin` header (which browsers send
+with every `POST`) is refused with 403 unless it is an evaluate key. That
+does not protect a key that has already leaked, since other clients need not
+send `Origin`; it makes putting a secret key in front-end code fail the first
+time it runs in development, before it ships. Other routes need no such check:
+they send no CORS headers, so a page on another origin cannot read them.
+
 ## Browsers on other origins
 
 Responses under `/v1/evaluate/` carry CORS headers so pages on any origin can
@@ -98,6 +107,12 @@ flags.bool('new-checkout', false);
 flags.subscribe(() => render());
 await flags.identify({ key: otherUser }); // re-evaluates for a new context
 ```
+
+`realm-sdk/react` wraps a `BrowserClient` for React 18+: a `RealmProvider`
+that starts the client and re-identifies when its `context` prop changes by
+value, and hooks (`useBoolFlag`, `useJsonFlag`, `useRealmStatus`, …) built
+on `useSyncExternalStore`. React is an optional peer dependency, so the main
+entry point keeps no runtime dependencies.
 
 Both clients stream by default and reconnect with capped exponential backoff
 (1 s to 30 s), keeping the last known values meanwhile. `streaming: false`

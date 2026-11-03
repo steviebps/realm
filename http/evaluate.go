@@ -62,8 +62,17 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 			fail(http.StatusBadRequest, fmt.Errorf("paths under %q are reserved", storage.ReservedPrefix))
 			return
 		}
-		if !auth.FromContext(ctx).CanEvaluate(path) {
+		p := auth.FromContext(ctx)
+		if !p.CanEvaluate(path) {
 			forbidden(w, r, fmt.Sprintf("not allowed to evaluate %s", path))
+			return
+		}
+		// Browsers send Origin with every POST, and anyone can copy a key out
+		// of front-end code. Only evaluate keys are safe to publish, so refuse
+		// read and write keys here, while shipping one is still a mistake in
+		// development rather than a leak.
+		if p.Kind == auth.KindKey && p.Access != auth.AccessEvaluate && r.Header.Get("Origin") != "" {
+			forbidden(w, r, fmt.Sprintf("%s keys must not be used in browsers, where anyone can copy them; use an evaluate key", p.Access))
 			return
 		}
 

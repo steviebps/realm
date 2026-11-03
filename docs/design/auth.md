@@ -108,6 +108,11 @@ are:
 - `read`, for server SDKs: it may read and watch chambers and their history.
 - `write`, for automation: it may also change chambers.
 
+Each level includes the ones before it, but `read` and `write` keys are
+secrets: the evaluate endpoint refuses them on requests from a browser (those
+with an `Origin` header), so one cannot be shipped in front-end code by
+mistake.
+
 A key works only for chambers at its path or beneath it (`/prod/` covers
 `/prod/` and `/prod/checkout/`, but not `/production/`). Keys cannot manage
 keys or change the catalog.
@@ -159,7 +164,7 @@ config file.
 | `GET /v1/auth/callback/<provider>` | none | finishes sign-in, sets the session cookie |
 | `POST /v1/auth/logout` | none | clears the session cookie |
 | `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)` |
-| `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user; CORS-enabled for bearer tokens |
+| `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user; only evaluate keys when the request has an `Origin` header; CORS-enabled for bearer tokens |
 | `/v1/catalog…` | key or session | read: anyone authenticated except evaluate keys, write: admin |
 | `/v1/keys…` | admin session | key management |
 | `/ui/` | none | static assets; the app shows the sign-in screen |
