@@ -36,6 +36,47 @@ the standard AWS / Google credential chains, so workload identity on
 Kubernetes works without extra configuration. `GET /healthz` is a liveness
 endpoint suitable for probes.
 
+### client
+
+`realm client` talks to a running server. Set the server with `--address`
+(or `client.address` in the config file).
+
+```bash
+realm client list /                                 # chambers beneath a path
+realm client get /prod/checkout/                    # one chamber, as JSON
+realm client put /prod/checkout/                    # create an empty chamber
+realm client delete /prod/checkout/
+```
+
+When the server has authentication enabled, pass an API key. The CLI reads
+`--token` first, then `$REALM_TOKEN`, then `client.token` in the config file:
+
+```bash
+export REALM_TOKEN=realm_…
+realm client --address https://realm.example.com get /prod/checkout/
+```
+
+### API keys
+
+Administrators manage keys in the UI ("API keys" in the header menu). For
+headless setups, and to create the first key, `realm keys` works directly on
+the storage named by a server config. It needs no running server and no
+sign-in.
+
+```bash
+# read keys for SDKs, write keys for automation; a key covers its path and everything beneath it
+realm keys create --config realm.json --name checkout --access read --path /prod/
+realm keys create --config realm.json --name ci --access write --path /
+
+realm keys list   --config realm.json
+realm keys revoke --config realm.json <id>
+```
+
+`create` prints the token once; only a hash of it is stored. A running server
+picks up new keys immediately and revocations within 30 seconds. BoltDB is
+locked while a server is running, so stop the server first or use the UI. The
+in-memory `bigcache` backend can't be used with `realm keys`.
+
 ## example code snippets
 
 ```go
