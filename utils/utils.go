@@ -32,15 +32,24 @@ func WriteInterfaceWith(w io.Writer, v any, pretty bool) error {
 	return enc.Encode(v)
 }
 
+// ReadInterfaceWith decodes a single JSON value from r into v, rejecting
+// unknown fields. An empty input is not an error and leaves v untouched; use
+// ReadRequiredInterfaceWith when a value must be present.
 func ReadInterfaceWith(r io.Reader, v any) error {
-	dec := json.NewDecoder(r)
-	dec.DisallowUnknownFields()
-
-	if err := dec.Decode(v); err != nil && err != io.EOF {
+	if err := ReadRequiredInterfaceWith(r, v); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 
 	return nil
+}
+
+// ReadRequiredInterfaceWith is like ReadInterfaceWith but returns io.EOF when r
+// holds no JSON value, so callers can tell an empty body from an empty object.
+func ReadRequiredInterfaceWith(r io.Reader, v any) error {
+	dec := json.NewDecoder(r)
+	dec.DisallowUnknownFields()
+
+	return dec.Decode(v)
 }
 
 func OpenFile(fileName string) (io.ReadCloser, error) {
