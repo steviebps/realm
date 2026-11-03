@@ -1,28 +1,27 @@
-import { resolve } from 'path';
+import { resolve } from 'node:path';
 import { defineConfig, UserConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+import react, { reactCompilerPreset } from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
 import basicSsl from '@vitejs/plugin-basic-ssl';
-import tailwindcss from "@tailwindcss/vite";
-import flowbiteReact from "flowbite-react/plugin/vite";
-
-const ReactCompilerConfig = {
-  target: '18' // '17' | '18' | '19'
-};
+import tailwindcss from '@tailwindcss/vite';
+import flowbiteReact from 'flowbite-react/plugin/vite';
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }): UserConfig => {
   return {
-    plugins: [basicSsl(), react({
-      babel: {
-        plugins: [
-          ["babel-plugin-react-compiler", ReactCompilerConfig],
-        ],
-      },
-    }), tailwindcss(), flowbiteReact()],
+    plugins: [basicSsl(), react(), babel({ presets: [reactCompilerPreset()] }), tailwindcss(), flowbiteReact()],
     base: '/ui',
     build: {
-      rollupOptions: {
-        input: resolve(__dirname, 'index.html'),
+      rolldownOptions: {
+        input: resolve(import.meta.dirname, 'index.html'),
+        output: {
+          codeSplitting: {
+            groups: [
+              { name: 'react', test: /node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/ },
+              { name: 'vendor', test: /node_modules[\\/]/ },
+            ],
+          },
+        },
       },
       minify: true,
       sourcemap: mode === 'development',

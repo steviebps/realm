@@ -1,6 +1,6 @@
 import { Button, Drawer, DrawerHeader, DrawerItems, Spinner } from 'flowbite-react';
 import { HiClock } from 'react-icons/hi';
-import { useQuery } from 'react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getHistory } from '../api';
 
 type Props = {
@@ -14,7 +14,11 @@ type Props = {
 const operationLabel = { put: 'saved', patch: 'patched', delete: 'deleted' } as const;
 
 export const HistoryDrawer = ({ path, open, onClose, onRestore }: Props) => {
-  const { data, isLoading, error } = useQuery(['history', path], () => getHistory(path), { enabled: open });
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['history', path],
+    queryFn: () => getHistory(path),
+    enabled: open,
+  });
 
   return (
     <Drawer open={open} onClose={onClose} position="right" className="w-full max-w-md">

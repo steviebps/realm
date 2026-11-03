@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Badge, Button, Card, Label, Select, Spinner, TextInput } from 'flowbite-react';
 import { HiClock, HiPencil, HiPlus, HiTrash } from 'react-icons/hi';
-import { useQuery, useQueryClient } from 'react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
 import { Chamber, Flag, RuleType } from '../models/response';
 import { diffChambers, formatValue } from '../utils/describe';
@@ -46,8 +46,8 @@ const summarize = (flag: Flag) => {
 export const ChamberView = ({ path }: { path: string }) => {
   const queryClient = useQueryClient();
   const { canEdit } = useSession();
-  const { data, isLoading, error } = useQuery(['chamber', path], () => getChamber(path));
-  const { data: catalog = {} } = useQuery('catalog', getCatalog);
+  const { data, isLoading, error } = useQuery({ queryKey: ['chamber', path], queryFn: () => getChamber(path) });
+  const { data: catalog = {} } = useQuery({ queryKey: ['catalog'], queryFn: getCatalog });
   const [editing, setEditing] = useState<{ name: string; flag: Flag; isNew: boolean } | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -79,8 +79,8 @@ export const ChamberView = ({ path }: { path: string }) => {
       setProposal(null);
       setEditing(null);
       await Promise.all([
-        queryClient.invalidateQueries(['chamber', path]),
-        queryClient.invalidateQueries(['history', path]),
+        queryClient.invalidateQueries({ queryKey: ['chamber', path] }),
+        queryClient.invalidateQueries({ queryKey: ['history', path] }),
       ]);
     } catch (err) {
       if (err instanceof ConflictError) {
