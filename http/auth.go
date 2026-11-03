@@ -13,11 +13,15 @@ import (
 )
 
 // publicPaths need no credentials: liveness, the UI's static assets, and
-// sign-in itself. Every other route refuses requests without them.
+// sign-in itself. Every other route refuses requests without them. A path
+// ending in "/" also covers the path without it, so "/ui" reaches the
+// router's redirect to "/ui/".
 var publicPaths = []string{"/healthz", "/ui/", "/v1/auth/"}
 
 func isPublic(path string) bool {
-	return slices.ContainsFunc(publicPaths, func(p string) bool { return strings.HasPrefix(path, p) })
+	return slices.ContainsFunc(publicPaths, func(p string) bool {
+		return strings.HasPrefix(path, p) || path == strings.TrimSuffix(p, "/")
+	})
 }
 
 // withPrincipal identifies the caller of every request and stores it in the
