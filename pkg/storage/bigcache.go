@@ -12,6 +12,7 @@ import (
 
 	"github.com/allegro/bigcache/v3"
 	"github.com/steviebps/realm/helper/logging"
+	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -166,7 +167,15 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 	default:
 	}
 
-	return f.underlying.Delete(path.Join(dir, key))
+	if err := f.underlying.Delete(path.Join(dir, key)); err != nil {
+		span.RecordError(err)
+		if errors.Is(err, bigcache.ErrEntryNotFound) {
+			return &NotFoundError{logicalPath}
+		}
+		return err
+	}
+
+	return nil
 }
 
 func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, error) {
@@ -181,17 +190,29 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 		return nil, err
 	}
 
-	names := make([]string, 0)
+	// Keys look like "/a/b/_bc". Like the other backends, report the entry at
+	// the prefix itself as "." and each immediate child as "name/", once.
+	prefix = utils.EnsureTrailingSlash(prefix)
+	set := make(map[string]struct{})
 	iterator := f.underlying.Iterator()
 	for iterator.SetNext() {
 		record, err := iterator.Value()
 		if err != nil {
-			return names, err
+			return nil, err
 		}
-		key := record.Key()
-		if strings.HasPrefix(key, prefix) {
-			names = append(names, path.Dir(strings.TrimPrefix(key, prefix)))
+		rest, ok := strings.CutPrefix(record.Key(), prefix)
+		if !ok {
+			continue
 		}
+		if child, _, nested := strings.Cut(rest, "/"); nested {
+			set[child+"/"] = struct{}{}
+		} else {
+			set["."] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
 	}
 
 	select {
