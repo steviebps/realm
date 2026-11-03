@@ -1,6 +1,7 @@
 import { evaluateChamber, flagValue, typedValue, VERSION_ATTRIBUTE } from './evaluate.js';
+import { Snapshot } from './snapshot.js';
 import { Transport, type ClientOptions } from './transport.js';
-import type { Chamber, EvaluatedFlags, EvaluationContext } from './types.js';
+import type { Chamber, EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
 /** Options for a ServerClient. */
 export interface ServerClientOptions extends ClientOptions {
@@ -21,9 +22,7 @@ export class ServerClient {
   readonly #transport: Transport;
   readonly #options: ServerClientOptions;
   readonly #defaults: Record<string, string>;
-  readonly #listeners = new Set<() => void>();
-  #chamber: Chamber = { rules: {} };
-  #raw = '';
+  readonly #chamber = new Snapshot<Chamber>({ rules: {} });
   #controller: AbortController | undefined;
 
   constructor(options: ServerClientOptions) {
@@ -41,17 +40,19 @@ export class ServerClient {
     if (this.#controller) return;
     const controller = new AbortController();
     this.#controller = controller;
-    const load = async () => this.#set(await this.#transport.request<Chamber>('chambers', { method: 'GET' }, controller.signal));
     try {
-      await load();
+      await this.#transport.follow(
+        'chambers',
+        { method: 'GET' },
+        'chamber',
+        this.#chamber,
+        this.#options.streaming ?? true,
+        this.#options.pollingInterval ?? defaultPollingInterval,
+        controller.signal,
+      );
     } catch (e) {
       this.#controller = undefined;
       throw e;
-    }
-    if (this.#options.streaming ?? true) {
-      void this.#transport.watch('chambers', { method: 'GET' }, 'chamber', (data) => this.#set(JSON.parse(data) as Chamber), controller.signal);
-    } else {
-      this.#transport.poll(load, this.#options.pollingInterval ?? defaultPollingInterval, controller.signal);
     }
   }
 
@@ -63,8 +64,7 @@ export class ServerClient {
 
   /** Calls listener whenever the chamber changes. Returns a function that unsubscribes. */
   subscribe(listener: () => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    return this.#chamber.subscribe(listener);
   }
 
   /** The value of a boolean flag for context, or fallback. */
@@ -89,20 +89,12 @@ export class ServerClient {
 
   /** Every flag's value for context, for example to bootstrap a page. */
   allFlags(context: EvaluationContext = {}): EvaluatedFlags {
-    return evaluateChamber(this.#chamber, context, this.#defaults);
+    return evaluateChamber(this.#chamber.value, context, this.#defaults);
   }
 
-  #typed<T>(key: string, context: EvaluationContext = {}, want: Parameters<typeof typedValue>[2], fallback: T): T {
-    const flag = this.#chamber.rules[key];
+  #typed<T>(key: string, context: EvaluationContext = {}, want: FlagType, fallback: T): T {
+    const flag = this.#chamber.value.rules?.[key];
     if (!flag) return fallback;
     return typedValue(flag.type, flagValue(key, flag, context, this.#defaults), want, fallback);
-  }
-
-  #set(chamber: Chamber): void {
-    const raw = JSON.stringify(chamber);
-    if (raw === this.#raw) return;
-    this.#chamber = { rules: chamber?.rules ?? {} };
-    this.#raw = raw;
-    for (const listener of this.#listeners) listener();
   }
 }

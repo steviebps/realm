@@ -1,4 +1,5 @@
 import { typedValue } from './evaluate.js';
+import { Snapshot } from './snapshot.js';
 import { Transport, type ClientOptions } from './transport.js';
 import type { EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
@@ -22,12 +23,9 @@ interface Evaluation {
 export class BrowserClient {
   readonly #transport: Transport;
   readonly #options: BrowserClientOptions;
-  readonly #listeners = new Set<() => void>();
+  readonly #evaluation = new Snapshot<Evaluation>({ flags: {} });
   #context: EvaluationContext;
-  #flags: EvaluatedFlags = {};
-  #raw = '';
   #controller: AbortController | undefined;
-  #started = false;
 
   constructor(options: BrowserClientOptions) {
     this.#options = options;
@@ -40,12 +38,11 @@ export class BrowserClient {
    * background. It rejects when the first evaluation fails.
    */
   async start(): Promise<void> {
-    if (this.#started) return;
-    this.#started = true;
+    if (this.#controller) return;
     try {
       await this.#connect();
     } catch (e) {
-      this.#started = false;
+      this.#controller = undefined;
       throw e;
     }
   }
@@ -53,20 +50,18 @@ export class BrowserClient {
   /** Switches to a new context and re-evaluates every flag for it. */
   async identify(context: EvaluationContext): Promise<void> {
     this.#context = context;
-    if (this.#started) await this.#connect();
+    if (this.#controller) await this.#connect();
   }
 
   /** Stops refreshing. The last known values stay available. */
   stop(): void {
-    this.#started = false;
     this.#controller?.abort();
     this.#controller = undefined;
   }
 
   /** Calls listener whenever any flag's value changes. Returns a function that unsubscribes. */
   subscribe(listener: () => void): () => void {
-    this.#listeners.add(listener);
-    return () => this.#listeners.delete(listener);
+    return this.#evaluation.subscribe(listener);
   }
 
   /** The value of a boolean flag, or fallback. */
@@ -91,41 +86,28 @@ export class BrowserClient {
 
   /** Every flag's current value. */
   allFlags(): EvaluatedFlags {
-    return this.#flags;
+    return this.#evaluation.value.flags ?? {};
   }
 
   #typed<T>(key: string, want: FlagType, fallback: T): T {
-    const flag = this.#flags[key];
+    const flag = this.allFlags()[key];
     return flag ? typedValue(flag.type, flag.value, want, fallback) : fallback;
   }
 
-  // connect evaluates for the current context and replaces any refresh in
-  // progress for an earlier one, so results for an old context are dropped.
+  // connect evaluates for the current context, replacing any refresh for an
+  // earlier one, whose results are then dropped.
   async #connect(): Promise<void> {
     this.#controller?.abort();
     const controller = new AbortController();
     this.#controller = controller;
-    const { signal } = controller;
-    const init: RequestInit = { method: 'POST', body: JSON.stringify(this.#context) };
-    const apply = (e: Evaluation) => {
-      if (!signal.aborted) this.#set(e.flags);
-    };
-    const load = async () => apply(await this.#transport.request<Evaluation>('evaluate', init, signal));
-
-    await load();
-    if (signal.aborted) return;
-    if (this.#options.streaming ?? true) {
-      void this.#transport.watch('evaluate', init, 'flags', (data) => apply(JSON.parse(data) as Evaluation), signal);
-    } else {
-      this.#transport.poll(load, this.#options.pollingInterval ?? defaultPollingInterval, signal);
-    }
-  }
-
-  #set(flags: EvaluatedFlags): void {
-    const raw = JSON.stringify(flags);
-    if (raw === this.#raw) return;
-    this.#flags = flags ?? {};
-    this.#raw = raw;
-    for (const listener of this.#listeners) listener();
+    await this.#transport.follow(
+      'evaluate',
+      { method: 'POST', body: JSON.stringify(this.#context) },
+      'flags',
+      this.#evaluation,
+      this.#options.streaming ?? true,
+      this.#options.pollingInterval ?? defaultPollingInterval,
+      controller.signal,
+    );
   }
 }

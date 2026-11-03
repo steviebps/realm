@@ -2,8 +2,8 @@
 // produce exactly what the Go SDK and server do; sdk/conformance/evaluation.json
 // holds the cases both run.
 
-import { canonical, compare, isValid } from './semver.js';
-import { sha1 } from './sha1.js';
+import { canonical, compareParsed, parse } from './semver.js';
+import { sha1Words } from './sha1.js';
 import type { Chamber, Clause, EvaluatedFlags, EvaluationContext, Flag, FlagType, Rollout } from './types.js';
 
 /** The attribute name under which `EvaluationContext.key` is exposed. */
@@ -22,10 +22,11 @@ const encoder = new TextEncoder();
  * SHA-1("<seed>.<key>"), scaled.
  */
 export function bucket(seed: string, key: string): number {
-  const sum = sha1(encoder.encode(`${seed}.${key}`));
-  let val = 0n;
-  for (let i = 0; i < 8; i++) val = (val << 8n) | BigInt(sum[i]!);
-  return (Number(val >> 4n) / LONG_SCALE) * 100;
+  const [h0, h1] = sha1Words(encoder.encode(`${seed}.${key}`));
+  // Both terms are exact; adding them rounds the 60-bit value to the nearest
+  // double, exactly as Go's float64(uint64) conversion does.
+  const val = h0! * 2 ** 28 + (h1! >>> 4);
+  return (val / LONG_SCALE) * 100;
 }
 
 /**
@@ -60,9 +61,11 @@ export function clauseMatches(
       return clause.values.some((want) => v.startsWith(want));
     case 'semverGte':
     case 'semverLte': {
-      const have = canonical(v);
-      if (!isValid(have)) return false;
-      const cmp = compare(have, canonical(clause.values[0] ?? ''));
+      const have = parse(canonical(v));
+      if (!have) return false;
+      const bound = parse(canonical(clause.values[0] ?? ''));
+      // a valid version is greater than an invalid bound, as in Go
+      const cmp = bound ? compareParsed(have, bound) : 1;
       return clause.op === 'semverGte' ? cmp >= 0 : cmp <= 0;
     }
     default:
@@ -113,17 +116,8 @@ export function evaluateChamber(
   return flags;
 }
 
-const jsTypes: Record<FlagType, string | undefined> = {
-  string: 'string',
-  number: 'number',
-  boolean: 'boolean',
-  custom: undefined,
-};
-
 /** Returns value when the flag has the wanted type, otherwise fallback. */
 export function typedValue<T>(type: FlagType | undefined, value: unknown, want: FlagType, fallback: T): T {
-  if (type !== want) return fallback;
-  const js = jsTypes[want];
-  if (js !== undefined && typeof value !== js) return fallback;
+  if (type !== want || (want !== 'custom' && typeof value !== want)) return fallback;
   return value as T;
 }

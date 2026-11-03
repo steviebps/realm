@@ -1,9 +1,21 @@
-/**
- * Returns the SHA-1 digest of data. SHA-1 is used only for rollout bucketing,
- * not for security; it is implemented here so evaluation stays synchronous in
- * every runtime (Web Crypto's digest is asynchronous).
- */
+// The message schedule, reused across calls.
+const w = new Uint32Array(80);
+
+/** Returns the SHA-1 digest of data. */
 export function sha1(data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(20);
+  const view = new DataView(out.buffer);
+  sha1Words(data).forEach((h, i) => view.setUint32(i * 4, h));
+  return out;
+}
+
+/**
+ * Returns the SHA-1 digest of data as five big-endian 32-bit words. SHA-1 is
+ * used only for rollout bucketing, not for security; it is implemented here so
+ * evaluation stays synchronous in every runtime (Web Crypto's digest is
+ * asynchronous).
+ */
+export function sha1Words(data: Uint8Array): Uint32Array {
   // Pad to a multiple of 64 bytes: 0x80, zeros, then the bit length.
   const total = Math.ceil((data.length + 9) / 64) * 64;
   const msg = new Uint8Array(total);
@@ -19,7 +31,6 @@ export function sha1(data: Uint8Array): Uint8Array {
   let h2 = 0x98badcfe;
   let h3 = 0x10325476;
   let h4 = 0xc3d2e1f0;
-  const w = new Uint32Array(80);
 
   for (let off = 0; off < total; off += 64) {
     for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4);
@@ -63,8 +74,5 @@ export function sha1(data: Uint8Array): Uint8Array {
     h4 = (h4 + e) >>> 0;
   }
 
-  const out = new Uint8Array(20);
-  const outView = new DataView(out.buffer);
-  [h0, h1, h2, h3, h4].forEach((h, i) => outView.setUint32(i * 4, h));
-  return out;
+  return Uint32Array.of(h0, h1, h2, h3, h4);
 }

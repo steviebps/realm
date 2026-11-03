@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -122,14 +121,12 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	})
 }
 
-// isWatchRequest reports whether r is a request to stream changes: chambers
-// are watched with GET, evaluations with POST (the context is in the body).
+// isWatchRequest reports whether r asks to stream changes (?watch=true). Such
+// requests are exempt from the request timeout.
 func isWatchRequest(r *http.Request) bool {
-	if r.URL.Query().Get("watch") != "true" {
-		return false
-	}
-	return r.Method == http.MethodGet || (r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, evaluatePrefix))
+	return r.URL.Query().Get("watch") == "true"
 }
+
 func wrapCommonHandler(h http.Handler, logger *logging.TracedLogger) http.Handler {
 	meter := otel.Meter("github.com/steviebps/realm")
 	apiCounter, _ := meter.Int64Counter(

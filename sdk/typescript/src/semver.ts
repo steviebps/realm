@@ -3,7 +3,7 @@
 // prefix; "v1" and "v1.2" are shorthand for "v1.0.0" and "v1.2.0"; build
 // metadata is ignored.
 
-interface Parsed {
+export interface Parsed {
   major: string;
   minor: string;
   patch: string;
@@ -15,30 +15,21 @@ export function canonical(v: string): string {
   return v === '' || v[0] === 'v' ? v : 'v' + v;
 }
 
-/** Reports whether v (with its "v" prefix) is a valid semantic version. */
-export function isValid(v: string): boolean {
-  return parse(v) !== undefined;
-}
-
 /**
- * Compares two versions: -1 if v < w, 0 if equal, +1 if v > w. An invalid
- * version is less than every valid one, and equal to another invalid one.
+ * Compares two parsed versions: -1 if v < w, 0 if equal, +1 if v > w. Build
+ * metadata is ignored.
  */
-export function compare(v: string, w: string): number {
-  const pv = parse(v);
-  const pw = parse(w);
-  if (!pv && !pw) return 0;
-  if (!pv) return -1;
-  if (!pw) return 1;
+export function compareParsed(v: Parsed, w: Parsed): number {
   return (
-    compareInt(pv.major, pw.major) ||
-    compareInt(pv.minor, pw.minor) ||
-    compareInt(pv.patch, pw.patch) ||
-    comparePrerelease(pv.prerelease, pw.prerelease)
+    compareInt(v.major, w.major) ||
+    compareInt(v.minor, w.minor) ||
+    compareInt(v.patch, w.patch) ||
+    comparePrerelease(v.prerelease, w.prerelease)
   );
 }
 
-function parse(v: string): Parsed | undefined {
+/** Parses v (with its "v" prefix), or returns undefined when it is invalid. */
+export function parse(v: string): Parsed | undefined {
   if (v === '' || v[0] !== 'v') return undefined;
   const p: Parsed = { major: '', minor: '0', patch: '0', prerelease: '' };
   let rest: string;

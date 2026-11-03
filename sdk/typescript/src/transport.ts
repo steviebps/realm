@@ -1,3 +1,4 @@
+import type { Snapshot } from './snapshot.js';
 import { readEvents } from './sse.js';
 
 /** Options shared by both clients. */
@@ -110,6 +111,33 @@ export class Transport {
       }
       await sleep(backoff, signal);
       backoff = Math.min(backoff * 2, maxBackoff);
+    }
+  }
+
+  /**
+   * Loads route into snapshot, then keeps it current until signal aborts:
+   * over an event stream when streaming, otherwise by polling every interval
+   * milliseconds. It rejects when the first load fails.
+   */
+  async follow<T>(
+    route: 'chambers' | 'evaluate',
+    init: RequestInit,
+    event: string,
+    snapshot: Snapshot<T>,
+    streaming: boolean,
+    interval: number,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const load = async () => {
+      const data = await this.request<T>(route, init, signal);
+      if (!signal.aborted) snapshot.set(data);
+    };
+    await load();
+    if (signal.aborted) return;
+    if (streaming) {
+      void this.watch(route, init, event, (raw) => snapshot.setRaw(raw), signal);
+    } else {
+      this.poll(load, interval, signal);
     }
   }
 

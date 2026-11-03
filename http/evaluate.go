@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
@@ -40,6 +42,7 @@ type evaluateResponse struct {
 //	POST /v1/evaluate/<path>             → {"flags": {"<name>": {"type", "value"}}}
 //	POST /v1/evaluate/<path>?watch=true  → the same as server-sent events, re-sent when the values change
 func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
+	chambers := &parsedChambers{strg: strg}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -73,7 +76,7 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 
 		if isWatchRequest(r) {
 			streamEvents(w, r, brk, path, "flags", func(ctx context.Context) ([]byte, error) {
-				flags, err := evaluate(ctx, strg, path, ec)
+				flags, err := chambers.evaluate(ctx, path, ec)
 				if err != nil {
 					return nil, err
 				}
@@ -82,7 +85,7 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 			return
 		}
 
-		flags, err := evaluate(ctx, strg, path, ec)
+		flags, err := chambers.evaluate(ctx, path, ec)
 		if err != nil {
 			var nf *storage.NotFoundError
 			if errors.As(err, &nf) {
@@ -96,17 +99,50 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 	})
 }
 
+// parsedChambers evaluates chambers, keeping the last parsed version of each
+// path so the evaluation streams on a path share one parse per change rather
+// than each re-parsing the chamber on every write.
+type parsedChambers struct {
+	strg storage.Storage
+	mu   sync.Mutex
+	last map[string]parsedChamber
+}
+
+type parsedChamber struct {
+	raw     []byte
+	chamber *realm.Chamber
+}
+
 // evaluate resolves every flag of the chamber at path (as inherited) for ec.
-func evaluate(ctx context.Context, strg storage.Storage, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, error) {
-	entry, err := strg.Get(ctx, path)
+func (p *parsedChambers) evaluate(ctx context.Context, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, error) {
+	entry, err := p.strg.Get(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	var c realm.Chamber
-	if err := json.Unmarshal(entry.Value, &c); err != nil {
-		return nil, fmt.Errorf("could not read chamber %s: %w", path, err)
+	c, err := p.parse(path, entry.Value)
+	if err != nil {
+		return nil, err
 	}
 	return c.Evaluate(ec), nil
+}
+
+// parse returns the chamber stored as raw, reusing the last parse of path when
+// raw is unchanged. Parsed chambers are only read, so they are safe to share.
+func (p *parsedChambers) parse(path string, raw []byte) (*realm.Chamber, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if last, ok := p.last[path]; ok && bytes.Equal(last.raw, raw) {
+		return last.chamber, nil
+	}
+	var c realm.Chamber
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, fmt.Errorf("could not read chamber %s: %w", path, err)
+	}
+	if p.last == nil {
+		p.last = make(map[string]parsedChamber)
+	}
+	p.last[path] = parsedChamber{raw: bytes.Clone(raw), chamber: &c}
+	return &c, nil
 }
 
 // withCORS lets pages on any origin call the routes under prefix with a
