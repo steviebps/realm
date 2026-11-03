@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -83,6 +84,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	locks := &pathLocks{}
 
 	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, meta, locks, brk), "/v1/chambers/"))
+	mux.Handle("/v1/evaluate/", otelhttp.NewHandler(handleEvaluate(hc.Storage, brk), "/v1/evaluate/"))
 	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
 	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
 	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
@@ -98,7 +100,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	// publicPaths).
 	mux.HandleFunc("GET /healthz", handleHealth)
 
-	timeoutHandler := wrapWithTimeout(withPrincipal(authn, mux), hc.RequestTimeout)
+	timeoutHandler := wrapWithTimeout(withCORS(evaluatePrefix, withPrincipal(authn, mux)), hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler, logger)
 }
 
@@ -119,10 +121,12 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	})
 }
 
-// isWatchRequest reports whether r is a request to stream chamber changes.
+// isWatchRequest reports whether r asks to stream changes (?watch=true). Such
+// requests are exempt from the request timeout.
 func isWatchRequest(r *http.Request) bool {
-	return r.Method == http.MethodGet && r.URL.Query().Get("watch") == "true"
+	return r.URL.Query().Get("watch") == "true"
 }
+
 func wrapCommonHandler(h http.Handler, logger *logging.TracedLogger) http.Handler {
 	meter := otel.Meter("github.com/steviebps/realm")
 	apiCounter, _ := meter.Int64Counter(
@@ -441,10 +445,26 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 }
 
 // streamChamber holds an SSE connection open and pushes the chamber at path
-// whenever it changes. It sends the current chamber immediately, then re-sends
-// on every change signal from the broker, and emits periodic heartbeats so dead
-// connections and idle intermediaries are handled.
+// whenever it changes.
 func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage, brk *broker, path string) {
+	streamEvents(w, r, brk, path, "chamber", func(ctx context.Context) ([]byte, error) {
+		entry, err := strg.Get(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return entry.Value, nil
+	})
+}
+
+// streamEvents holds an SSE connection open and sends the payload produced by
+// current as a single event: once at the start, then again whenever the broker
+// signals a change at or above path and the payload differs from the last one
+// sent. It emits periodic heartbeats so dead connections and idle
+// intermediaries are handled. Payloads must be single-line (compact JSON).
+//
+// A payload whose source does not exist yet is not fatal: the stream waits for
+// it to be created. Any other error closes the stream.
+func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, current func(context.Context) ([]byte, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
@@ -459,18 +479,20 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	// Commit the headers now, so clients see the stream open even while
+	// they wait for the payload's source to be created.
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
 	signals, unsubscribe := brk.Subscribe(path)
 	defer unsubscribe()
 
-	// send writes the current chamber as a single SSE event. Stored chamber
-	// values are compact JSON (single line), so they are safe as SSE data.
-	// It returns false when the connection should be torn down.
+	var last []byte
+	// send writes the current payload unless it is unchanged. It returns
+	// false when the connection should be torn down.
 	send := func() bool {
-		entry, err := strg.Get(ctx, path)
+		data, err := current(ctx)
 		if err != nil {
-			// A not-yet-existing chamber is not fatal for a stream; wait for it
-			// to be created rather than closing the connection.
 			var nfError *storage.NotFoundError
 			if errors.As(err, &nfError) {
 				return true
@@ -478,10 +500,14 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 			logger.ErrorCtx(ctx).Str("path", path).Msg(err.Error())
 			return false
 		}
-		if _, err := fmt.Fprintf(w, "event: chamber\ndata: %s\n\n", entry.Value); err != nil {
+		if last != nil && bytes.Equal(data, last) {
+			return true
+		}
+		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
 			return false
 		}
 		flusher.Flush()
+		last = data
 		return true
 	}
 

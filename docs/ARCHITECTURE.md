@@ -180,7 +180,7 @@ Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
 | Cross-replica stream fanout (multi-instance) | ⬜ Next | broker is process-local today |
 | SDK API keys + OIDC/GitHub sign-in for the UI, roles | ✅ Done | `auth/`, `http/auth.go` |
-| TypeScript SDK + server-side evaluation endpoint | ⬜ Next | new clients against `/v1/chambers` |
+| TypeScript SDK + server-side evaluation endpoint | ✅ Done | `sdk/typescript`, `http/evaluate.go`, shared cases in `sdk/conformance` |
 | Audit log of flag changes | ✅ Done | per-chamber history with the authenticated actor (`http/meta.go`) |
 | Multi-language SDKs | ⬜ Next | new clients against `/v1/chambers` |
 | UI editing of targeting, rollouts, diff confirmation, history/restore | ✅ Done | `http/realm-ui` |

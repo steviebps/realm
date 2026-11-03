@@ -26,10 +26,13 @@ limited to a **deterministic percentage rollout**. The SDK stays current by
 offers ETag optimistic concurrency, per-chamber change history, and an
 attribute catalog (value → label) for the UI; storage includes S3. Optional
 auth: path-scoped read/write **API keys** for SDKs and automation, and
-OIDC / GitHub **sign-in** with viewer / editor / admin roles for the UI. Not
-yet built: a TypeScript SDK and server-side evaluation endpoint, Postgres
-storage, and cross-replica fanout (run one replica). See
-`docs/ARCHITECTURE.md`, `docs/design/targeting.md`, and `docs/design/auth.md`.
+OIDC / GitHub **sign-in** with viewer / editor / admin roles for the UI.
+Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
+public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
+which also evaluates locally for Node services. Not yet built: Postgres
+storage and cross-replica fanout (run one replica). See
+`docs/ARCHITECTURE.md`, `docs/design/targeting.md`, `docs/design/auth.md`, and
+`docs/design/evaluation.md`.
 
 **Open source:** keep consumer- or company-specific names out of code, docs,
 examples, and tests; use generic terms (tenant, location, service).
@@ -69,10 +72,10 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   stored under the reserved `/_realm/` prefix in the raw storage beneath the
   `inheritable` wrapper.
 - **Principal** (`auth/`) — the caller of a request: an API key (`Access`
-  read/write, `Path` scope), a signed-in user (`Role`), or `auth.Anonymous`
+  evaluate/read/write, `Path` scope), a signed-in user (`Role`), or `auth.Anonymous`
   when the server has no `auth` config. Handlers read it with
-  `auth.FromContext(ctx)` and check `CanRead(path)` / `CanWrite(path)` /
-  `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted
+  `auth.FromContext(ctx)` and check `CanEvaluate(path)` / `CanRead(path)` /
+  `CanWrite(path)` / `CanReadCatalog()` / `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted
   cookies; roles are recomputed from config on every request.
 
 ## Architecture map
@@ -85,7 +88,9 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions` |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
-| `http/` | Server handler (`handler.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI embedding (`assets.go` behind the `ui` build tag; `assets_stub.go` fallback), `realm-ui/` React app |
+| `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`) and `BrowserClient` (server evaluation) |
+| `sdk/conformance/` | `evaluation.json`: evaluation cases the Go (`pkg/conformance_test.go`) and TypeScript tests both run |
+| `http/` | Server handler (`handler.go`), evaluation endpoint and CORS (`evaluate.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI embedding (`assets.go` behind the `ui` build tag; `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |
 | `trace/otel.go` | OpenTelemetry setup |
 | `helper/logging/` | zerolog `TracedLogger` (context-aware, trace-correlated) |
@@ -105,6 +110,7 @@ make fmt          # gofmt -w
 make vet          # go vet ./...
 make run          # go run . server --dev   (bigcache, port 8080)
 make tidy         # go mod tidy
+make sdk-test     # typecheck, test, and build the TypeScript SDK
 ```
 
 The server needs a config unless in dev mode: `realm server --config ./configs/realm.json`.
@@ -131,8 +137,10 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
 
 - **Add a targeting operator:** add an `Operator` constant in
   `pkg/targeting.go`, validate its values in `Clause.validate`, match it in
-  `Clause.Matches`, add table cases to `pkg/targeting_test.go`, and add a label
-  in `http/realm-ui/src/utils/describe.ts`. No server change is needed —
+  `Clause.Matches`, add table cases to `pkg/targeting_test.go`, port it to
+  `sdk/typescript/src/evaluate.ts`, add cases to
+  `sdk/conformance/evaluation.json`, and add a label in
+  `http/realm-ui/src/utils/describe.ts`. No server change is needed —
   `http/handler.go` persists chambers by unmarshaling into `realm.Chamber` and
   re-marshaling, so tagged fields round-trip automatically.
 - **Add a storage backend:** implement `storage.Storage`, register it in

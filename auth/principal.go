@@ -51,14 +51,25 @@ func (r *Role) UnmarshalText(b []byte) error {
 type Access string
 
 const (
+	// AccessEvaluate allows only evaluating flags for a context. Evaluate keys
+	// are meant for browsers: they reveal values, never the rules behind them.
+	AccessEvaluate Access = "evaluate"
 	// AccessRead allows reading and watching chambers and their history.
 	AccessRead Access = "read"
 	// AccessWrite also allows creating, changing, and deleting chambers.
 	AccessWrite Access = "write"
 )
 
+// accessRank orders access levels: each includes everything below it.
+var accessRank = map[Access]int{AccessEvaluate: 1, AccessRead: 2, AccessWrite: 3}
+
 func (a Access) valid() bool {
-	return a == AccessRead || a == AccessWrite
+	return accessRank[a] > 0
+}
+
+// atLeast reports whether a is valid and includes min.
+func (a Access) atLeast(min Access) bool {
+	return a.valid() && accessRank[a] >= accessRank[min]
 }
 
 // Kind identifies how a principal authenticated.
@@ -91,26 +102,45 @@ type Principal struct {
 // Anonymous is the principal of every request when authentication is off.
 var Anonymous = &Principal{Kind: KindAnonymous, ID: "anonymous", Role: RoleAdmin}
 
+// CanEvaluate reports whether p may evaluate the flags of the chamber at path
+// for a context.
+func (p *Principal) CanEvaluate(path string) bool {
+	return p.allows(AccessEvaluate, RoleViewer, path)
+}
+
 // CanRead reports whether p may read the chamber at path (and its history).
 func (p *Principal) CanRead(path string) bool {
-	if p == nil {
-		return false
-	}
-	if p.Kind == KindKey {
-		return p.Access.valid() && covers(p.Path, path)
-	}
-	return p.Role >= RoleViewer
+	return p.allows(AccessRead, RoleViewer, path)
 }
 
 // CanWrite reports whether p may create, change, or delete the chamber at path.
 func (p *Principal) CanWrite(path string) bool {
+	return p.allows(AccessWrite, RoleEditor, path)
+}
+
+// CanReadCatalog reports whether p may read the attribute catalog, which maps
+// attribute values to labels. It needs read access, so evaluate keys (which
+// are public) may not.
+func (p *Principal) CanReadCatalog() bool {
 	if p == nil {
 		return false
 	}
 	if p.Kind == KindKey {
-		return p.Access == AccessWrite && covers(p.Path, path)
+		return p.Access.atLeast(AccessRead)
 	}
-	return p.Role >= RoleEditor
+	return p.Role >= RoleViewer
+}
+
+// allows reports whether p has at least access (for keys, at path) or role
+// (for users).
+func (p *Principal) allows(access Access, role Role, path string) bool {
+	if p == nil {
+		return false
+	}
+	if p.Kind == KindKey {
+		return p.Access.atLeast(access) && covers(p.Path, path)
+	}
+	return p.Role >= role
 }
 
 // IsAdmin reports whether p may manage API keys and the catalog. API keys are

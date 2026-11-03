@@ -42,6 +42,25 @@ func (c *Chamber) OverwriteFrom(overwrittenFrom *Chamber) {
 	}
 }
 
+// EvaluatedFlag is the result of evaluating one flag for a context: its type
+// and the value the context receives, without the rules that produced it.
+type EvaluatedFlag struct {
+	Type  string      `json:"type"`
+	Value interface{} `json:"value"`
+}
+
+// Evaluate resolves every flag in the chamber for ec.
+func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
+	flags := make(map[string]EvaluatedFlag, len(c.Rules))
+	for key, f := range c.Rules {
+		if f == nil || f.Rule == nil {
+			continue
+		}
+		flags[key] = EvaluatedFlag{Type: f.Type, Value: f.ValueFor(key, ec)}
+	}
+	return flags
+}
+
 // ChamberEntry is a read-only version of Chamber
 // it is specifically used for realm clients
 type ChamberEntry struct {

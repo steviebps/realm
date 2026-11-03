@@ -1,0 +1,694 @@
+{
+  "description": "Evaluation cases shared by the Go SDK (pkg/conformance_test.go) and the TypeScript SDK. Every implementation must produce exactly these results.",
+  "buckets": [
+    {
+      "seed": "beta",
+      "key": "user-1",
+      "bucket": 39.769672124032276
+    },
+    {
+      "seed": "beta",
+      "key": "user-2",
+      "bucket": 38.23848322464815
+    },
+    {
+      "seed": "beta",
+      "key": "user-3",
+      "bucket": 46.49751992733679
+    },
+    {
+      "seed": "beta",
+      "key": "user-4",
+      "bucket": 61.11975746502208
+    },
+    {
+      "seed": "beta",
+      "key": "user-5",
+      "bucket": 83.16177696636974
+    },
+    {
+      "seed": "beta",
+      "key": "user-6",
+      "bucket": 18.68609448699586
+    },
+    {
+      "seed": "shared",
+      "key": "acme",
+      "bucket": 53.760552534421294
+    },
+    {
+      "seed": "shared",
+      "key": "globex",
+      "bucket": 28.277783518133866
+    },
+    {
+      "seed": "",
+      "key": "x",
+      "bucket": 71.34726720233809
+    },
+    {
+      "seed": "beta",
+      "key": "üser-ß",
+      "bucket": 92.8581021633544
+    },
+    {
+      "seed": "beta",
+      "key": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "bucket": 38.09361805560725
+    }
+  ],
+  "semver": [
+    {
+      "op": "semverGte",
+      "bound": "1.2.0",
+      "version": "1.10.0",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "v1.2.0",
+      "version": "1.2.0",
+      "match": true
+    },
+    {
+      "op": "semverLte",
+      "bound": "1.2.0",
+      "version": "v1.2.0",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "2.0.0",
+      "version": "2.0.0-rc.1",
+      "match": false
+    },
+    {
+      "op": "semverLte",
+      "bound": "2.0.0-rc.1",
+      "version": "2.0.0-beta.11",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.0.0-beta.2",
+      "version": "1.0.0-beta.11",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.0.0-alpha.1",
+      "version": "1.0.0-alpha.beta",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.0.0-alpha",
+      "version": "1.0.0-alpha.1",
+      "match": true
+    },
+    {
+      "op": "semverLte",
+      "bound": "1.0.0-alpha.1",
+      "version": "1.0.0-alpha",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.0.0",
+      "version": "v1",
+      "match": true
+    },
+    {
+      "op": "semverLte",
+      "bound": "1.0.0",
+      "version": "v1",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.2.0",
+      "version": "v1.2",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.2.1",
+      "version": "v1.2",
+      "match": false
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.0.0",
+      "version": "1.0.0+build.5",
+      "match": true
+    },
+    {
+      "op": "semverLte",
+      "bound": "1.0.0",
+      "version": "1.0.0+build",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "0.0.1",
+      "version": "01.2.3",
+      "match": false
+    },
+    {
+      "op": "semverGte",
+      "bound": "0.0.1",
+      "version": "1.2.3.4",
+      "match": false
+    },
+    {
+      "op": "semverGte",
+      "bound": "0.0.1",
+      "version": "v1.2-beta",
+      "match": false
+    },
+    {
+      "op": "semverGte",
+      "bound": "0.0.1",
+      "version": "latest",
+      "match": false
+    },
+    {
+      "op": "semverGte",
+      "bound": "0.0.1",
+      "version": "",
+      "match": false
+    },
+    {
+      "op": "semverLte",
+      "bound": "1.0.0",
+      "version": "1.0.0-01",
+      "match": false
+    },
+    {
+      "op": "semverGte",
+      "bound": "1.0.0-x-y",
+      "version": "1.0.0-x-y",
+      "match": true
+    },
+    {
+      "op": "semverLte",
+      "bound": "10.0.0",
+      "version": "9.99.99",
+      "match": true
+    },
+    {
+      "op": "semverGte",
+      "bound": "10.0.0",
+      "version": "9.99.99",
+      "match": false
+    }
+  ],
+  "cases": [
+    {
+      "name": "default values of every type",
+      "chamber": {
+        "rules": {
+          "s": {
+            "type": "string",
+            "value": "hello"
+          },
+          "n": {
+            "type": "number",
+            "value": 10.5
+          },
+          "b": {
+            "type": "boolean",
+            "value": true
+          },
+          "c": {
+            "type": "custom",
+            "value": {
+              "a": [
+                1,
+                2
+              ],
+              "b": null
+            }
+          },
+          "c-target": {
+            "type": "custom",
+            "value": {
+              "x": 1
+            },
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": [
+                  "list",
+                  2
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": {},
+          "expect": {
+            "s": "hello",
+            "n": 10.5,
+            "b": true,
+            "c": {
+              "a": [
+                1,
+                2
+              ],
+              "b": null
+            },
+            "c-target": {
+              "x": 1
+            }
+          }
+        },
+        {
+          "context": {
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "s": "hello",
+            "n": 10.5,
+            "b": true,
+            "c": {
+              "a": [
+                1,
+                2
+              ],
+              "b": null
+            },
+            "c-target": [
+              "list",
+              2
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "operators, AND, and first match",
+      "chamber": {
+        "rules": {
+          "tenant-in": {
+            "type": "string",
+            "value": "off",
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme",
+                      "globex"
+                    ]
+                  }
+                ],
+                "value": "on"
+              }
+            ]
+          },
+          "tenant-not-in": {
+            "type": "string",
+            "value": "off",
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "notIn",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": "on"
+              }
+            ]
+          },
+          "sha-prefix": {
+            "type": "string",
+            "value": "old",
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "buildSha",
+                    "op": "startsWith",
+                    "values": [
+                      "abc123",
+                      "def"
+                    ]
+                  }
+                ],
+                "value": "new"
+              }
+            ]
+          },
+          "and-first-match": {
+            "type": "number",
+            "value": 0,
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  },
+                  {
+                    "attribute": "environment",
+                    "op": "in",
+                    "values": [
+                      "prod"
+                    ]
+                  }
+                ],
+                "value": 1
+              },
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": 2
+              }
+            ]
+          },
+          "by-key": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "key",
+                    "op": "in",
+                    "values": [
+                      "user-1"
+                    ]
+                  }
+                ],
+                "value": true
+              }
+            ]
+          },
+          "no-clauses": {
+            "type": "string",
+            "value": "default",
+            "targeting": [
+              {
+                "value": "everyone"
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": {
+            "key": "user-1",
+            "attributes": {
+              "tenantId": "acme",
+              "environment": "prod",
+              "buildSha": "abc1234567"
+            }
+          },
+          "expect": {
+            "tenant-in": "on",
+            "tenant-not-in": "off",
+            "sha-prefix": "new",
+            "and-first-match": 1,
+            "by-key": true,
+            "no-clauses": "everyone"
+          }
+        },
+        {
+          "context": {
+            "key": "user-2",
+            "attributes": {
+              "tenantId": "acme",
+              "environment": "staging",
+              "buildSha": "de"
+            }
+          },
+          "expect": {
+            "tenant-in": "on",
+            "tenant-not-in": "off",
+            "sha-prefix": "old",
+            "and-first-match": 2,
+            "by-key": false,
+            "no-clauses": "everyone"
+          }
+        },
+        {
+          "context": {
+            "key": "user-3",
+            "attributes": {
+              "tenantId": "initech"
+            }
+          },
+          "expect": {
+            "tenant-in": "off",
+            "tenant-not-in": "on",
+            "sha-prefix": "old",
+            "and-first-match": 0,
+            "by-key": false,
+            "no-clauses": "everyone"
+          }
+        },
+        {
+          "context": {},
+          "expect": {
+            "tenant-in": "off",
+            "tenant-not-in": "off",
+            "sha-prefix": "old",
+            "and-first-match": 0,
+            "by-key": false,
+            "no-clauses": "everyone"
+          }
+        }
+      ]
+    },
+    {
+      "name": "process-wide default attributes",
+      "defaults": {
+        "environment": "prod",
+        "version": "2.1.0"
+      },
+      "chamber": {
+        "rules": {
+          "prod-only": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "environment",
+                    "op": "in",
+                    "values": [
+                      "prod"
+                    ]
+                  }
+                ],
+                "value": true
+              }
+            ]
+          },
+          "new-ui": {
+            "type": "string",
+            "value": "v1",
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "version",
+                    "op": "semverGte",
+                    "values": [
+                      "2.0.0"
+                    ]
+                  }
+                ],
+                "value": "v2"
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": {},
+          "expect": {
+            "prod-only": true,
+            "new-ui": "v2"
+          }
+        },
+        {
+          "context": {
+            "attributes": {
+              "environment": "staging",
+              "version": "1.9.0"
+            }
+          },
+          "expect": {
+            "prod-only": false,
+            "new-ui": "v1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "rollouts",
+      "chamber": {
+        "rules": {
+          "beta": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "rollout": {
+                  "percentage": 50
+                }
+              }
+            ]
+          },
+          "all": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "rollout": {
+                  "percentage": 100
+                }
+              }
+            ]
+          },
+          "none": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "rollout": {
+                  "percentage": 0
+                }
+              }
+            ]
+          },
+          "by-tenant": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "rollout": {
+                  "percentage": 50,
+                  "bucketBy": "tenantId",
+                  "seed": "shared"
+                }
+              }
+            ]
+          },
+          "fallthrough": {
+            "type": "string",
+            "value": "default",
+            "targeting": [
+              {
+                "value": "rolled",
+                "rollout": {
+                  "percentage": 50,
+                  "seed": "beta"
+                }
+              },
+              {
+                "value": "next"
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": {
+            "key": "user-1",
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "beta": true,
+            "all": true,
+            "none": false,
+            "by-tenant": false,
+            "fallthrough": "rolled"
+          }
+        },
+        {
+          "context": {
+            "key": "user-4",
+            "attributes": {
+              "tenantId": "globex"
+            }
+          },
+          "expect": {
+            "beta": false,
+            "all": true,
+            "none": false,
+            "by-tenant": true,
+            "fallthrough": "next"
+          }
+        },
+        {
+          "context": {
+            "key": "user-6"
+          },
+          "expect": {
+            "beta": true,
+            "all": true,
+            "none": false,
+            "by-tenant": false,
+            "fallthrough": "rolled"
+          }
+        },
+        {
+          "context": {
+            "attributes": {
+              "tenantId": "globex"
+            }
+          },
+          "expect": {
+            "beta": false,
+            "all": false,
+            "none": false,
+            "by-tenant": true,
+            "fallthrough": "next"
+          }
+        }
+      ]
+    }
+  ]
+}

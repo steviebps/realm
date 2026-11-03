@@ -35,6 +35,10 @@ test: ## Run all tests
 test-race: ## Run all tests with the race detector (CI gate)
 	go test -race ./...
 
+.PHONY: sdk-test
+sdk-test: ## Typecheck and test the TypeScript SDK
+	cd sdk/typescript && npm ci && npm run typecheck && npm test && npm run build
+
 .PHONY: bench
 bench: ## Run benchmarks
 	go test -run '^$$' -bench . -benchmem ./...

@@ -54,8 +54,9 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
       <DrawerHeader title="API keys" titleIcon={HiKey} />
       <DrawerItems className="flex flex-col gap-5">
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          Applications read flags with a <strong>read</strong> key; automation that changes flags needs a{' '}
-          <strong>write</strong> key. A key only works for chambers at or beneath its path.
+          Browsers use an <strong>evaluate</strong> key, which only reveals the values a user receives, so it is safe to
+          ship in front-end code. Backend services read flags with a <strong>read</strong> key; automation that changes
+          flags needs a <strong>write</strong> key. A key only works for chambers at or beneath its path.
         </p>
 
         {created && (
@@ -92,6 +93,7 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
             <div>
               <Label htmlFor="key-access">Access</Label>
               <Select id="key-access" value={access} onChange={(e) => setAccess(e.target.value as KeyAccess)}>
+                <option value="evaluate">evaluate</option>
                 <option value="read">read</option>
                 <option value="write">write</option>
               </Select>
@@ -120,7 +122,9 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
               <div className="min-w-0 text-sm">
                 <div className="flex items-center gap-2 font-medium">
                   <span className="truncate">{key.name}</span>
-                  <Badge color={key.access === 'write' ? 'warning' : 'info'}>{key.access}</Badge>
+                  <Badge color={key.access === 'write' ? 'warning' : key.access === 'evaluate' ? 'gray' : 'info'}>
+                    {key.access}
+                  </Badge>
                   <code className="text-xs text-gray-500">{key.path}</code>
                 </div>
                 <div className="text-gray-500">

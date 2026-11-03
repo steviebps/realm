@@ -4,7 +4,7 @@ realm has two kinds of callers, and each authenticates differently:
 
 | Caller | Credential | Can do |
 |---|---|---|
-| Applications (SDK), automation, the CLI | **API key**, sent as `Authorization: Bearer realm_…` | `read` or `write` chambers at or beneath the key's **path** |
+| Applications (SDKs, browsers), automation, the CLI | **API key**, sent as `Authorization: Bearer realm_…` | `evaluate`, `read`, or `write` chambers at or beneath the key's **path** |
 | People using the UI | **Sign-in** with an OIDC provider or GitHub, kept in a session cookie | depends on their **role**: viewer, editor, or admin |
 
 Authentication is **off unless the server config has an `auth` block**. Without
@@ -98,10 +98,19 @@ bootstrap token is needed.
 
 ## API keys
 
-A key has a **name**, an **access** level (`read` for SDKs, `write` for
-automation) and a **path**. It works only for chambers at that path or beneath
-it (`/prod/` covers `/prod/` and `/prod/checkout/`, but not `/production/`).
-Keys cannot manage keys or change the catalog.
+A key has a **name**, an **access** level and a **path**. The access levels
+are:
+
+- `evaluate`, for browsers: it may only evaluate flags for a context
+  (`POST /v1/evaluate/…`), which reveals values but never rules, so it is safe
+  in front-end code. It cannot read chambers, history, or the catalog. See
+  [evaluation.md](evaluation.md).
+- `read`, for server SDKs: it may read and watch chambers and their history.
+- `write`, for automation: it may also change chambers.
+
+A key works only for chambers at its path or beneath it (`/prod/` covers
+`/prod/` and `/prod/checkout/`, but not `/production/`). Keys cannot manage
+keys or change the catalog.
 
 Tokens look like `realm_<id>_<secret>`. realm stores only a SHA-256 hash of
 the secret, under the reserved `/_realm/keys/` prefix, and shows the token
@@ -150,7 +159,8 @@ config file.
 | `GET /v1/auth/callback/<provider>` | none | finishes sign-in, sets the session cookie |
 | `POST /v1/auth/logout` | none | clears the session cookie |
 | `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)` |
-| `/v1/catalog…` | key or session | read: anyone authenticated, write: admin |
+| `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user; CORS-enabled for bearer tokens |
+| `/v1/catalog…` | key or session | read: anyone authenticated except evaluate keys, write: admin |
 | `/v1/keys…` | admin session | key management |
 | `/ui/` | none | static assets; the app shows the sign-in screen |
 

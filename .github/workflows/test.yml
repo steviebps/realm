@@ -32,3 +32,23 @@ jobs:
         run: |
           go test ./...
           go test -race ./...
+
+  test-typescript-sdk:
+    name: "typescript sdk"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Test
+        working-directory: sdk/typescript
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build

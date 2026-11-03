@@ -109,7 +109,7 @@ func keyStore(cmd *cobra.Command) (*auth.KeyStore, error) {
 
 func init() {
 	keysCreateCmd.Flags().String("name", "", "a name describing who uses the key (required)")
-	keysCreateCmd.Flags().String("access", string(auth.AccessRead), `"read" for SDKs, "write" for automation`)
+	keysCreateCmd.Flags().String("access", string(auth.AccessRead), `"evaluate" for browsers, "read" for server SDKs, "write" for automation`)
 	keysCreateCmd.Flags().String("path", "/", "chamber path the key is limited to, including its children")
 	_ = keysCreateCmd.MarkFlagRequired("name")
 

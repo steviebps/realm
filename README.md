@@ -9,6 +9,9 @@ One binary gives you three things:
 - **A CLI** (`realm server`, `realm client`, `realm keys`).
 - **A Go SDK** that your application embeds to read flags from a local snapshot.
 
+A TypeScript SDK in [`sdk/typescript`](sdk/typescript) reads flags in Node
+services and in browsers.
+
 ## Features
 
 - **Typed flags:** `boolean`, `number`, `string`, and `custom` (any JSON).
@@ -20,6 +23,8 @@ One binary gives you three things:
 - **Safe editing:** ETag optimistic concurrency and per-chamber change history.
 - **Storage:** file, BoltDB, in-memory, Google Cloud Storage, and Amazon S3.
 - **Optional auth:** OIDC or GitHub sign-in with roles, and path-scoped API keys.
+- **Browsers and other languages:** the server evaluates flags for a context and
+  returns only the values, never the rules.
 
 ## Contents
 
@@ -29,6 +34,7 @@ One binary gives you three things:
 - [Run the server](#run-the-server)
 - [Manage flags](#manage-flags)
 - [Use the Go SDK](#use-the-go-sdk)
+- [Use the TypeScript SDK](#use-the-typescript-sdk)
 - [Authentication](#authentication)
 - [Reference](#reference)
 - [Documentation](#documentation)
@@ -266,6 +272,8 @@ realm client delete /prod/checkout/  # delete a chamber
 | `PATCH /v1/chambers/<path>` | Merges the body into the chamber. |
 | `DELETE /v1/chambers/<path>` | Deletes the chamber. |
 | `GET /v1/history/<path>` | Returns the change history of the chamber. |
+| `POST /v1/evaluate/<path>` | Evaluates every flag for the context in the body. Returns only the values. |
+| `POST /v1/evaluate/<path>?watch=true` | Streams the evaluated values as server-sent events. |
 | `GET /healthz` | Returns the health of the server. |
 
 To prevent lost updates, send `If-Match: <etag>` with a write. If the chamber
@@ -387,6 +395,41 @@ To watch a chamber without the SDK, use curl:
 curl -N 'http://localhost:8080/v1/chambers/root?watch=true'
 ```
 
+## Use the TypeScript SDK
+
+[`sdk/typescript`](sdk/typescript) has two clients. The package is not on npm
+yet; add it as a `file:` dependency from this repository.
+
+| Client | Use it in | API key | Where flags are evaluated |
+|---|---|---|---|
+| `ServerClient` | Node services | `read` | in your process, like the Go SDK |
+| `BrowserClient` | browsers | `evaluate` | on the server, so the rules stay private |
+
+```ts
+import { BrowserClient } from 'realm-sdk';
+
+const flags = new BrowserClient({
+  address: 'https://realm.example.com',
+  token: 'realm_…', // an evaluate key
+  path: '/prod/web/',
+  context: { key: userId, attributes: { tenantId } },
+});
+await flags.start();
+flags.bool('new-checkout', false);
+flags.subscribe(() => render()); // runs when a value changes
+```
+
+Both clients receive changes over server-sent events. For the options and the
+`ServerClient` API, refer to [sdk/typescript/README.md](sdk/typescript/README.md).
+
+Other languages can call the evaluation endpoint directly:
+
+```bash
+curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
+  -H "Authorization: Bearer $REALM_TOKEN" \
+  -d '{"key": "user-123", "attributes": {"tenantId": "acme"}}'
+```
+
 ## Authentication
 
 > [!WARNING]
@@ -397,9 +440,10 @@ Authentication has two parts:
 
 - **Sign-in** for the web UI, with any OIDC provider or GitHub. Each user gets
   the role `viewer`, `editor`, or `admin`.
-- **API keys** for applications and automation. A `read` key is for SDKs. A
-  `write` key is for automation. A key gives access to its path and to all
-  chambers below it.
+- **API keys** for applications and automation. An `evaluate` key is for
+  browsers: it can only evaluate flags, so you can put it in front-end code. A
+  `read` key is for server SDKs. A `write` key is for automation. A key gives
+  access to its path and to all chambers below it.
 
 For the `auth` config block, refer to [docs/design/auth.md](docs/design/auth.md).
 
@@ -468,6 +512,7 @@ realm client --address https://realm.example.com get /prod/checkout/
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the data model, request flow, storage, and roadmap.
 - [docs/design/targeting.md](docs/design/targeting.md): the targeting and rollout design.
 - [docs/design/auth.md](docs/design/auth.md): the authentication design and the `auth` config.
+- [docs/design/evaluation.md](docs/design/evaluation.md): server-side evaluation and the TypeScript SDK.
 - [CONTRIBUTING.md](CONTRIBUTING.md): build, test, and send a pull request.
 
 ## License

@@ -93,7 +93,7 @@ func (r *NewKeyRequest) validate() error {
 		return errors.New("name must be between 1 and 64 characters")
 	}
 	if !r.Access.valid() {
-		return fmt.Errorf("access must be %q or %q", AccessRead, AccessWrite)
+		return fmt.Errorf("access must be %q, %q, or %q", AccessEvaluate, AccessRead, AccessWrite)
 	}
 	if r.Path == "" {
 		r.Path = "/"
