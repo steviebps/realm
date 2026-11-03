@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"crypto/md5"
+	"errors"
 	"fmt"
 	"io"
 	"path"
@@ -145,6 +146,10 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 
 	err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).Delete(ctx)
 	if err != nil {
+		span.RecordError(err)
+		if errors.Is(err, gcs.ErrObjectNotExist) {
+			return &NotFoundError{logicalPath}
+		}
 		return fmt.Errorf("failed to delete: %w", err)
 	}
 

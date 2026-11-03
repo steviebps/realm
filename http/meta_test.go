@@ -301,3 +301,30 @@ func TestCatalog(t *testing.T) {
 		t.Errorf("second delete: expected 404, got %d", resp.StatusCode)
 	}
 }
+
+func TestEmptyBodyIsRejected(t *testing.T) {
+	srv := newInheritableTestServer(t)
+	url := srv.URL + "/v1/chambers/app/"
+	do(t, http.MethodPost, url, strings.Replace(flagBody, "%s", "false", 1), nil)
+
+	for _, method := range []string{http.MethodPost, http.MethodPatch} {
+		resp, out := do(t, method, url, "", nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s with empty body: expected 400, got %d", method, resp.StatusCode)
+		}
+		if len(out.Errors) == 0 || !strings.Contains(out.Errors[0], "must not be empty") {
+			t.Errorf("%s with empty body: expected an empty-body error, got %v", method, out.Errors)
+		}
+	}
+
+	// the rejected writes must not have wiped the chamber
+	_, out := do(t, http.MethodGet, url, "", nil)
+	if !strings.Contains(string(out.Data), "beta") {
+		t.Errorf("chamber was overwritten by an empty body: %s", out.Data)
+	}
+
+	resp, _ := do(t, http.MethodPost, srv.URL+"/v1/catalog/region", "", map[string]string{ActorHeader: "tester"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("catalog POST with empty body: expected 400, got %d", resp.StatusCode)
+	}
+}

@@ -72,15 +72,19 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	var file []byte
 	err := b.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte("chambers"))
-		file = bucket.Get([]byte(path))
+		// the slice returned by Get points into the memory-mapped database and
+		// is only valid for the life of the transaction, so copy it out
+		if v := bucket.Get([]byte(path)); v != nil {
+			file = bytes.Clone(v)
+		}
 		return nil
 	})
-	if file == nil {
-		err := &NotFoundError{logicalPath}
+	if err != nil {
 		span.RecordError(err)
 		return nil, err
 	}
-	if err != nil {
+	if file == nil {
+		err := &NotFoundError{logicalPath}
 		span.RecordError(err)
 		return nil, err
 	}
@@ -152,8 +156,10 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 
 	err := b.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("chambers"))
-		err := b.Delete([]byte(path))
-		return err
+		if b.Get([]byte(path)) == nil {
+			return &NotFoundError{logicalPath}
+		}
+		return b.Delete([]byte(path))
 	})
 
 	if err != nil {

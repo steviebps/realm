@@ -270,7 +270,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 		// Writes decode and validate their body before taking the path lock.
 		var body realm.Chamber
 		if req.Operation == PutOperation || req.Operation == PatchOperation {
-			if err := utils.ReadInterfaceWith(r.Body, &body); err != nil {
+			if err := utils.ReadRequiredInterfaceWith(r.Body, &body); err != nil {
 				if errors.Is(err, io.EOF) {
 					err = errors.New("request body must not be empty")
 				} else {
