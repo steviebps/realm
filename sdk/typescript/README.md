@@ -60,6 +60,10 @@ const unsubscribe = flags.subscribe(() => render()); // called when any value ch
 await flags.identify({ key: otherUser.id }); // re-evaluates for a new context
 ```
 
+Use only an `evaluate` key in a browser. The server refuses `read` and
+`write` keys on browser requests (`start` rejects with a 403), so shipping one
+by mistake fails in development instead of exposing your rules.
+
 ## React
 
 `realm-sdk/react` reads a `BrowserClient` from React 18 or later. Wrap the app

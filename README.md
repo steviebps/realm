@@ -487,8 +487,9 @@ Authentication has two parts:
   the role `viewer`, `editor`, or `admin`.
 - **API keys** for applications and automation. An `evaluate` key is for
   browsers: it can only evaluate flags, so you can put it in front-end code. A
-  `read` key is for server SDKs. A `write` key is for automation. A key gives
-  access to its path and to all chambers below it.
+  `read` key is for server SDKs. A `write` key is for automation. Keep `read`
+  and `write` keys secret: the server refuses them on requests from browsers.
+  A key gives access to its path and to all chambers below it.
 
 For the `auth` config block, refer to [docs/design/auth.md](docs/design/auth.md).
 

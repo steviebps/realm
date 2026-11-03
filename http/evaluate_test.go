@@ -173,3 +173,66 @@ func TestEvaluateKeys(t *testing.T) {
 		t.Errorf("viewer evaluate = %d, want 200", status)
 	}
 }
+
+func TestEvaluateRefusesSecretKeysFromBrowsers(t *testing.T) {
+	srv := newAuthTestServer(t)
+	admin := srv.signIn(t, "admin@example.com")
+	if status, _ := call(t, admin, http.MethodPost, srv.URL+"/v1/chambers/prod/web/", evaluateChild, ""); status != http.StatusCreated {
+		t.Fatalf("seed chamber = %d", status)
+	}
+	token := func(access string) string {
+		t.Helper()
+		status, out := call(t, admin, http.MethodPost, srv.URL+"/v1/keys", fmt.Sprintf(`{"name":%q,"access":%q,"path":"/prod/"}`, access, access), "")
+		var created createdKey
+		if status != http.StatusCreated || json.Unmarshal(out.Data, &created) != nil {
+			t.Fatalf("create %s key = %d %s", access, status, out.Data)
+		}
+		return created.Token
+	}
+	tokens := map[string]string{"evaluate": token("evaluate"), "read": token("read"), "write": token("write")}
+
+	tests := []struct {
+		name, access, origin string
+		want                 int
+	}{
+		{"evaluate key from a browser", "evaluate", "https://app.example.com", http.StatusOK},
+		{"evaluate key from a backend", "evaluate", "", http.StatusOK},
+		{"read key from a browser", "read", "https://app.example.com", http.StatusForbidden},
+		{"read key from a backend", "read", "", http.StatusOK},
+		{"write key from a browser", "write", "https://app.example.com", http.StatusForbidden},
+		{"write key from a browser on the server's origin", "write", srv.URL, http.StatusForbidden},
+		{"write key from a backend", "write", "", http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, path := range []string{"/v1/evaluate/prod/web/", "/v1/evaluate/prod/web/?watch=true"} {
+				req, _ := http.NewRequest(http.MethodPost, srv.URL+path, strings.NewReader(`{"key":"u1"}`))
+				req.Header.Set("Authorization", "Bearer "+tokens[tt.access])
+				if tt.origin != "" {
+					req.Header.Set("Origin", tt.origin)
+				}
+				res, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				res.Body.Close()
+				if res.StatusCode != tt.want {
+					t.Errorf("%s = %d, want %d", path, res.StatusCode, tt.want)
+				}
+				// the browser must be able to read why it was refused
+				if tt.origin != "" && res.Header.Get("Access-Control-Allow-Origin") != "*" {
+					t.Errorf("%s has no CORS header", path)
+				}
+			}
+		})
+	}
+
+	viewer := srv.signIn(t, "viewer@example.com")
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/evaluate/prod/web/", strings.NewReader(`{}`))
+	req.Header.Set("Origin", srv.URL)
+	if res, err := viewer.Do(req); err != nil || res.StatusCode != http.StatusOK {
+		t.Errorf("signed-in user from the UI = %v %v, want 200", res, err)
+	} else {
+		res.Body.Close()
+	}
+}

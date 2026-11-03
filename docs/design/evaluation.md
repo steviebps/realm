@@ -56,6 +56,15 @@ nothing else: it cannot read chambers, their history, or the catalog. It is
 meant to be shipped in front-end code, so treat it as public. It reveals the
 values a context would receive, never the rules behind them.
 
+`read` and `write` keys may call `/v1/evaluate/` too, so backends in other
+languages can evaluate without porting the rules engine, but never from a
+browser: a key request that carries an `Origin` header (which browsers send
+with every `POST`) is refused with 403 unless it is an evaluate key. That
+does not protect a key that has already leaked, since other clients need not
+send `Origin`; it makes putting a secret key in front-end code fail the first
+time it runs in development, before it ships. Other routes need no such check:
+they send no CORS headers, so a page on another origin cannot read them.
+
 ## Browsers on other origins
 
 Responses under `/v1/evaluate/` carry CORS headers so pages on any origin can
