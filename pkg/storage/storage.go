@@ -10,6 +10,9 @@ import (
 type StorageEntry struct {
 	Key   string
 	Value json.RawMessage
+	// Version is the storage-wide revision that last wrote the entry, on
+	// backends that track one (see Transactional); it is 0 otherwise.
+	Version uint64
 }
 
 // Storage is the interface for all storage backends
@@ -31,12 +34,17 @@ type StorageCreator func(conf map[string]string) (Storage, error)
 
 // StorageOptions is a map of available storage options specified at the server.storage config path
 var StorageOptions = map[string]StorageCreator{
-	"file":      NewFileStorage,
-	"bigcache":  NewBigCacheStorage,
-	"cacheable": NewCacheableStorageWithConf,
-	"gcs":       NewGCSStorage,
-	"s3":        NewS3Storage,
-	"boltdb":    NewBoltStorage,
+	"file":     NewFileStorage,
+	"bigcache": NewBigCacheStorage,
+	"gcs":      NewGCSStorage,
+	"s3":       NewS3Storage,
+	"boltdb":   NewBoltStorage,
+	"postgres": NewPostgresStorage,
+}
+
+func init() {
+	// registered here because cacheable itself looks up StorageOptions
+	StorageOptions["cacheable"] = NewCacheableStorageWithConf
 }
 
 // SourcableStorageOptions is a map of available storage options specified at the server.options.cache config path
@@ -68,22 +76,38 @@ func IsReservedPath(p string) bool {
 
 // ReadJSON loads the entry at key into v. found is false when it does not exist.
 func ReadJSON(ctx context.Context, s Storage, key string, v any) (found bool, err error) {
-	entry, err := s.Get(ctx, key)
-	var nf *NotFoundError
-	if errors.As(err, &nf) {
-		return false, nil
-	}
-	if err != nil {
+	entry, err := getOptional(ctx, s, key)
+	if entry == nil || err != nil {
 		return false, err
 	}
 	return true, json.Unmarshal(entry.Value, v)
 }
 
-// WriteJSON stores v as JSON at key.
-func WriteJSON(ctx context.Context, s Storage, key string, v any) error {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
+// getOptional returns the entry at key, or nil when it does not exist.
+func getOptional(ctx context.Context, s Storage, key string) (*StorageEntry, error) {
+	entry, err := s.Get(ctx, key)
+	var nf *NotFoundError
+	if errors.As(err, &nf) {
+		return nil, nil
 	}
-	return s.Put(ctx, StorageEntry{Key: key, Value: b})
+	return entry, err
+}
+
+// Unwrapper is implemented by storage wrappers that transform reads (such as
+// inheritance) and can expose the storage they wrap.
+type Unwrapper interface {
+	Unwrap() Storage
+}
+
+// Raw returns the innermost storage beneath any wrappers that transform
+// reads, which holds entries exactly as written. Capabilities such as
+// Transactional and Watchable belong to it.
+func Raw(s Storage) Storage {
+	for {
+		u, ok := s.(Unwrapper)
+		if !ok {
+			return s
+		}
+		s = u.Unwrap()
+	}
 }

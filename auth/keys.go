@@ -61,8 +61,6 @@ func (k *Key) Principal() *Principal {
 type KeyStore struct {
 	strg storage.Storage
 
-	// mu serializes changes to the stored keys.
-	mu sync.Mutex
 	// refreshMu lets one request at a time reload the snapshot.
 	refreshMu sync.Mutex
 	// snap is the immutable set of keys that Verify reads without locking.
@@ -225,18 +223,15 @@ func (s *KeyStore) reload(ctx context.Context) (*keySnapshot, error) {
 	return snap, nil
 }
 
-// update applies fn to the stored keys and persists the result.
+// update atomically applies fn to the stored keys and persists the result.
 func (s *KeyStore) update(ctx context.Context, fn func(map[string]Key) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	keys, err := s.load(ctx)
+	keys, err := storage.UpdateJSON(ctx, s.strg, keysKey, func(keys *map[string]Key) error {
+		if *keys == nil {
+			*keys = map[string]Key{}
+		}
+		return fn(*keys)
+	})
 	if err != nil {
-		return err
-	}
-	if err := fn(keys); err != nil {
-		return err
-	}
-	if err := storage.WriteJSON(ctx, s.strg, keysKey, keys); err != nil {
 		return err
 	}
 	s.snap.Store(&keySnapshot{keys: keys, loadedAt: time.Now()})
