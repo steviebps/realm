@@ -26,6 +26,7 @@ type Realm struct {
 	path            string
 	initSync        sync.Once
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 	mu              sync.RWMutex
@@ -326,11 +327,14 @@ func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received b
 }
 
 // Stop stops realm and blocks until the background refresh goroutine has exited.
+// It is safe to call more than once.
 func (rlm *Realm) Stop() {
-	close(rlm.stopCh)
-	if rlm.cancel != nil {
-		rlm.cancel()
-	}
+	rlm.stopOnce.Do(func() {
+		close(rlm.stopCh)
+		if rlm.cancel != nil {
+			rlm.cancel()
+		}
+	})
 	rlm.wg.Wait()
 }
 

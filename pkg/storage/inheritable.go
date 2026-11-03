@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"path"
 	"strings"
 
@@ -72,7 +73,13 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 			entry, err := s.source.Get(ctx, cur)
 			if err != nil {
 				span.RecordError(err)
-				continue
+				// an ancestor that does not exist contributes nothing, but a
+				// failed read must not silently drop the rules it holds
+				var nfError *NotFoundError
+				if errors.As(err, &nfError) {
+					continue
+				}
+				return nil, err
 			}
 
 			curChamber := &realm.Chamber{Rules: map[string]*realm.Flag{}}
