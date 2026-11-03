@@ -64,3 +64,10 @@ func buildAgentRequest(req *http.Request) *AgentRequest {
 		Path:      logicalPath(req, "/v1/chambers"),
 	}
 }
+
+// routeParam returns the unescaped remainder of the request path after
+// routePrefix, without surrounding slashes ("/v1/keys/abc/" → "abc").
+func routeParam(req *http.Request, routePrefix string) string {
+	p, _ := url.PathUnescape(strings.Trim(strings.TrimPrefix(req.URL.Path, routePrefix), "/"))
+	return p
+}

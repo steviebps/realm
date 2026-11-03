@@ -82,7 +82,13 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
 - **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as
   stored at its path (the inherited view carries none); writes honor `If-Match` / `If-None-Match: *` and return `412` on
   mismatch, checked under a per-path lock (`http/meta.go`). Every write is
-  appended to history with the `X-Realm-Actor` header as the actor.
+  appended to history with the authenticated caller as the actor (or, when
+  auth is off, the self-reported `X-Realm-Actor` header).
+- **Auth** (`auth/`, `http/auth.go`) — optional. `withPrincipal` identifies
+  each request's caller (an API key bearer token, a UI session cookie, or
+  `auth.Anonymous` when auth is off); handlers check `CanRead` / `CanWrite`
+  on the chamber path and `IsAdmin` for keys and the catalog. See
+  `docs/design/auth.md`.
 - **Metadata endpoints** (`http/meta_handlers.go`) — `GET /v1/history/<path>`
   (and `?revision=N`) and `/v1/catalog[/<attribute>]`, the application-supplied
   map of attribute values to human-readable labels used by the UI. Metadata is
@@ -173,8 +179,8 @@ Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
 | Postgres storage + multi-replica safety | ⬜ Next | new backend; replaces per-process lock |
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
 | Cross-replica stream fanout (multi-instance) | ⬜ Next | broker is process-local today |
-| SDK API keys + OIDC sign-in for the UI | ⬜ Next | `http/handler.go` middleware |
+| SDK API keys + OIDC/GitHub sign-in for the UI, roles | ✅ Done | `auth/`, `http/auth.go` |
 | TypeScript SDK + server-side evaluation endpoint | ⬜ Next | new clients against `/v1/chambers` |
-| Audit log of flag changes | 🟡 Partial | history records actor from `X-Realm-Actor`; verified identity needs OIDC |
+| Audit log of flag changes | ✅ Done | per-chamber history with the authenticated actor (`http/meta.go`) |
 | Multi-language SDKs | ⬜ Next | new clients against `/v1/chambers` |
 | UI editing of targeting, rollouts, diff confirmation, history/restore | ✅ Done | `http/realm-ui` |

@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
 
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
@@ -35,6 +34,10 @@ func handleHistory(meta *metaStore) http.Handler {
 
 		chamberPath := logicalPath(r, "/v1/history")
 		span.SetAttributes(attribute.String("realm.server.logicalPath", chamberPath))
+		if !auth.FromContext(ctx).CanRead(chamberPath) {
+			forbidden(w, r, fmt.Sprintf("not allowed to read %s", chamberPath))
+			return
+		}
 
 		var body any
 		var err error
@@ -84,13 +87,17 @@ func handleCatalog(meta *metaStore) http.Handler {
 		errorLog := logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
-		attr, _ := url.PathUnescape(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/catalog"), "/"))
+		attr := routeParam(r, "/v1/catalog")
 		span.SetAttributes(attribute.String("realm.server.catalog.attribute", attr))
 
 		fail := func(status int, err error) {
 			span.SetStatus(codes.Error, err.Error())
 			errorLog.Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+		}
+		if r.Method != http.MethodGet && !auth.FromContext(ctx).IsAdmin() {
+			forbidden(w, r, "only administrators may change the catalog")
+			return
 		}
 		if attr == "" && r.Method != http.MethodGet {
 			fail(http.StatusMethodNotAllowed, errors.New(http.StatusText(http.StatusMethodNotAllowed)))

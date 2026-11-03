@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/utils"
 )
 
@@ -27,10 +28,15 @@ type ServerConfig struct {
 	KeyFile        string            `json:"keyFile"`
 	LogLevel       string            `json:"logLevel"`
 	Inheritable    bool              `json:"inheritable"`
+	// Auth enables authentication; without it the server is open to anyone
+	// who can reach it.
+	Auth *auth.Config `json:"auth,omitempty"`
 }
 
 type ClientConfig struct {
 	Address string `json:"address"`
+	// Token is an API key; it may reference an environment variable as ${NAME}.
+	Token string `json:"token,omitempty"`
 }
 
 func parseConfig(path string) (RealmConfig, error) {

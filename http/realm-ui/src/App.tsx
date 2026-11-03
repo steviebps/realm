@@ -1,14 +1,17 @@
-import { useState } from 'react';
-import { Alert, Breadcrumb, BreadcrumbItem, Button, Label, TextInput } from 'flowbite-react';
-import { HiHome } from 'react-icons/hi';
+import { useEffect, useState } from 'react';
+import { Alert, Badge, Breadcrumb, BreadcrumbItem, Button, Label, Spinner, TextInput } from 'flowbite-react';
+import { HiHome, HiKey, HiLogout } from 'react-icons/hi';
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from 'react-query';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { ThemeInit } from '../.flowbite-react/init';
 import { trimPrefix, trimSuffix } from './utils/strings';
 import { SideNav } from './components/side-nav';
 import { ChamberView } from './components/ChamberView';
-import { createChamber, getActor, listChambers, setActor } from './api';
+import { UNAUTHORIZED_EVENT, createChamber, getActor, getMe, listChambers, setActor, signOut } from './api';
 import { ensureTrailingSlash } from './utils/path';
+import { SessionContext, useSession } from './session';
+import { SignIn } from './components/SignIn';
+import { KeysDrawer } from './components/KeysDrawer';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -29,7 +32,14 @@ export const App = () => {
       <QueryClientProvider client={queryClient}>
         <Router basename="/ui">
           <Routes>
-            <Route path="*" element={<Content />} />
+            <Route
+              path="*"
+              element={
+                <AuthGate>
+                  <Content />
+                </AuthGate>
+              }
+            />
           </Routes>
         </Router>
       </QueryClientProvider>
@@ -37,7 +47,64 @@ export const App = () => {
   );
 };
 
-/** Lets an editor say who they are; recorded with every change until sign-in exists. */
+/** Shows the sign-in screen when the server requires it, otherwise provides the session. */
+const AuthGate = ({ children }: { children: React.ReactNode }) => {
+  const { data: me, error } = useQuery('me', getMe);
+
+  // Any request refused for lack of a session re-checks who is signed in,
+  // which shows the sign-in screen once the session has ended.
+  useEffect(() => {
+    const recheck = () => void queryClient.invalidateQueries('me');
+    window.addEventListener(UNAUTHORIZED_EVENT, recheck);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, recheck);
+  }, []);
+
+  if (error instanceof Error) {
+    return <Alert color="failure">Could not reach the realm server: {error.message}</Alert>;
+  }
+  if (!me) {
+    return <Spinner aria-label="Loading" size="lg" className="m-8" />;
+  }
+  if (me.authEnabled && !me.user) {
+    return <SignIn providers={me.providers} />;
+  }
+  return <SessionContext.Provider value={me}>{children}</SessionContext.Provider>;
+};
+
+/** The signed-in user, with sign-out and (for admins) API key management. */
+const UserMenu = ({ path }: { path: string }) => {
+  const me = useSession();
+  const [keysOpen, setKeysOpen] = useState(false);
+  if (!me.user) return null;
+  const { isAdmin } = me;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-sm" title={me.user.provider && `Signed in with ${me.user.provider}`}>
+        {me.user.name || me.user.id}
+      </span>
+      <Badge color={isAdmin ? 'purple' : 'gray'}>{me.user.role}</Badge>
+      {isAdmin && (
+        <>
+          <Button size="xs" color="light" onClick={() => setKeysOpen(true)}>
+            <HiKey className="mr-1" /> API keys
+          </Button>
+          <KeysDrawer key={path} path={path} open={keysOpen} onClose={() => setKeysOpen(false)} />
+        </>
+      )}
+      <Button
+        size="xs"
+        color="light"
+        onClick={() => {
+          void signOut().then(() => queryClient.invalidateQueries('me'));
+        }}
+      >
+        <HiLogout className="mr-1" /> Sign out
+      </Button>
+    </div>
+  );
+};
+
+/** Lets an editor say who they are when the server has no sign-in; recorded with every change. */
 const ActorField = () => {
   const [actor, setActorState] = useState(getActor);
   return (
@@ -60,6 +127,8 @@ const ActorField = () => {
 };
 
 const Content = () => {
+  const me = useSession();
+  const { canEdit } = me;
   const [chamberName, setChamberName] = useState('');
   const location = useLocation();
   const navigate = useNavigate();
@@ -86,7 +155,7 @@ const Content = () => {
     <div className="mx-auto my-5 flex w-full max-w-[1280px] flex-col gap-4 px-4">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Realm</h1>
-        <ActorField />
+        {me.authEnabled ? <UserMenu path={path} /> : <ActorField />}
       </header>
       <Breadcrumb aria-label="directory crumbs" className="py-1">
         <BreadcrumbItem icon={HiHome}>
@@ -103,26 +172,28 @@ const Content = () => {
       <div className="grid grid-cols-1 gap-5 md:grid-cols-12">
         <aside className="flex flex-col gap-4 md:col-span-3">
           {directories.length > 0 && <SideNav directories={directories} />}
-          <form
-            className="flex flex-col gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              create.mutate(chamberName);
-            }}
-          >
-            <Label htmlFor="chamber">New child chamber</Label>
-            <TextInput
-              id="chamber"
-              required
-              placeholder="prod"
-              value={chamberName}
-              onChange={(e) => setChamberName(e.target.value)}
-            />
-            <Button type="submit" size="sm" disabled={create.isLoading}>
-              Create chamber
-            </Button>
-            {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
-          </form>
+          {canEdit && (
+            <form
+              className="flex flex-col gap-2"
+              onSubmit={(e) => {
+                e.preventDefault();
+                create.mutate(chamberName);
+              }}
+            >
+              <Label htmlFor="chamber">New child chamber</Label>
+              <TextInput
+                id="chamber"
+                required
+                placeholder="prod"
+                value={chamberName}
+                onChange={(e) => setChamberName(e.target.value)}
+              />
+              <Button type="submit" size="sm" disabled={create.isLoading}>
+                Create chamber
+              </Button>
+              {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
+            </form>
+          )}
         </aside>
         <main className="md:col-span-9">
           <ChamberView key={path} path={path} />

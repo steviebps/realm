@@ -109,6 +109,6 @@ These mirror `CLAUDE.md`, which has more detail and recipes:
 ## Where to start
 
 `docs/ARCHITECTURE.md` has a "Path to LaunchDarkly parity" table listing the
-next capabilities (attribute targeting, real-time streaming, API-key auth, audit
-log, more SDKs). Those are good first contributions, and the seams for several
+next capabilities (Postgres storage, cross-replica fanout, a TypeScript SDK and
+server-side evaluation). Those are good first contributions, and the seams for several
 already exist.

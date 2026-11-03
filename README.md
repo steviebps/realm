@@ -200,3 +200,24 @@ You can watch a chamber directly over HTTP too:
 ```bash
 curl -N 'http://localhost:8080/v1/chambers/root?watch=true'
 ```
+
+### authentication
+
+Add an `auth` block to the server config to require sign-in for the UI
+(any OIDC provider, or GitHub) with viewer / editor / admin roles, and API keys
+for applications and automation. Keys are `read` or `write` and limited to a
+chamber path:
+
+```bash
+realm keys create --config realm.json --name checkout --access read --path /prod/
+```
+
+```go
+client, _ := client.NewHttpClient(&client.HttpClientConfig{
+	Address: "https://realm.example.com",
+	Token:   os.Getenv("REALM_TOKEN"),
+})
+```
+
+Without an `auth` block the server is open to anyone who can reach it. See
+[docs/design/auth.md](docs/design/auth.md).

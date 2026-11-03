@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"os"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
 	"github.com/steviebps/realm/api"
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
@@ -40,6 +40,8 @@ var errorCounter, _ = meter.Int64Counter(
 type HandlerConfig struct {
 	Storage        storage.Storage
 	RequestTimeout time.Duration
+	// Auth enables authentication. When nil every request is allowed.
+	Auth *auth.Config
 }
 
 func RealmHandler(rlm *realm.Realm, h http.Handler) http.Handler {
@@ -56,10 +58,17 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = DefaultHandlerTimeout
 	}
-	return handle(ctx, config), nil
+	var authn *auth.Authenticator
+	if config.Auth != nil {
+		var err error
+		if authn, err = auth.New(*config.Auth, rawStorage(config.Storage)); err != nil {
+			return nil, err
+		}
+	}
+	return handle(ctx, config, authn), nil
 }
 
-func handle(ctx context.Context, hc HandlerConfig) http.Handler {
+func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) http.Handler {
 	logger := logging.Ctx(ctx)
 	mux := http.NewServeMux()
 	brk := newBroker()
@@ -77,11 +86,19 @@ func handle(ctx context.Context, hc HandlerConfig) http.Handler {
 	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
 	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
 	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
+	mux.Handle("/v1/auth/me", otelhttp.NewHandler(handleMe(authn), "/v1/auth/me"))
+	if authn != nil {
+		mux.Handle("/v1/auth/", otelhttp.NewHandler(authn.Handler(), "/v1/auth/"))
+		keys := requireAdmin(handleKeys(authn.Keys()))
+		mux.Handle("/v1/keys", otelhttp.NewHandler(keys, "/v1/keys"))
+		mux.Handle("/v1/keys/", otelhttp.NewHandler(keys, "/v1/keys/"))
+	}
 	// Liveness for orchestrators (e.g. Kubernetes probes); deliberately not
-	// traced so frequent probes do not flood trace exports.
+	// traced so frequent probes do not flood trace exports. It is public (see
+	// publicPaths).
 	mux.HandleFunc("GET /healthz", handleHealth)
 
-	timeoutHandler := wrapWithTimeout(mux, hc.RequestTimeout)
+	timeoutHandler := wrapWithTimeout(withPrincipal(authn, mux), hc.RequestTimeout)
 	return wrapCommonHandler(timeoutHandler, logger)
 }
 
@@ -151,12 +168,18 @@ func handleOk(w http.ResponseWriter, body interface{}) {
 
 // handleOkJSON marshals v as the response data, or responds 500 if it cannot.
 func handleOkJSON(ctx context.Context, w http.ResponseWriter, v any) {
+	handleJSON(ctx, w, http.StatusOK, v)
+}
+
+// handleJSON marshals v as the response data with status, or responds 500 if
+// it cannot.
+func handleJSON(ctx context.Context, w http.ResponseWriter, status int, v any) {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
 		return
 	}
-	handleOk(w, createResponseWithErrors(raw, nil))
+	handleWithStatus(w, status, createResponseWithErrors(raw, nil))
 }
 
 func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
@@ -190,14 +213,6 @@ func rawStorage(s storage.Storage) storage.Storage {
 	}
 }
 
-// actorFrom returns the identity recorded in history for a request.
-func actorFrom(r *http.Request) string {
-	if a := strings.TrimSpace(r.Header.Get(ActorHeader)); a != "" {
-		return a
-	}
-	return defaultActor
-}
-
 // hasPrecondition reports whether the request carries If-Match or If-None-Match.
 func hasPrecondition(r *http.Request) bool {
 	return r.Header.Get("If-Match") != "" || r.Header.Get("If-None-Match") != ""
@@ -227,8 +242,8 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 		req := buildAgentRequest(r)
 		span.SetAttributes(attribute.String("realm.server.logicalPath", req.Path), attribute.String("realm.server.operation", string(req.Operation)))
 
-		if isReservedPath(req.Path) {
-			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{fmt.Sprintf("paths under %q are reserved", reservedPrefix)}))
+		if storage.IsReservedPath(req.Path) {
+			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{fmt.Sprintf("paths under %q are reserved", storage.ReservedPrefix)}))
 			return
 		}
 
@@ -236,6 +251,20 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 			span.SetStatus(codes.Error, err.Error())
 			errorLog.Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
+		}
+
+		p := auth.FromContext(ctx)
+		switch req.Operation {
+		case GetOperation, ListOperation:
+			if !p.CanRead(req.Path) {
+				forbidden(w, r, fmt.Sprintf("not allowed to read %s", req.Path))
+				return
+			}
+		default:
+			if !p.CanWrite(req.Path) {
+				forbidden(w, r, fmt.Sprintf("not allowed to change %s", req.Path))
+				return
+			}
 		}
 
 		// Writes decode and validate their body before taking the path lock.
@@ -301,7 +330,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, locks *pathLocks, brk
 				return false
 			}
 
-			rev := Revision{Time: time.Now().UTC(), Actor: actorFrom(r), Operation: req.Operation}
+			rev := Revision{Time: time.Now().UTC(), Actor: auth.FromContext(ctx).Actor(), Operation: req.Operation}
 			if value != nil {
 				rev.ETag = etagOf(value)
 				rev.Chamber = value

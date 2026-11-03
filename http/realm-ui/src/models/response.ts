@@ -57,3 +57,47 @@ export type Revision = {
 
 /** Attribute name → value → human-readable label. */
 export type Catalog = Record<string, Record<string, string>>;
+
+export type Role = 'none' | 'viewer' | 'editor' | 'admin';
+
+export type Principal = {
+  kind: 'user' | 'key' | 'anonymous';
+  id: string;
+  name?: string;
+  provider?: string;
+  role: Role;
+};
+
+export type Provider = {
+  name: string;
+  displayName: string;
+  type: 'oidc' | 'github';
+};
+
+/** Who is signed in, and how to sign in when nobody is. */
+export type Me = {
+  authEnabled: boolean;
+  user: Principal | null;
+  /** Whether the caller may change chambers. */
+  canEdit: boolean;
+  /** Whether the caller may manage API keys and the catalog. */
+  isAdmin: boolean;
+  providers: Provider[];
+};
+
+export type KeyAccess = 'read' | 'write';
+
+export type ApiKey = {
+  id: string;
+  name: string;
+  access: KeyAccess;
+  path: string;
+  createdAt: string;
+  createdBy: string;
+};
+
+/** A newly created key; the token is shown only once. */
+export type CreatedKey = {
+  key: ApiKey;
+  token: string;
+};

@@ -56,3 +56,34 @@ func ValidatePath(path string) error {
 
 	return nil
 }
+
+// ReservedPrefix is the storage prefix under which realm keeps its own
+// metadata (history, catalog, API keys). Chamber APIs reject paths beneath it.
+const ReservedPrefix = "/_realm/"
+
+// IsReservedPath reports whether p falls under ReservedPrefix.
+func IsReservedPath(p string) bool {
+	return strings.HasPrefix(p, ReservedPrefix) || p == strings.TrimSuffix(ReservedPrefix, "/")
+}
+
+// ReadJSON loads the entry at key into v. found is false when it does not exist.
+func ReadJSON(ctx context.Context, s Storage, key string, v any) (found bool, err error) {
+	entry, err := s.Get(ctx, key)
+	var nf *NotFoundError
+	if errors.As(err, &nf) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, json.Unmarshal(entry.Value, v)
+}
+
+// WriteJSON stores v as JSON at key.
+func WriteJSON(ctx context.Context, s Storage, key string, v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return s.Put(ctx, StorageEntry{Key: key, Value: b})
+}

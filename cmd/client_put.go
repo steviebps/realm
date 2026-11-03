@@ -3,13 +3,11 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/steviebps/realm/api"
-	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/helper/logging"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
@@ -40,35 +38,7 @@ var clientPut = &cobra.Command{
 		defer span.End()
 		logger := logging.Ctx(ctx)
 
-		var err error
-		flags := cmd.Flags()
-
-		configPath, err := flags.GetString("config")
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			return err
-		}
-
-		var realmConfig RealmConfig
-		if configPath != "" {
-			realmConfig, err = parseConfig(configPath)
-			if err != nil {
-				logger.ErrorCtx(ctx).Msg(err.Error())
-				return err
-			}
-		}
-
-		addr, _ := cmd.Flags().GetString("address")
-		if addr == "" {
-			if realmConfig.Client.Address == "" {
-				err = errors.New("must specify an address for the realm server")
-				logger.ErrorCtx(ctx).Msg(err.Error())
-				return err
-			}
-			addr = realmConfig.Client.Address
-		}
-
-		c, err := client.NewHttpClient(&client.HttpClientConfig{Address: addr})
+		c, err := newClient(cmd)
 		if err != nil {
 			logger.ErrorCtx(ctx).Msg(err.Error())
 			return err

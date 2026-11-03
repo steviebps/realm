@@ -9,6 +9,7 @@ import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
 import { defaultValueFor } from '../utils/flags';
 import { HistoryDrawer } from './HistoryDrawer';
+import { useSession } from '../session';
 
 /** Attribute names suggested in the editor, in addition to catalog and in-use names. */
 const CONVENTIONAL_ATTRIBUTES = [
@@ -44,6 +45,7 @@ const summarize = (flag: Flag) => {
 
 export const ChamberView = ({ path }: { path: string }) => {
   const queryClient = useQueryClient();
+  const { canEdit } = useSession();
   const { data, isLoading, error } = useQuery(['chamber', path], () => getChamber(path));
   const { data: catalog = {} } = useQuery('catalog', getCatalog);
   const [editing, setEditing] = useState<{ name: string; flag: Flag; isNew: boolean } | null>(null);
@@ -124,24 +126,26 @@ export const ChamberView = ({ path }: { path: string }) => {
                     </div>
                     <p className="text-sm text-gray-500 dark:text-gray-400">{summarize(flag)}</p>
                   </div>
-                  <div className="flex gap-2">
-                    <Button size="xs" onClick={() => setEditing({ name, flag, isNew: false })}>
-                      <HiPencil className="mr-1" /> Edit
-                    </Button>
-                    <Button
-                      size="xs"
-                      color="red"
-                      outline
-                      onClick={() =>
-                        propose(`Delete ${name}`, (c) => {
-                          delete c.rules[name];
-                          return c;
-                        })
-                      }
-                    >
-                      <HiTrash className="mr-1" /> Delete
-                    </Button>
-                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2">
+                      <Button size="xs" onClick={() => setEditing({ name, flag, isNew: false })}>
+                        <HiPencil className="mr-1" /> Edit
+                      </Button>
+                      <Button
+                        size="xs"
+                        color="red"
+                        outline
+                        onClick={() =>
+                          propose(`Delete ${name}`, (c) => {
+                            delete c.rules[name];
+                            return c;
+                          })
+                        }
+                      >
+                        <HiTrash className="mr-1" /> Delete
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </Card>
             </li>
@@ -164,48 +168,52 @@ export const ChamberView = ({ path }: { path: string }) => {
                   </div>
                   <p className="text-sm text-gray-500">{summarize(flag)}</p>
                 </div>
-                <Button size="xs" color="light" onClick={() => setEditing({ name, flag, isNew: true })}>
-                  Override here
-                </Button>
+                {canEdit && (
+                  <Button size="xs" color="light" onClick={() => setEditing({ name, flag, isNew: true })}>
+                    Override here
+                  </Button>
+                )}
               </li>
             ))}
           </ul>
         </section>
       )}
 
-      <form
-        className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[2fr_1fr_auto]"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const name = newName.trim();
-          if (!name || name in own.rules) return;
-          setEditing({ name, flag: { type: newType, value: defaultValueFor(newType) }, isNew: true });
-          setNewName('');
-        }}
-      >
-        <div>
-          <Label htmlFor="new-flag">New flag</Label>
-          <TextInput
-            id="new-flag"
-            placeholder="checkout.newFlow"
-            value={newName}
-            color={newName.trim() in own.rules ? 'failure' : undefined}
-            onChange={(e) => setNewName(e.target.value)}
-          />
-        </div>
-        <div>
-          <Label htmlFor="new-flag-type">Type</Label>
-          <Select id="new-flag-type" value={newType} onChange={(e) => setNewType(e.target.value as RuleType)}>
-            <option value="boolean">boolean</option>
-            <option value="string">string</option>
-            <option value="number">number</option>
-            <option value="custom">custom (JSON)</option>
-          </Select>
-        </div>
-        <Button type="submit" disabled={!newName.trim() || newName.trim() in own.rules}>
-          <HiPlus className="mr-1" /> Add flag
-        </Button>
-      </form>
+      {canEdit && (
+        <form
+          className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[2fr_1fr_auto]"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const name = newName.trim();
+            if (!name || name in own.rules) return;
+            setEditing({ name, flag: { type: newType, value: defaultValueFor(newType) }, isNew: true });
+            setNewName('');
+          }}
+        >
+          <div>
+            <Label htmlFor="new-flag">New flag</Label>
+            <TextInput
+              id="new-flag"
+              placeholder="checkout.newFlow"
+              value={newName}
+              color={newName.trim() in own.rules ? 'failure' : undefined}
+              onChange={(e) => setNewName(e.target.value)}
+            />
+          </div>
+          <div>
+            <Label htmlFor="new-flag-type">Type</Label>
+            <Select id="new-flag-type" value={newType} onChange={(e) => setNewType(e.target.value as RuleType)}>
+              <option value="boolean">boolean</option>
+              <option value="string">string</option>
+              <option value="number">number</option>
+              <option value="custom">custom (JSON)</option>
+            </Select>
+          </div>
+          <Button type="submit" disabled={!newName.trim() || newName.trim() in own.rules}>
+            <HiPlus className="mr-1" /> Add flag
+          </Button>
+        </form>
+      )}
 
       {editing && !proposal && (
         <FlagEditor
@@ -241,7 +249,7 @@ export const ChamberView = ({ path }: { path: string }) => {
         path={path}
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
-        onRestore={(revision) => void restore(revision)}
+        onRestore={canEdit ? (revision) => void restore(revision) : undefined}
       />
     </div>
   );

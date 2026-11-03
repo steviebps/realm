@@ -7,7 +7,8 @@ type Props = {
   path: string;
   open: boolean;
   onClose: () => void;
-  onRestore: (revision: number) => void;
+  /** Offers to restore earlier revisions; omitted for users who cannot edit. */
+  onRestore?: (revision: number) => void;
 };
 
 const operationLabel = { put: 'saved', patch: 'patched', delete: 'deleted' } as const;
@@ -37,7 +38,7 @@ export const HistoryDrawer = ({ path, open, onClose, onRestore }: Props) => {
                   {new Date(rev.time).toLocaleString()}
                 </time>
               </div>
-              {i > 0 && rev.operation !== 'delete' && (
+              {onRestore && i > 0 && rev.operation !== 'delete' && (
                 <Button size="xs" color="light" onClick={() => onRestore(rev.revision)}>
                   Restore…
                 </Button>
