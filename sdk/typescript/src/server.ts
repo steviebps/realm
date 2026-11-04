@@ -23,7 +23,8 @@ export class ServerClient {
   readonly #options: ServerClientOptions;
   readonly #defaults: Record<string, string>;
   readonly #chamber = new Snapshot<Chamber>({ rules: {} });
-  #controller: AbortController | undefined;
+  // The background refresh, and its first load, while started.
+  #running: { controller: AbortController; started: Promise<void> } | undefined;
 
   constructor(options: ServerClientOptions) {
     this.#options = options;
@@ -34,14 +35,15 @@ export class ServerClient {
 
   /**
    * Loads the chamber, then keeps it current in the background. It rejects
-   * when the first load fails (for example, a bad key or a missing chamber).
+   * when the first load fails (for example, a bad key or a missing chamber),
+   * but keeps retrying with backoff until stop. Calling it again while
+   * started returns the first call's result.
    */
   async start(): Promise<void> {
-    if (this.#controller) return;
+    if (this.#running) return this.#running.started;
     const controller = new AbortController();
-    this.#controller = controller;
-    try {
-      await this.#transport.follow(
+    const started = this.#transport
+      .follow(
         'chambers',
         { method: 'GET' },
         'chamber',
@@ -49,19 +51,19 @@ export class ServerClient {
         this.#options.streaming ?? true,
         this.#options.pollingInterval ?? defaultPollingInterval,
         controller.signal,
-      );
-    } catch (e) {
-      // A stop aborted this load; the client may have been started again since.
-      if (controller.signal.aborted) return;
-      this.#controller = undefined;
-      throw e;
-    }
+      )
+      .catch((e: unknown) => {
+        // A stop aborted this load; the client may have been started again since.
+        if (!controller.signal.aborted) throw e;
+      });
+    this.#running = { controller, started };
+    return started;
   }
 
   /** Stops refreshing. The last known values stay available. */
   stop(): void {
-    this.#controller?.abort();
-    this.#controller = undefined;
+    this.#running?.controller.abort();
+    this.#running = undefined;
   }
 
   /** Calls listener whenever the chamber changes. Returns a function that unsubscribes. */

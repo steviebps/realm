@@ -1,8 +1,12 @@
 package realm
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"maps"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -95,16 +99,28 @@ func (c *Chamber) nextScheduleChange(t time.Time) time.Time {
 type ChamberEntry struct {
 	rules      map[string]*Flag
 	attributes map[string]string
+	// version caches the "version" attribute and its canonical semver form,
+	// so semver clauses on the process-wide version do not allocate.
+	version semverCache
 }
 
 // NewChamberEntry creates a new ChamberEntry. The provided attributes are
 // process-wide defaults (for example "environment" or "version") consulted
 // when an evaluation context does not set them.
 func NewChamberEntry(c *Chamber, attributes map[string]string) *ChamberEntry {
+	v := attributes[VersionAttribute]
 	return &ChamberEntry{
 		rules:      maps.Clone(c.Rules),
 		attributes: maps.Clone(attributes),
+		version:    semverCache{raw: v, canonical: canonicalSemver(v)},
 	}
+}
+
+// context returns ec falling back to the entry's process-wide attributes.
+func (c *ChamberEntry) context(ec EvaluationContext) EvaluationContext {
+	ec = ec.withDefaults(c.attributes)
+	ec.version = c.version
+	return ec
 }
 
 // Get returns the flag with the specified ruleKey.
@@ -126,7 +142,7 @@ func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, de
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := get(t, ruleKey, ec.withDefaults(c.attributes), defaultValue)
+	v, ok := get(t, ruleKey, c.context(ec), defaultValue)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
@@ -181,7 +197,7 @@ func (c *ChamberEntry) CustomValueFor(ruleKey string, ec EvaluationContext, v an
 	if t == nil {
 		return &ErrRuleNotFound{Key: ruleKey}
 	}
-	err := t.CustomValueFor(ruleKey, ec.withDefaults(c.attributes), v)
+	err := t.CustomValueFor(ruleKey, c.context(ec), v)
 	if err != nil {
 		return &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
@@ -192,4 +208,93 @@ func (c *ChamberEntry) CustomValueFor(ruleKey string, ec EvaluationContext, v an
 // and returns an error if it is not found or could not be converted
 func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 	return c.CustomValueFor(ruleKey, EvaluationContext{}, v)
+}
+
+// ParseChamber decodes and validates a chamber strictly, as the server does
+// for writes. It is json.Unmarshal into a Chamber, except that a field realm
+// does not know, at any level, is an error instead of being ignored: a
+// misspelled "schedule" would otherwise make its rule apply immediately, and
+// a misspelled "rules" would replace the chamber with an empty one. (SDKs
+// decode leniently, so a newer server's additions do not break them.)
+func ParseChamber(b []byte) (*Chamber, error) {
+	var c Chamber
+	if err := json.Unmarshal(b, &c); err != nil {
+		return nil, err
+	}
+	if err := checkFields(b, chamberShape, ""); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+// shape lists the fields a JSON object may hold, and the shapes of nested
+// objects (or of the elements of nested arrays or maps) worth checking.
+type shape struct {
+	fields []string
+	nested map[string]*shape
+	// each applies to every value of a map-typed object (the chamber's rules).
+	each *shape
+}
+
+var (
+	clauseShape   = &shape{fields: []string{"attribute", "op", "values"}}
+	rolloutShape  = &shape{fields: []string{"percentage", "bucketBy", "seed"}}
+	scheduleShape = &shape{fields: []string{"start", "end"}}
+	ruleShape     = &shape{
+		fields: []string{"id", "description", "clauses", "value", "rollout", "schedule"},
+		nested: map[string]*shape{"clauses": clauseShape, "rollout": rolloutShape, "schedule": scheduleShape},
+	}
+	flagShape    = &shape{fields: []string{"type", "value", "targeting"}, nested: map[string]*shape{"targeting": ruleShape}}
+	chamberShape = &shape{fields: []string{"rules"}, nested: map[string]*shape{"rules": {each: flagShape}}}
+)
+
+// checkFields reports the first field of the JSON value b that s does not
+// allow. b has already been decoded successfully, so it is well formed. Field
+// names match case-insensitively, as encoding/json matches them.
+func checkFields(b []byte, s *shape, at string) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
+		return nil
+	}
+	if b[0] == '[' {
+		var items []json.RawMessage
+		if err := json.Unmarshal(b, &items); err != nil {
+			return err
+		}
+		for i, item := range items {
+			if err := checkFields(item, s, fmt.Sprintf("%s[%d]", at, i)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if b[0] != '{' {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(b, &m); err != nil {
+		return err
+	}
+	for name, v := range m {
+		where := name
+		if at != "" {
+			where = at + "." + name
+		}
+		if s.each != nil {
+			if err := checkFields(v, s.each, where); err != nil {
+				return err
+			}
+			continue
+		}
+		i := slices.IndexFunc(s.fields, func(f string) bool { return strings.EqualFold(f, name) })
+		if i < 0 {
+			return fmt.Errorf("unknown field %q", where)
+		}
+		if n := s.nested[s.fields[i]]; n != nil {
+			if err := checkFields(v, n, where); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

@@ -56,7 +56,8 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 
 	return &HttpClient{
 		underlying: &http.Client{Timeout: c.Timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
-		streaming:  &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		// Not traced: a span would stay open for the stream's whole life.
+		streaming:  &http.Client{Transport: http.DefaultTransport},
 		address:    u,
 		token:      c.Token,
 		tracer:     tracer,

@@ -1,6 +1,6 @@
 # Design: attribute targeting, S3 storage, and safe editing (phase 1)
 
-Status: **proposed** · Supersedes the `overrides` and `rollout` fields.
+Status: **implemented** · Supersedes the `overrides` and `rollout` fields.
 
 ## Goals
 

@@ -152,8 +152,8 @@ func TestSampleChambersParse(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read: %v", err)
 			}
-			var c Chamber
-			if err := json.Unmarshal(b, &c); err != nil {
+			// strictly, as the server would accept it
+			if _, err := ParseChamber(b); err != nil {
 				t.Fatalf("sample chamber does not parse: %v", err)
 			}
 		})

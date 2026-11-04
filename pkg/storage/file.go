@@ -52,7 +52,7 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -62,7 +62,7 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 		defer file.Close()
 	}
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, &NotFoundError{logicalPath}
 		}
@@ -71,13 +71,13 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 
 	buf := new(bytes.Buffer)
 	if _, err := buf.ReadFrom(file); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
@@ -96,14 +96,14 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 	path, key := f.expandPath(e.Key + fileEntryKey)
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -118,7 +118,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 		defer file.Close()
 	}
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -136,20 +136,20 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 	path, key := f.expandPath(logicalPath + fileEntryKey)
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
 
 	if err := os.Remove(filepath.Join(path, key)); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		if errors.Is(err, os.ErrNotExist) {
 			return &NotFoundError{logicalPath}
 		}
@@ -170,7 +170,7 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -187,13 +187,13 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
 		}
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
 	names, err := file.Readdirnames(-1)
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -211,7 +211,7 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}

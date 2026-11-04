@@ -2,6 +2,7 @@ package logging
 
 import (
 	"context"
+	"io"
 	"os"
 	"time"
 
@@ -25,20 +26,40 @@ type TracedLogger struct {
 	zerolog.Logger
 }
 
-// NewTracedLogger creates a new traced logger
+// NewTracedLogger creates a logger that writes one JSON object per line to
+// standard error, or human-readable lines when standard error is a terminal.
+// Set REALM_LOG_FORMAT to "json" or "console" to choose explicitly.
 func NewTracedLogger() *TracedLogger {
-	zerolog.TimeFieldFormat = time.RFC3339Nano
+	return New(defaultWriter())
+}
 
-	consoleWriter := zerolog.NewConsoleWriter()
-	multi := zerolog.MultiLevelWriter(consoleWriter, os.Stderr)
-
-	logger := zerolog.New(multi).
+// New creates a logger that writes JSON lines to w, with RFC 3339 timestamps
+// and the caller's location.
+func New(w io.Writer) *TracedLogger {
+	logger := zerolog.New(w).
 		With().
 		Timestamp().
 		Caller().
 		Logger()
-
 	return &TracedLogger{Logger: logger}
+}
+
+// FromZerolog wraps an existing zerolog logger.
+func FromZerolog(l zerolog.Logger) *TracedLogger {
+	return &TracedLogger{Logger: l}
+}
+
+func defaultWriter() io.Writer {
+	switch os.Getenv("REALM_LOG_FORMAT") {
+	case "json":
+		return os.Stderr
+	case "console":
+		return zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	}
+	if fi, err := os.Stderr.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		return zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	}
+	return os.Stderr
 }
 
 // InfoCtx logs an info message with trace context
@@ -66,7 +87,6 @@ func (l *TracedLogger) addTraceContext(ctx context.Context, event *zerolog.Event
 	spanCtx := trace.SpanContextFromContext(ctx)
 
 	if spanCtx.IsValid() {
-		spanCtx.TraceFlags()
 		event = event.
 			Str("trace_id", spanCtx.TraceID().String()).
 			Str("span_id", spanCtx.SpanID().String()).

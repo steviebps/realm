@@ -123,7 +123,13 @@ change, plus periodic heartbeat comments. On the server, an in-process **broker*
 wakes watchers whose path is at or below the changed path (prefix match), so an
 inherited parent change refreshes child watchers. The watch request bypasses the
 per-request timeout; the endpoint reuses the same storage `Get` as a normal read,
-so inheritance and validation are identical.
+so inheritance and validation are identical. Each server caps its open streams
+(`HandlerConfig.MaxStreams`, 503 beyond it) and ends each stream after about 20
+minutes so clients reconnect and are re-authenticated; shutdown cancels every
+stream (`http.Server.BaseContext`). The Go SDK reopens a stream that receives
+nothing (not even a heartbeat) for 75 seconds, retries with jittered backoff,
+and falls back to polling only when the server answers a watch with a plain
+chamber.
 
 Where the broker hears about writes depends on the backend. A `Watchable`
 backend (`postgres`) reports every committed change, including other replicas'
@@ -194,9 +200,19 @@ storage type and options, TLS cert/key, port, and `inheritable`.
 ## Observability
 
 OpenTelemetry is set up in `trace/otel.go` (traces + metrics, OTLP/stdout
-exporters). Logging goes through `helper/logging` — a zerolog `TracedLogger`
-accessed as `logging.Ctx(ctx)`, so logs are correlated with the active span.
-Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
+exporters), configured by the standard `OTEL_*` environment variables, which
+override the default `service.name` of `realm`. The server wraps its whole
+handler chain in one `otelhttp` span per request (named by route, so refused
+requests are traced too); probes and watch streams are not traced. Logging
+goes through `helper/logging` — a zerolog `TracedLogger` accessed as
+`logging.Ctx(ctx)` that writes JSON lines to standard error, so logs are
+correlated with the active span. Handlers and commands wrap work in
+`tracer.Start(ctx, "…")`; storage spans mark failures with an error status
+(`recordError`). The SDK never installs providers or touches zerolog globals;
+`WithLogger` routes its logs.
+
+`GET /healthz` is liveness; `GET /readyz` is readiness (storage answers, not
+draining).
 
 ## Path to LaunchDarkly parity
 

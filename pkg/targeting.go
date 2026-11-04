@@ -105,7 +105,7 @@ func (c *Clause) Matches(ec EvaluationContext) bool {
 			}
 		}
 	case OpSemverGte, OpSemverLte:
-		have := canonicalSemver(v)
+		have := ec.canonicalVersion(v)
 		if !semver.IsValid(have) {
 			return false
 		}

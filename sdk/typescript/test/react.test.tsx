@@ -110,6 +110,46 @@ describe('RealmProvider', () => {
     const view = render(app(client));
     await vi.waitFor(() => expect(view.text()).toBe('error: not allowed beta=false'));
   });
+
+  it('turns ready when a failed start recovers', async () => {
+    const realm = await setup();
+    realm.setStatus(403);
+    const client = new BrowserClient({ address: realm.address, onError: () => {} });
+    const view = render(app(client, { key: 'vip' }));
+    await vi.waitFor(() => expect(view.text()).toBe('error: not allowed beta=false'));
+
+    realm.setStatus(200);
+    await vi.waitFor(() => expect(view.text()).toBe('ready beta=true'), { timeout: 3000 });
+  });
+
+  it('is never ready with the previous context\'s values', async () => {
+    const realm = await setup();
+    const client = new BrowserClient({ address: realm.address, onError: () => {} });
+    const seen: string[] = [];
+    function Record() {
+      const beta = useBoolFlag('beta', false);
+      const { ready, error } = useRealmStatus();
+      const text = `${error ? `error: ${error.message}` : ready ? 'ready' : 'loading'} beta=${beta}`;
+      seen.push(text);
+      return <p>{text}</p>;
+    }
+    const tree = (context: EvaluationContext) => (
+      <RealmProvider client={client} context={context}>
+        <Record />
+      </RealmProvider>
+    );
+    const view = render(tree({ key: 'vip' }));
+    await vi.waitFor(() => expect(view.text()).toBe('ready beta=true'));
+
+    realm.setStatus(403);
+    seen.length = 0;
+    view.rerender(tree({ key: 'u1' }));
+    await vi.waitFor(() => expect(view.text()).toBe('error: not allowed beta=false'));
+    expect(seen).not.toContain('ready beta=true');
+
+    realm.setStatus(200);
+    await vi.waitFor(() => expect(view.text()).toBe('ready beta=false'), { timeout: 3000 });
+  });
 });
 
 describe('hooks', () => {

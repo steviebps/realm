@@ -1,7 +1,4 @@
 {
-    "name": "root",
-    "isBuildable": false,
-    "isApp": false,
     "rules": {
         "port": {
             "type": "number",

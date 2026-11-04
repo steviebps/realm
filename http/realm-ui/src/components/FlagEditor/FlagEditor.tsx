@@ -16,14 +16,24 @@ type Props = {
   onReview: (flag: Flag) => void;
 };
 
+// Rules have no stable identity of their own, so the editor gives each one a
+// client-side key (never sent to the server) for React keys and validity.
+let nextRuleKey = 0;
+const newRuleKey = () => `rule-${nextRuleKey++}`;
+
 export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview }: Props) => {
   const [draft, setDraft] = useState<Flag>(() => structuredClone(flag));
+  const [ruleKeys, setRuleKeys] = useState<string[]>(() => (flag.targeting ?? []).map(newRuleKey));
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
   const [showProblems, setShowProblems] = useState(false);
   const rules = draft.targeting ?? [];
   const problems = validateFlag(draft);
 
-  const setRules = (next: TargetingRule[]) => setDraft({ ...draft, targeting: next.length ? next : undefined });
+  // setRules replaces the rules, and their keys, which must stay in step.
+  const setRules = (next: TargetingRule[], keys: string[]) => {
+    setDraft({ ...draft, targeting: next.length ? next : undefined });
+    setRuleKeys(keys);
+  };
   const setValidity = (key: string) => (valid: boolean) =>
     setInvalid((prev) => {
       const next = new Set(prev);
@@ -45,28 +55,49 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
             is served.
           </p>
 
-          {rules.map((rule, i) => (
-            <RuleEditor
-              key={i}
-              index={i}
-              count={rules.length}
-              rule={rule}
-              type={draft.type}
-              catalog={catalog}
-              attributes={attributes}
-              onChange={(r) => setRules(rules.map((x, j) => (j === i ? r : x)))}
-              onMove={(delta) => {
-                const next = [...rules];
-                [next[i], next[i + delta]] = [next[i + delta], next[i]];
-                setRules(next);
-              }}
-              onRemove={() => setRules(rules.filter((_, j) => j !== i))}
-              onValidityChange={setValidity(`rule-${i}`)}
-            />
-          ))}
+          {rules.map((rule, i) => {
+            const key = ruleKeys[i];
+            return (
+              <RuleEditor
+                key={key}
+                index={i}
+                count={rules.length}
+                rule={rule}
+                type={draft.type}
+                catalog={catalog}
+                attributes={attributes}
+                onChange={(r) =>
+                  setRules(
+                    rules.map((x, j) => (j === i ? r : x)),
+                    ruleKeys
+                  )
+                }
+                onMove={(delta) => {
+                  const next = [...rules];
+                  const keys = [...ruleKeys];
+                  [next[i], next[i + delta]] = [next[i + delta], next[i]];
+                  [keys[i], keys[i + delta]] = [keys[i + delta], keys[i]];
+                  setRules(next, keys);
+                }}
+                onRemove={() => {
+                  setRules(
+                    rules.filter((_, j) => j !== i),
+                    ruleKeys.filter((_, j) => j !== i)
+                  );
+                  // A removed rule's invalid input no longer blocks review.
+                  setValidity(key)(true);
+                }}
+                onValidityChange={setValidity(key)}
+              />
+            );
+          })}
 
           <div>
-            <Button size="sm" color="light" onClick={() => setRules([...rules, { clauses: [], value: draft.value }])}>
+            <Button
+              size="sm"
+              color="light"
+              onClick={() => setRules([...rules, { clauses: [], value: draft.value }], [...ruleKeys, newRuleKey()])}
+            >
               <HiPlus className="mr-1" /> Add rule
             </Button>
           </div>

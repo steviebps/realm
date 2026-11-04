@@ -87,7 +87,7 @@ func (s *S3Storage) Get(ctx context.Context, logicalPath string) (*StorageEntry,
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -96,7 +96,7 @@ func (s *S3Storage) Get(ctx context.Context, logicalPath string) (*StorageEntry,
 		Key:    aws.String(s.objectKey(logicalPath)),
 	})
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		var nsk *types.NoSuchKey
 		if errors.As(err, &nsk) {
 			return nil, &NotFoundError{logicalPath}
@@ -107,7 +107,7 @@ func (s *S3Storage) Get(ctx context.Context, logicalPath string) (*StorageEntry,
 
 	value, err := io.ReadAll(out.Body)
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -122,7 +122,7 @@ func (s *S3Storage) Put(ctx context.Context, e StorageEntry) error {
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -133,7 +133,7 @@ func (s *S3Storage) Put(ctx context.Context, e StorageEntry) error {
 		ContentType: aws.String("application/json"),
 	})
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return fmt.Errorf("failed to put: %w", err)
 	}
 
@@ -148,7 +148,7 @@ func (s *S3Storage) Delete(ctx context.Context, logicalPath string) error {
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -156,7 +156,7 @@ func (s *S3Storage) Delete(ctx context.Context, logicalPath string) error {
 	// S3 deletes are idempotent, so check existence to report NotFoundError
 	// consistently with the other backends.
 	if _, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		var nf *types.NotFound
 		if errors.As(err, &nf) {
 			return &NotFoundError{logicalPath}
@@ -165,7 +165,7 @@ func (s *S3Storage) Delete(ctx context.Context, logicalPath string) error {
 	}
 
 	if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(key)}); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return fmt.Errorf("failed to delete: %w", err)
 	}
 
@@ -180,7 +180,7 @@ func (s *S3Storage) List(ctx context.Context, prefix string) ([]string, error) {
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -198,7 +198,7 @@ func (s *S3Storage) List(ctx context.Context, prefix string) ([]string, error) {
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			span.RecordError(err)
+			recordError(span, err)
 			return nil, fmt.Errorf("failed to list objects: %w", err)
 		}
 		for _, cp := range page.CommonPrefixes {

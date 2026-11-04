@@ -36,6 +36,24 @@ type EvaluationContext struct {
 	// at fixes the time schedules are evaluated at; when zero, the current
 	// time is used.
 	at time.Time
+
+	// version caches the canonical semver form of the process-wide version.
+	version semverCache
+}
+
+// semverCache pairs a version as given with its canonical ("v"-prefixed)
+// form.
+type semverCache struct {
+	raw, canonical string
+}
+
+// canonicalVersion returns the canonical semver form of v, without
+// allocating when v is the cached process-wide version.
+func (ec EvaluationContext) canonicalVersion(v string) string {
+	if v != "" && v == ec.version.raw {
+		return ec.version.canonical
+	}
+	return canonicalSemver(v)
 }
 
 // Attribute returns the value of the named attribute and whether it is present.

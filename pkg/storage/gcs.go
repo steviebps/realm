@@ -58,13 +58,13 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return nil, err
 	}
 
 	r, err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).NewReader(ctx)
 	if err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		if err == gcs.ErrObjectNotExist {
 			return nil, &NotFoundError{logicalPath}
 		}
@@ -74,13 +74,13 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 
 	value, err := io.ReadAll(r)
 	if err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError((ctx.Err()))
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
@@ -96,13 +96,13 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError((ctx.Err()))
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -113,12 +113,12 @@ func (s *GCSStorage) Put(ctx context.Context, e StorageEntry) (retErr error) {
 	w.ContentType = "application/json"
 
 	if _, err := w.Write(e.Value); err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return fmt.Errorf("failed to put: %w", err)
 	}
 
 	if err := w.Close(); err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return fmt.Errorf("failed to put: %w", err)
 	}
 
@@ -133,20 +133,20 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError((ctx.Err()))
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
 
 	err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).Delete(ctx)
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		if errors.Is(err, gcs.ErrObjectNotExist) {
 			return &NotFoundError{logicalPath}
 		}
@@ -164,13 +164,13 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
-		span.RecordError((err))
+		recordError(span, err)
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError((ctx.Err()))
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
@@ -190,7 +190,7 @@ func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) 
 			break
 		}
 		if err != nil {
-			span.RecordError(err)
+			recordError(span, err)
 			return nil, fmt.Errorf("failed to read object: %w", err)
 		}
 

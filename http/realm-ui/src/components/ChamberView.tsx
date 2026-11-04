@@ -39,6 +39,8 @@ const attributesIn = (chamber: Chamber | null) =>
     (f.targeting ?? []).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
   );
 
+const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 /** Rows share the table's column tracks so every column lines up. */
@@ -156,6 +158,7 @@ export const ChamberView = ({ path }: { path: string }) => {
   const [editing, setEditing] = useState<{ name: string; flag: Flag; isNew: boolean } | null>(null);
   const [proposal, setProposal] = useState<Proposal | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | undefined>();
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<RuleType>('boolean');
 
@@ -187,31 +190,49 @@ export const ChamberView = ({ path }: { path: string }) => {
     setProposal({ ...proposal, saving: true, error: undefined });
     try {
       await saveChamber(path, proposal.after, proposal.base.etag);
-      setProposal(null);
-      setEditing(null);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['chamber', path] }),
-        queryClient.invalidateQueries({ queryKey: ['history', path] }),
-      ]);
     } catch (err) {
-      if (err instanceof ConflictError) {
-        // Re-apply the same change on top of the latest version and ask again.
+      if (!(err instanceof ConflictError)) {
+        setProposal({ ...proposal, saving: false, error: messageOf(err) });
+        return;
+      }
+      // Re-apply the same change on top of the latest version and ask again.
+      try {
         const fresh = await getChamber(path);
         queryClient.setQueryData(['chamber', path], fresh);
         const after = proposal.apply(structuredClone(fresh.own ?? { rules: {} }));
         setProposal({ ...proposal, base: fresh, after, saving: false, rebased: true });
-        return;
+      } catch (reloadErr) {
+        // Keep the old base: confirming again retries the save, and the reload after it.
+        setProposal({
+          ...proposal,
+          saving: false,
+          error: `Someone else changed this chamber, and loading their change failed: ${messageOf(reloadErr)}`,
+        });
       }
-      setProposal({ ...proposal, saving: false, error: (err as Error).message });
+      return;
     }
+    setProposal(null);
+    setEditing(null);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['chamber', path] }),
+      queryClient.invalidateQueries({ queryKey: ['history', path] }),
+    ]);
   };
 
   const restore = async (revision: number) => {
-    const rev = await getRevision(path, revision);
-    if (!rev.chamber) return;
-    const chamber = rev.chamber;
-    setHistoryOpen(false);
-    propose(`Restore revision #${revision}`, () => structuredClone(chamber));
+    setRestoreError(undefined);
+    try {
+      const rev = await getRevision(path, revision);
+      if (!rev.chamber) {
+        setRestoreError(`Revision #${revision} has no chamber to restore.`);
+        return;
+      }
+      const chamber = rev.chamber;
+      setHistoryOpen(false);
+      propose(`Restore revision #${revision}`, () => structuredClone(chamber));
+    } catch (err) {
+      setRestoreError(`Could not load revision #${revision}: ${messageOf(err)}`);
+    }
   };
 
   return (
@@ -221,7 +242,14 @@ export const ChamberView = ({ path }: { path: string }) => {
           <h2 id="flags-heading" className="text-lg font-semibold">
             Flags <span className="font-normal text-gray-500 dark:text-gray-400">{ownNames.length}</span>
           </h2>
-          <Button size="xs" color="light" onClick={() => setHistoryOpen(true)}>
+          <Button
+            size="xs"
+            color="light"
+            onClick={() => {
+              setRestoreError(undefined);
+              setHistoryOpen(true);
+            }}
+          >
             <HiClock className="mr-1" /> History
           </Button>
         </div>
@@ -370,6 +398,7 @@ export const ChamberView = ({ path }: { path: string }) => {
         path={path}
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
+        error={restoreError}
         onRestore={canEdit ? (revision) => void restore(revision) : undefined}
       />
     </div>

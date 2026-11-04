@@ -8,6 +8,7 @@ export async function fakeRealm() {
   const streams = new Set<{ res: ServerResponse; send: () => void }>();
   const requests: { method: string; url: string; auth: string | undefined; body: string }[] = [];
   let status = 200;
+  let hang = false;
 
   const evaluate = (body: string) => {
     const ctx = body ? (JSON.parse(body) as { key?: string }) : {};
@@ -24,6 +25,7 @@ export async function fakeRealm() {
     let body = '';
     for await (const chunk of req) body += chunk;
     requests.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, body });
+    if (hang) return; // never respond, like a server behind a dead network
     if (status !== 200) {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ errors: ['not allowed'] }));
@@ -50,6 +52,7 @@ export async function fakeRealm() {
     requests,
     streams,
     setStatus: (s: number) => (status = s),
+    setHang: (h: boolean) => (hang = h),
     publish(next: unknown) {
       chamber = next;
       for (const s of streams) s.send();

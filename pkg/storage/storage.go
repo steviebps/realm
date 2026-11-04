@@ -69,9 +69,23 @@ func ValidatePath(path string) error {
 // metadata (history, catalog, API keys). Chamber APIs reject paths beneath it.
 const ReservedPrefix = "/_realm/"
 
-// IsReservedPath reports whether p falls under ReservedPrefix.
+// IsReservedPath reports whether p falls under ReservedPrefix. Empty and "."
+// segments are ignored, so "//_realm/" and "/./_realm" are reserved too: some
+// backends clean paths and would otherwise map them onto realm's metadata.
 func IsReservedPath(p string) bool {
-	return strings.HasPrefix(p, ReservedPrefix) || p == strings.TrimSuffix(ReservedPrefix, "/")
+	var b strings.Builder
+	b.WriteByte('/')
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		b.WriteString(seg)
+		b.WriteByte('/')
+		if b.Len() >= len(ReservedPrefix) {
+			break
+		}
+	}
+	return strings.HasPrefix(b.String(), ReservedPrefix)
 }
 
 // ReadJSON loads the entry at key into v. found is false when it does not exist.

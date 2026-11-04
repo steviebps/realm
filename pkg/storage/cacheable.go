@@ -146,7 +146,7 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 			span.RecordError(cacheErr)
 		}
 	} else {
-		span.RecordError(err)
+		recordError(span, err)
 	}
 
 	return err

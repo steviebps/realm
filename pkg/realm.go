@@ -7,26 +7,34 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/helper/logging"
-	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
+var refreshes, _ = otel.Meter("github.com/steviebps/realm").Int64Counter(
+	"realm.sdk.refreshes",
+	metric.WithDescription("Chamber loads by the SDK (Start and polling), by result."),
+	metric.WithUnit("{refresh}"))
+
 type Realm struct {
-	attributes      map[string]string
-	path            string
-	initSync        sync.Once
-	stopCh          chan struct{}
-	stopOnce        sync.Once
+	attributes map[string]string
+	path       string
+	// lifecycle guards started and cancel.
+	lifecycle       sync.Mutex
+	started         bool
 	cancel          context.CancelFunc
 	wg              sync.WaitGroup
 	mu              sync.RWMutex
@@ -48,6 +56,7 @@ type RealmConfig struct {
 	// streaming makes realm keep its chamber current via a server-sent-events
 	// stream (with polling as an automatic fallback) instead of only polling
 	streaming bool
+	logger    *logging.TracedLogger
 }
 
 const (
@@ -139,6 +148,16 @@ func WithStreaming(streaming bool) RealmOption {
 	})
 }
 
+// WithLogger sets the logger realm reports refresh failures and reconnects
+// to. By default realm writes JSON lines to standard error; pass
+// zerolog.Nop() to silence it.
+func WithLogger(logger zerolog.Logger) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.logger = logging.FromZerolog(logger)
+		return rc
+	})
+}
+
 // NewRealm returns a new Realm struct that carries out all of the core features
 func NewRealm(options ...RealmOption) (*Realm, error) {
 	cfg := RealmConfig{}
@@ -147,12 +166,10 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		cfg = opt.apply(cfg)
 	}
 
-	// TODO: setup sane default
 	if cfg.client == nil {
 		return nil, errors.New("client option must not be nil")
 	}
 
-	// TODO: setup sane default
 	if cfg.path == "" {
 		return nil, errors.New("path must not be empty")
 	}
@@ -166,141 +183,236 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		if attributes == nil {
 			attributes = make(map[string]string, 1)
 		}
-		// stored "v"-prefixed so semver clauses compare without allocating
-		attributes[VersionAttribute] = canonicalSemver(cfg.applicationVersion)
+		// stored as given, so in/notIn/startsWith clauses see the same value
+		// as server-side evaluation; semver clauses use a canonical form
+		// cached by the ChamberEntry
+		attributes[VersionAttribute] = cfg.applicationVersion
+	}
+
+	logger := cfg.logger
+	if logger == nil {
+		logger = logging.NewTracedLogger()
 	}
 
 	return &Realm{
 		tracer:          otel.Tracer("github.com/steviebps/realm"),
-		logger:          logging.NewTracedLogger(),
+		logger:          logger,
 		client:          cfg.client,
 		path:            cfg.path,
 		attributes:      attributes,
-		stopCh:          make(chan struct{}),
 		pollingInterval: cfg.pollingInterval,
 		streaming:       cfg.streaming,
 	}, nil
 }
 
-// Start starts realm and initializes the underlying chamber
+// Start loads the chamber, then keeps it current in the background (by
+// polling, or streaming with WithStreaming) until Stop.
+//
+// If the first load fails, Start returns its error but keeps retrying in the
+// background, with backoff, so a service can start while realm is
+// unreachable: until a load succeeds, flag reads return their defaults along
+// with ErrChamberEmpty. Calling Start again only retries the load
+// synchronously. A stopped Realm cannot be restarted.
 func (rlm *Realm) Start() error {
-	var err error
-	ctx, cancel := context.WithCancel(rlm.logger.WithContext(context.Background()))
-	rlm.cancel = cancel
-	rlm.initSync.Do(func() {
-		var chamber *Chamber
-		if chamber, err = rlm.retrieveChamber(ctx, rlm.path); err == nil {
+	rlm.lifecycle.Lock()
+	defer rlm.lifecycle.Unlock()
+
+	if rlm.started {
+		if rlm.getChamber() != nil {
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(rlm.logger.WithContext(context.Background()), DefaultStartTimeout)
+		defer cancel()
+		chamber, err := rlm.retrieveChamber(ctx, rlm.path)
+		if err == nil {
 			rlm.setChamber(chamber)
 		}
-	})
-
-	if err != nil {
-		cancel()
 		return err
 	}
+	rlm.started = true
 
+	ctx, cancel := context.WithCancel(rlm.logger.WithContext(context.Background()))
+	rlm.cancel = cancel
+
+	chamber, err := rlm.retrieveChamber(ctx, rlm.path)
+	if err == nil {
+		rlm.setChamber(chamber)
+	}
+
+	loaded := err == nil
 	rlm.wg.Add(1)
 	go func() {
 		defer rlm.wg.Done()
 		if rlm.streaming {
 			rlm.stream(ctx)
 		} else {
-			rlm.poll(ctx)
+			rlm.poll(ctx, loaded)
 		}
 	}()
 
-	return nil
+	return err
 }
 
-// poll refreshes the chamber snapshot on a fixed interval until realm is stopped.
-func (rlm *Realm) poll(ctx context.Context) {
-	ticker := time.NewTicker(rlm.pollingInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-rlm.stopCh:
-			rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
-			return
-		case <-ticker.C:
-			if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
-				rlm.setChamber(chamber)
-			}
+const (
+	// DefaultStartTimeout bounds a synchronous chamber load by a repeated
+	// Start.
+	DefaultStartTimeout = 15 * time.Second
+
+	// retryBackoff is the first wait before retrying a failed refresh; it
+	// doubles up to maxRetryBackoff.
+	retryBackoff    = time.Second
+	maxRetryBackoff = 30 * time.Second
+)
+
+// streamIdleTimeout is how long a stream may go without receiving anything
+// (the server sends a heartbeat every 30 seconds) before it is considered
+// dead and reopened. It catches connections silently dropped by a proxy or
+// NAT, which would otherwise leave the snapshot stale indefinitely.
+var streamIdleTimeout = 75 * time.Second
+
+// backoff produces capped exponential delays with jitter, so many clients
+// reconnecting after the same outage spread out instead of arriving at once.
+type backoff struct {
+	next, max time.Duration
+}
+
+func newBackoff(max time.Duration) *backoff {
+	return &backoff{next: min(retryBackoff, max), max: max}
+}
+
+// wait returns the next delay: a random duration in [d/2, d) for the current
+// step d, which then doubles up to the cap.
+func (b *backoff) wait() time.Duration {
+	d := b.next
+	b.next = min(b.next*2, b.max)
+	return d/2 + rand.N(d/2+1)
+}
+
+func (b *backoff) reset() { b.next = min(retryBackoff, b.max) }
+
+// jitter spreads a fixed interval by up to ±10%.
+func jitter(d time.Duration) time.Duration {
+	spread := d / 5
+	if spread <= 0 {
+		return d
+	}
+	return d - spread/2 + rand.N(spread)
+}
+
+// sleep waits for d or until ctx is done, reporting whether d elapsed.
+func sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+// poll refreshes the chamber snapshot on the polling interval until realm is
+// stopped. Failed refreshes are retried sooner, with backoff, so an outage
+// does not leave the snapshot stale (or never loaded) for a whole interval.
+func (rlm *Realm) poll(ctx context.Context, loaded bool) {
+	retry := newBackoff(min(maxRetryBackoff, rlm.pollingInterval))
+	wait := jitter(rlm.pollingInterval)
+	if !loaded {
+		wait = retry.wait()
+	}
+	for sleep(ctx, wait) {
+		if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
+			rlm.setChamber(chamber)
+			retry.reset()
+			wait = jitter(rlm.pollingInterval)
+		} else {
+			wait = retry.wait()
 		}
 	}
+	rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
 }
 
 // stream keeps the chamber snapshot current from a server-sent-events stream,
-// reconnecting with capped exponential backoff. If the server does not support
-// streaming, it falls back to polling permanently.
+// reconnecting with capped, jittered exponential backoff. If the server does
+// not support streaming, it falls back to polling permanently.
 func (rlm *Realm) stream(ctx context.Context) {
-	const (
-		initialBackoff = 1 * time.Second
-		maxBackoff     = 30 * time.Second
-	)
-	backoff := initialBackoff
-
-	for {
-		select {
-		case <-rlm.stopCh:
-			rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
-			return
-		default:
-		}
-
+	retry := newBackoff(maxRetryBackoff)
+	for ctx.Err() == nil {
 		supported, received, err := rlm.consumeStream(ctx)
 		if !supported {
 			rlm.logger.InfoCtx(ctx).Msg("realm server does not support streaming; falling back to polling")
-			rlm.poll(ctx)
+			rlm.poll(ctx, rlm.getChamber() != nil)
 			return
 		}
-		if err != nil && ctx.Err() == nil {
-			rlm.logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("chamber stream disconnected; reconnecting")
+		switch {
+		case err == nil || ctx.Err() != nil:
+		case errors.Is(err, errStreamClosed) && received:
+			rlm.logger.DebugCtx(ctx).Msg("chamber stream ended; reconnecting")
+		default:
+			rlm.logger.WarnCtx(ctx).Str("error", err.Error()).Msg("chamber stream disconnected; reconnecting")
 		}
 		if received {
-			backoff = initialBackoff
+			retry.reset()
 		}
-
-		select {
-		case <-rlm.stopCh:
-			return
-		case <-time.After(backoff):
-		}
-
-		if !received {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+		if !sleep(ctx, retry.wait()) {
+			break
 		}
 	}
+	rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
 }
+
+// errStreamClosed reports a stream the server ended, as it does routinely
+// (streams have a maximum lifetime) and on shutdown.
+var errStreamClosed = errors.New("stream closed by the server")
+
+// errStreamIdle reports a stream closed for receiving nothing for
+// streamIdleTimeout.
+var errStreamIdle = errors.New("no data or heartbeat received; the connection is presumed dead")
 
 // consumeStream opens one streaming connection and applies chamber updates until
 // it drops. It reports whether the server supports streaming (false means the
 // caller should fall back to polling) and whether at least one event was
 // applied (used to reset reconnect backoff).
 func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received bool, err error) {
-	ctx, span := rlm.tracer.Start(ctx, "consumeStream", trace.WithAttributes(attribute.String("realm.path", rlm.path)))
-	defer span.End()
+	// The connection is torn down when nothing arrives for streamIdleTimeout,
+	// including while waiting for the response headers.
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	idle := time.AfterFunc(streamIdleTimeout, cancel)
+	defer idle.Stop()
+	idleErr := func(err error) error {
+		if parent.Err() == nil && ctx.Err() != nil {
+			return errStreamIdle
+		}
+		return err
+	}
 
 	resp, err := rlm.client.Watch(ctx, rlm.path)
 	if err != nil {
 		// A transient connection error: keep retrying the stream.
-		return true, false, err
+		return true, false, idleErr(err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		// The server did not give us an event stream (older server, or the watch
-		// parameter is unsupported): fall back to polling.
+	if resp.StatusCode != http.StatusOK {
+		// An error from the server or a proxy in front of it (during a
+		// deploy, say) is transient: retry the stream rather than giving up
+		// on it.
+		return true, false, fmt.Errorf("chamber stream: unexpected status %s", resp.Status)
+	}
+	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		// The server answered with the chamber itself instead of a stream (it
+		// predates streaming and ignored ?watch=true): fall back to polling.
 		return false, false, nil
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 
 	var data strings.Builder
 	for scanner.Scan() {
+		idle.Reset(streamIdleTimeout)
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "data:"):
@@ -312,7 +424,7 @@ func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received b
 			}
 			var c Chamber
 			if uerr := json.Unmarshal([]byte(data.String()), &c); uerr != nil {
-				rlm.logger.ErrorCtx(ctx).Str("error", uerr.Error()).Msg("could not unmarshal streamed chamber")
+				rlm.logger.ErrorCtx(ctx).Str("error", uerr.Error()).Msg("could not unmarshal streamed chamber; keeping the last one")
 			} else {
 				rlm.setChamber(&c)
 				received = true
@@ -323,24 +435,36 @@ func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received b
 		}
 	}
 
-	return true, received, scanner.Err()
+	err = scanner.Err()
+	if err == nil {
+		err = errStreamClosed
+	}
+	return true, received, idleErr(err)
 }
 
 // Stop stops realm and blocks until the background refresh goroutine has exited.
 // It is safe to call more than once.
 func (rlm *Realm) Stop() {
-	rlm.stopOnce.Do(func() {
-		close(rlm.stopCh)
-		if rlm.cancel != nil {
-			rlm.cancel()
-		}
-	})
+	rlm.lifecycle.Lock()
+	if rlm.cancel != nil {
+		rlm.cancel()
+	}
+	rlm.lifecycle.Unlock()
 	rlm.wg.Wait()
 }
 
-func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, error) {
+func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber, err error) {
 	ctx, span := rlm.tracer.Start(ctx, "retrieveChamber", trace.WithAttributes(attribute.String("realm.path", path)))
-	defer span.End()
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			refreshes.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "error")))
+		} else {
+			refreshes.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
+		}
+		span.End()
+	}()
 
 	logger := rlm.logger
 	client := rlm.client
@@ -352,15 +476,19 @@ func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (*Chamber, e
 	}
 	defer res.Body.Close()
 
+	// Decoded leniently: fields added to the envelope by newer servers must
+	// not break older SDKs.
 	var httpRes api.HTTPErrorAndDataResponse
-	if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for getting: %q", path))
+	if err := json.NewDecoder(res.Body).Decode(&httpRes); err != nil {
+		err = fmt.Errorf("could not read response for %q (status %s): %w", path, res.Status, err)
+		logger.ErrorCtx(ctx).Msg(err.Error())
 		return nil, err
 	}
 
-	if len(httpRes.Errors) > 0 {
-		logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not get %q: %s", path, httpRes.Errors))
-		return nil, fmt.Errorf("%s", httpRes.Errors)
+	if len(httpRes.Errors) > 0 || res.StatusCode != http.StatusOK {
+		err := fmt.Errorf("could not get %q: %s %s", path, res.Status, strings.Join(httpRes.Errors, "; "))
+		logger.ErrorCtx(ctx).Msg(err.Error())
+		return nil, err
 	}
 
 	var c Chamber

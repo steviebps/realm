@@ -100,14 +100,14 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
 	dir, key := f.expandPath(logicalPath + bigCacheEntryKey)
 	b, err := f.underlying.Get(path.Join(dir, key))
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		if errors.Is(err, bigcache.ErrEntryNotFound) {
 			return nil, &NotFoundError{logicalPath}
 		}
@@ -116,7 +116,7 @@ func (f *BigCacheStorage) Get(ctx context.Context, logicalPath string) (*Storage
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
@@ -132,14 +132,14 @@ func (f *BigCacheStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 	dir, key := f.expandPath(e.Key + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -155,20 +155,20 @@ func (f *BigCacheStorage) Delete(ctx context.Context, logicalPath string) error 
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 	dir, key := f.expandPath(logicalPath + bigCacheEntryKey)
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
 
 	if err := f.underlying.Delete(path.Join(dir, key)); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		if errors.Is(err, bigcache.ErrEntryNotFound) {
 			return &NotFoundError{logicalPath}
 		}
@@ -186,7 +186,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -217,7 +217,7 @@ func (f *BigCacheStorage) List(ctx context.Context, prefix string) ([]string, er
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}

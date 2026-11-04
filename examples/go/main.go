@@ -25,7 +25,7 @@ type CustomStruct struct {
 func main() {
 	var err error
 	ctx := context.Background()
-	shutdownFn, err := realmtrace.SetupOtelInstrumentation(ctx, false)
+	shutdownFn, err := realmtrace.SetupOtelInstrumentation(ctx, false, "v1.0.0")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -51,6 +51,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		message, _ := rlm.String(r.Context(), "message", "DEFAULT")
+		// plain text: a flag value is data, never markup
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		_, _ = w.Write([]byte(message))
 	})
 

@@ -28,7 +28,7 @@ const realm = new ServerClient({
   attributes: { environment: 'prod' }, // used when a context doesn't set them
   version: process.env.APP_VERSION, // the "version" attribute
 });
-await realm.start(); // rejects if the first load fails
+await realm.start(); // rejects if the first load fails, then keeps retrying
 
 const context = { key: user.id, attributes: { tenantId: user.tenantId } };
 if (realm.bool('new-checkout', context, false)) {
@@ -53,9 +53,10 @@ const flags = new BrowserClient({
   path: '/prod/checkout/',
   context: { key: user.id, attributes: { tenantId: user.tenantId } },
 });
-await flags.start();
+await flags.start(); // rejects if the first evaluation fails, then keeps retrying
 
 flags.bool('new-checkout', false);
+flags.isReady(); // whether the values are the evaluation for the current context
 const unsubscribe = flags.subscribe(() => render()); // called when any value changes
 await flags.identify({ key: otherUser.id }); // re-evaluates for a new context
 ```
@@ -107,7 +108,7 @@ context; an inline object that keeps the same value does not.
 | `useNumberFlag(flag, fallback)` | a number flag's value |
 | `useJsonFlag<T>(flag, fallback)` | a custom (JSON) flag's value |
 | `useAllFlags()` | every flag's value |
-| `useRealmStatus()` | `{ ready, error }`: whether the first evaluation arrived, or why it failed |
+| `useRealmStatus()` | `{ ready, error }`: whether the evaluation for the current context arrived, or why starting failed |
 | `useRealmClient()` | the provider's `BrowserClient` |
 
 Hooks throw outside a `RealmProvider`. On the server (`renderToString` and
@@ -122,10 +123,17 @@ friends), flag hooks return their fallbacks.
 | `path` | `/` | the chamber to read; flags inherited from parent chambers are included |
 | `streaming` | `true` | keep values current over a server-sent event stream; `false` polls instead |
 | `pollingInterval` | 15 min (server), 5 min (browser) | milliseconds between polls when not streaming |
+| `requestTimeout` | 10 s | milliseconds to wait for a response (or a stream's headers) before retrying; `0` waits forever |
 | `onError` | `console.warn` | called when a refresh fails; the last known values stay in use |
 | `fetch` | global `fetch` | a custom fetch implementation |
 
-Streams reconnect with exponential backoff from 1 to 30 seconds. A stream that
+Streams reconnect with exponential backoff from 1 to 30 seconds; in a
+browser, the `online` event cuts a backoff short. When the first load fails,
+`start` rejects but the client keeps retrying in the background, so values
+arrive once the server is reachable. After `identify` with a new
+context, a `BrowserClient` serves fallbacks (never the previous context's
+values, which may be another user's on a shared device) until the new
+context's evaluation arrives, retrying if it fails. A stream that
 goes silent for 75 seconds (the server sends a heartbeat every 30) is
 reconnected. Getters never throw: a missing flag, or a flag of another type,
 returns the fallback.

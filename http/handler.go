@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -43,7 +45,20 @@ type HandlerConfig struct {
 	RequestTimeout time.Duration
 	// Auth enables authentication. When nil every request is allowed.
 	Auth *auth.Config
+	// Draining, once closed, makes GET /readyz report 503 so load balancers
+	// stop routing new requests here before the server shuts down.
+	Draining <-chan struct{}
+	// MaxStreams caps the watch (SSE) streams this server holds open at once;
+	// beyond it, new streams get 503 and clients retry with backoff. Zero
+	// means DefaultMaxStreams.
+	MaxStreams int
 }
+
+// DefaultMaxStreams is the default cap on concurrent watch streams per server.
+const DefaultMaxStreams = 10000
+
+// maxRequestBody bounds every request body (evaluation has a smaller limit).
+const maxRequestBody = 4 << 20
 
 func RealmHandler(rlm *realm.Realm, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +74,9 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 	if config.RequestTimeout <= 0 {
 		config.RequestTimeout = DefaultHandlerTimeout
 	}
+	if config.MaxStreams <= 0 {
+		config.MaxStreams = DefaultMaxStreams
+	}
 	var authn *auth.Authenticator
 	if config.Auth != nil {
 		var err error
@@ -72,12 +90,12 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) http.Handler {
 	logger := logging.Ctx(ctx)
 	mux := http.NewServeMux()
-	brk := newBroker()
+	brk := newBroker(hc.MaxStreams)
 
 	if uiExists {
-		mux.Handle("/ui/", otelhttp.NewHandler(gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))), "/ui/"))
+		mux.Handle("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))))
 	} else {
-		mux.Handle("/ui/", otelhttp.NewHandler(handleUIEmpty(), "/ui/"))
+		mux.Handle("/ui/", handleUIEmpty())
 	}
 
 	meta := &metaStore{strg: storage.Raw(hc.Storage)}
@@ -97,25 +115,55 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 		}()
 	}
 
-	mux.Handle("/v1/chambers/", otelhttp.NewHandler(handleChambers(hc.Storage, meta, brk, notify), "/v1/chambers/"))
-	mux.Handle("/v1/evaluate/", otelhttp.NewHandler(handleEvaluate(hc.Storage, brk), "/v1/evaluate/"))
-	mux.Handle("/v1/history/", otelhttp.NewHandler(handleHistory(meta), "/v1/history/"))
-	mux.Handle("/v1/catalog", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog"))
-	mux.Handle("/v1/catalog/", otelhttp.NewHandler(handleCatalog(meta), "/v1/catalog/"))
-	mux.Handle("/v1/auth/me", otelhttp.NewHandler(handleMe(authn), "/v1/auth/me"))
+	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, notify))
+	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk))
+	mux.Handle("/v1/history/", handleHistory(meta))
+	mux.Handle("/v1/catalog", handleCatalog(meta))
+	mux.Handle("/v1/catalog/", handleCatalog(meta))
+	mux.Handle("/v1/auth/me", handleMe(authn))
 	if authn != nil {
-		mux.Handle("/v1/auth/", otelhttp.NewHandler(authn.Handler(), "/v1/auth/"))
+		mux.Handle("/v1/auth/", authn.Handler())
 		keys := requireAdmin(handleKeys(authn.Keys()))
-		mux.Handle("/v1/keys", otelhttp.NewHandler(keys, "/v1/keys"))
-		mux.Handle("/v1/keys/", otelhttp.NewHandler(keys, "/v1/keys/"))
+		mux.Handle("/v1/keys", keys)
+		mux.Handle("/v1/keys/", keys)
 	}
 	// Liveness for orchestrators (e.g. Kubernetes probes); deliberately not
-	// traced so frequent probes do not flood trace exports. It is public (see
-	// publicPaths).
+	// traced (see traced) so frequent probes do not flood trace exports. It is
+	// public (see publicPaths).
 	mux.HandleFunc("GET /healthz", handleHealth)
+	// Readiness: storage answers and the server is not draining. Also public
+	// and untraced.
+	mux.HandleFunc("GET /readyz", handleReady(storage.Raw(hc.Storage), hc.Draining))
 
 	timeoutHandler := wrapWithTimeout(withCORS(evaluatePrefix, withPrincipal(authn, mux)), hc.RequestTimeout)
-	return wrapCommonHandler(timeoutHandler, logger)
+	// One span per request, around authentication too, so refused requests
+	// are traced and measured like the rest.
+	return otelhttp.NewHandler(wrapCommonHandler(timeoutHandler, logger), "realm",
+		otelhttp.WithFilter(traced),
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + routeOf(r.URL.Path)
+		}),
+	)
+}
+
+// routes are the registered route prefixes, used to name spans with low
+// cardinality.
+var routes = []string{"/v1/chambers/", "/v1/evaluate/", "/v1/history/", "/v1/catalog", "/v1/auth/", "/v1/keys", "/ui/"}
+
+// routeOf returns the route prefix serving path, or "other".
+func routeOf(path string) string {
+	for _, r := range routes {
+		if strings.HasPrefix(path, r) {
+			return r
+		}
+	}
+	return "other"
+}
+
+// traced reports whether a request gets a span: probes are too frequent to be
+// worth one, and a watch stream would hold one open for its whole life.
+func traced(r *http.Request) bool {
+	return r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && !isWatchRequest(r)
 }
 
 func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
@@ -135,13 +183,14 @@ func wrapWithTimeout(h http.Handler, t time.Duration) http.Handler {
 	})
 }
 
-// isWatchRequest reports whether r asks to stream changes (?watch=true). Such
-// requests are exempt from the request timeout.
+// isWatchRequest reports whether r asks to stream changes (?watch=true) on a
+// route that streams. Such requests are exempt from the request timeout.
 func isWatchRequest(r *http.Request) bool {
-	return r.URL.Query().Get("watch") == "true"
+	return r.URL.Query().Get("watch") == "true" &&
+		(strings.HasPrefix(r.URL.Path, "/v1/chambers/") || strings.HasPrefix(r.URL.Path, evaluatePrefix))
 }
 
-func wrapCommonHandler(h http.Handler, logger *logging.TracedLogger) http.Handler {
+func wrapCommonHandler(next http.Handler, logger *logging.TracedLogger) http.Handler {
 	meter := otel.Meter("github.com/steviebps/realm")
 	apiCounter, _ := meter.Int64Counter(
 		"handler.counter",
@@ -153,12 +202,20 @@ func wrapCommonHandler(h http.Handler, logger *logging.TracedLogger) http.Handle
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r = r.WithContext(logger.WithContext(r.Context()))
 		apiCounter.Add(r.Context(), 1)
-		w.Header().Set("Cache-Control", "no-store")
+		h := w.Header()
+		h.Set("Cache-Control", "no-store")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
+		h.Set("Referrer-Policy", "no-referrer")
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+		}
 
 		if hostname != "" {
 			w.Header().Set("X-Realm-Hostname", hostname)
 		}
-		h.ServeHTTP(w, r)
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -206,8 +263,14 @@ func handleWithStatus(w http.ResponseWriter, status int, body interface{}) {
 	_ = utils.WriteInterfaceWith(w, body, true)
 }
 
+// handleError responds with status and resp. Server errors carry a generic
+// message instead of resp's errors, which can hold storage internals; callers
+// log the details.
 func handleError(ctx context.Context, w http.ResponseWriter, status int, resp api.HTTPErrorAndDataResponse) {
 	errorCounter.Add(ctx, 1, metric.WithAttributes(attribute.Int("http.status_code", status)))
+	if status >= http.StatusInternalServerError && status != http.StatusServiceUnavailable {
+		resp.Errors = []string{http.StatusText(status)}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = utils.WriteInterfaceWith(w, resp, true)
@@ -265,16 +328,27 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 		// Writes decode and validate their body before touching storage.
 		var body realm.Chamber
 		if req.Operation == PutOperation || req.Operation == PatchOperation {
-			if err := utils.ReadRequiredInterfaceWith(r.Body, &body); err != nil {
-				if errors.Is(err, io.EOF) {
-					err = errors.New("request body must not be empty")
-				} else {
-					// surface validation errors (bad types, clauses, removed fields)
-					err = fmt.Errorf("invalid chamber: %w", err)
+			raw, err := io.ReadAll(r.Body)
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if errors.As(err, &tooLarge) {
+					fail(http.StatusRequestEntityTooLarge, fmt.Errorf("request body must be at most %d bytes", tooLarge.Limit))
+					return
 				}
 				fail(http.StatusBadRequest, err)
 				return
 			}
+			if len(bytes.TrimSpace(raw)) == 0 {
+				fail(http.StatusBadRequest, errors.New("request body must not be empty"))
+				return
+			}
+			parsed, err := realm.ParseChamber(raw)
+			if err != nil {
+				// surface validation errors (bad types, clauses, unknown or removed fields)
+				fail(http.StatusBadRequest, fmt.Errorf("invalid chamber: %w", err))
+				return
+			}
+			body = *parsed
 		}
 
 		// commit applies the write and responds with status on success.
@@ -479,6 +553,20 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		return
 	}
 
+	signals, unsubscribe, ok := brk.Subscribe(path)
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		handleError(ctx, w, http.StatusServiceUnavailable, createResponseWithErrors(nil, []string{"too many open streams; try again later"}))
+		return
+	}
+	defer unsubscribe()
+
+	// Streams end after a while and clients reconnect, which re-checks their
+	// credentials (a revoked key or expired session loses its stream) and
+	// spreads streams over replicas added since.
+	lifetime := time.NewTimer(maxStreamLifetime + rand.N(maxStreamLifetime/4))
+	defer lifetime.Stop()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -486,9 +574,6 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	// they wait for the payload's source to be created.
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-
-	signals, unsubscribe := brk.Subscribe(path)
-	defer unsubscribe()
 
 	// recheck fires when the last payload produced changes by itself.
 	recheck := time.NewTimer(0)
@@ -535,6 +620,8 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		select {
 		case <-ctx.Done():
 			return
+		case <-lifetime.C:
+			return
 		case <-signals:
 			if !send() {
 				return
@@ -552,10 +639,45 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	}
 }
 
+// maxStreamLifetime is how long a watch stream stays open before the server
+// closes it (plus up to a quarter more, at random, so streams opened together
+// do not all reconnect together).
+var maxStreamLifetime = 20 * time.Minute
+
 // handleHealth reports that the server is up and serving requests.
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	_, _ = w.Write([]byte("ok\n"))
+}
+
+// readyTimeout bounds the storage check behind GET /readyz.
+const readyTimeout = 2 * time.Second
+
+// handleReady reports whether this server should receive traffic: it is not
+// draining for shutdown and its storage answers a read of the root chamber.
+func handleReady(strg storage.Storage, draining <-chan struct{}) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		select {
+		case <-draining:
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("draining\n"))
+			return
+		default:
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
+		defer cancel()
+		if _, err := strg.Get(ctx, "/"); err != nil {
+			var nf *storage.NotFoundError
+			if !errors.As(err, &nf) {
+				logging.Ctx(ctx).WarnCtx(ctx).Str("error", err.Error()).Msg("readiness check: storage unavailable")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte("storage unavailable\n"))
+				return
+			}
+		}
+		_, _ = w.Write([]byte("ok\n"))
+	}
 }
 
 func handleUIEmpty() http.Handler {
