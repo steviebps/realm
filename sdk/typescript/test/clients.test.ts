@@ -53,7 +53,9 @@ describe('ServerClient', () => {
   it('rejects start when the server refuses', async () => {
     const realm = await setup();
     realm.setStatus(403);
-    const client = new ServerClient({ address: realm.address });
+    const client = new ServerClient({ address: realm.address, onError: () => {} });
+    // a rejected start keeps retrying in the background until stopped
+    cleanup.push(() => client.stop());
     const err = await client.start().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RealmError);
     expect(err).toMatchObject({ status: 403, message: 'not allowed' });
@@ -305,6 +307,7 @@ describe('BrowserClient', () => {
     // stop removes the listener of a client waiting to retry
     realm.setStatus(503);
     const other = new BrowserClient({ address: realm.address, onError: () => {} });
+    cleanup.push(() => other.stop());
     await expect(other.start()).rejects.toMatchObject({ status: 503 });
     await vi.waitFor(() => expect(listeners.size).toBe(1));
     other.stop();
