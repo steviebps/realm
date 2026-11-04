@@ -12,6 +12,11 @@ export class Snapshot<T> {
     this.value = initial;
   }
 
+  /** The JSON text of the value, or '' before the first set. */
+  get raw(): string {
+    return this.#raw;
+  }
+
   /**
    * Replaces the value with the one raw (JSON text) holds, unless raw is
    * unchanged. It reports whether the value changed.

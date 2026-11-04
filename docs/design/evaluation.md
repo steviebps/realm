@@ -115,6 +115,14 @@ value, and hooks (`useBoolFlag`, `useJsonFlag`, `useRealmStatus`, …) built
 on `useSyncExternalStore`. React is an optional peer dependency, so the main
 entry point keeps no runtime dependencies.
 
+A `BrowserClient` can start without a network. Its `storage` option (a
+`StorageAdapter`; `localStorageAdapter()` ships with the SDK) keeps the
+latest *evaluated* values for each context, keyed by server, chamber, and a
+hash of the context, and reads back only the entry for the current context,
+so users sharing a device never see each other's values. Its `bootstrap`
+option supplies values for the initial context. `source()` reports
+`bootstrap`, `cache`, or `network`; `isReady()` is true only for `network`.
+
 Both clients stream by default and reconnect with capped exponential backoff
 (1 s to 30 s), keeping the last known values meanwhile. `streaming: false`
 switches to polling every `pollingInterval` milliseconds. Getters never
