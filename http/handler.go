@@ -443,14 +443,15 @@ func writeChamber(ctx context.Context, meta *metaStore, r *http.Request, req *Ag
 }
 
 // streamChamber holds an SSE connection open and pushes the chamber at path
-// whenever it changes.
+// whenever it changes. Clients evaluate the chamber themselves, so its
+// schedules need no pushes of their own.
 func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage, brk *broker, path string) {
-	streamEvents(w, r, brk, path, "chamber", func(ctx context.Context) ([]byte, error) {
+	streamEvents(w, r, brk, path, "chamber", func(ctx context.Context) ([]byte, time.Time, error) {
 		entry, err := strg.Get(ctx, path)
 		if err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
-		return entry.Value, nil
+		return entry.Value, time.Time{}, nil
 	})
 }
 
@@ -460,9 +461,13 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 // sent. It emits periodic heartbeats so dead connections and idle
 // intermediaries are handled. Payloads must be single-line (compact JSON).
 //
+// current may also return a time at which the payload changes by itself (a
+// schedule boundary of an evaluated flag); the payload is produced again then.
+// A zero time means it changes only with writes.
+//
 // A payload whose source does not exist yet is not fatal: the stream waits for
 // it to be created. Any other error closes the stream.
-func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, current func(context.Context) ([]byte, error)) {
+func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, current func(context.Context) ([]byte, time.Time, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
@@ -485,11 +490,21 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	signals, unsubscribe := brk.Subscribe(path)
 	defer unsubscribe()
 
+	// recheck fires when the last payload produced changes by itself.
+	recheck := time.NewTimer(0)
+	recheck.Stop()
+	defer recheck.Stop()
+
 	var last []byte
 	// send writes the current payload unless it is unchanged. It returns
 	// false when the connection should be torn down.
 	send := func() bool {
-		data, err := current(ctx)
+		data, changesAt, err := current(ctx)
+		if changesAt.IsZero() {
+			recheck.Stop()
+		} else {
+			recheck.Reset(time.Until(changesAt))
+		}
 		if err != nil {
 			var nfError *storage.NotFoundError
 			if errors.As(err, &nfError) {
@@ -521,6 +536,10 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		case <-ctx.Done():
 			return
 		case <-signals:
+			if !send() {
+				return
+			}
+		case <-recheck.C:
 			if !send() {
 				return
 			}

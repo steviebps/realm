@@ -8,6 +8,7 @@ import { diffChambers, formatValue } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
 import { defaultValueFor } from '../utils/flags';
+import { scheduleEnded } from '../utils/schedule';
 import { HistoryDrawer } from './HistoryDrawer';
 import { useSession } from '../session';
 
@@ -77,6 +78,7 @@ const FlagRow = ({
 }) => {
   const rules = flag.targeting ?? [];
   const rollouts = rules.filter((r) => r.rollout).length;
+  const scheduled = rules.filter((r) => r.schedule && !scheduleEnded(r.schedule)).length;
   return (
     <div
       role="row"
@@ -100,6 +102,11 @@ const FlagRow = ({
             {rollouts > 0 && (
               <span className="block text-xs text-gray-500 dark:text-gray-400">
                 {rollouts === rules.length ? 'gradual rollout' : `${rollouts} with gradual rollout`}
+              </span>
+            )}
+            {scheduled > 0 && (
+              <span className="block text-xs text-gray-500 dark:text-gray-400">
+                {scheduled === rules.length ? 'scheduled' : `${scheduled} scheduled`}
               </span>
             )}
           </>

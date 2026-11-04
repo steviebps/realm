@@ -1,5 +1,7 @@
 package realm
 
+import "time"
+
 // KeyAttribute is the attribute name under which EvaluationContext.Key is
 // exposed to targeting clauses and rollout bucketing.
 const KeyAttribute = "key"
@@ -30,6 +32,10 @@ type EvaluationContext struct {
 	// defaults holds process-wide attributes (see WithAttributes) consulted
 	// when an attribute is absent from Attributes.
 	defaults map[string]string
+
+	// at fixes the time schedules are evaluated at; when zero, the current
+	// time is used.
+	at time.Time
 }
 
 // Attribute returns the value of the named attribute and whether it is present.
@@ -44,6 +50,14 @@ func (ec EvaluationContext) Attribute(name string) (string, bool) {
 	}
 	v, ok := ec.defaults[name]
 	return v, ok
+}
+
+// now returns the time schedules are evaluated at.
+func (ec EvaluationContext) now() time.Time {
+	if !ec.at.IsZero() {
+		return ec.at
+	}
+	return time.Now()
 }
 
 // withDefaults returns a copy of ec that falls back to the provided attributes.

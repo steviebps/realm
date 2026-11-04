@@ -21,7 +21,8 @@ switches, synchronized across application zones, with progressive rollout.
 inherit from their parents. Each flag has a default value and ordered
 **targeting rules** matched against context attributes (tenant, location,
 environment, service, semver `version`, `buildSha`, …), each optionally
-limited to a **deterministic percentage rollout**. The SDK stays current by
+limited to a **deterministic percentage rollout** and/or a one-off **schedule**
+(a time window). The SDK stays current by
 **polling** (default 15 min) or **real-time streaming** (SSE). The server
 offers ETag optimistic concurrency, per-chamber change history, and an
 attribute catalog (value → label) for the UI; storage includes S3 and
@@ -52,11 +53,16 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   `ValueFor(flagKey, ec)` returns the value of the first rule that applies, else
   the default. `UnmarshalJSON` type-checks rule values and rejects the removed
   `overrides`/`rollout` fields.
-- **TargetingRule** — `Clauses` (ANDed), a `Value`, and an optional `Rollout`.
+- **TargetingRule** — `Clauses` (ANDed), a `Value`, an optional `Rollout`, and
+  an optional `Schedule`.
 - **Clause** — `{attribute, op, values}`; ops `in`, `notIn`, `startsWith`,
   `semverGte`, `semverLte`. A missing attribute never matches.
 - **Rollout** — `{percentage, bucketBy, seed}`: sticky percentage of matching
   contexts, bucketed on any attribute (default `key`). Not bucketed in → next rule.
+- **Schedule** — `{start, end}` RFC 3339 bounds (either optional): the rule
+  applies from `start` until `end`, judged by the evaluating host's clock.
+  `Chamber.Evaluate` also returns the next schedule bound, so evaluation
+  streams know when to re-send.
 - **EvaluationContext** — `Key` (the `key` attribute) and `Attributes`
   (`map[string]string`); falls back to process-wide attributes set with
   `WithAttributes` / `WithVersion`. Travels through the request context.

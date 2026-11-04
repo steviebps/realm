@@ -689,6 +689,157 @@
           }
         }
       ]
+    },
+    {
+      "name": "schedules",
+      "chamber": {
+        "rules": {
+          "window": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "schedule": {
+                  "start": "2026-11-04T14:00:00-05:00",
+                  "end": "2026-11-04T17:00:00-05:00"
+                }
+              }
+            ]
+          },
+          "until": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "schedule": {
+                  "end": "2026-11-04T17:00:00Z"
+                }
+              }
+            ]
+          },
+          "from": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "value": true,
+                "schedule": {
+                  "start": "2026-11-04T19:00:00.25Z"
+                }
+              }
+            ]
+          },
+          "scheduled-tenant": {
+            "type": "string",
+            "value": "default",
+            "targeting": [
+              {
+                "value": "window",
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "schedule": {
+                  "start": "2026-11-04T14:00:00-05:00",
+                  "end": "2026-11-04T17:00:00-05:00"
+                }
+              },
+              {
+                "value": "after"
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "now": "2026-11-04T18:59:59.999Z",
+          "context": {
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "window": false,
+            "until": false,
+            "from": false,
+            "scheduled-tenant": "after"
+          }
+        },
+        {
+          "now": "2026-11-04T19:00:00Z",
+          "context": {
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "window": true,
+            "until": false,
+            "from": false,
+            "scheduled-tenant": "window"
+          }
+        },
+        {
+          "now": "2026-11-04T14:00:00-05:00",
+          "context": {
+            "attributes": {
+              "tenantId": "globex"
+            }
+          },
+          "expect": {
+            "window": true,
+            "until": false,
+            "from": false,
+            "scheduled-tenant": "after"
+          }
+        },
+        {
+          "now": "2026-11-04T21:59:59.999Z",
+          "context": {
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "window": true,
+            "until": false,
+            "from": true,
+            "scheduled-tenant": "window"
+          }
+        },
+        {
+          "now": "2026-11-04T22:00:00Z",
+          "context": {
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "window": false,
+            "until": false,
+            "from": true,
+            "scheduled-tenant": "after"
+          }
+        },
+        {
+          "now": "2026-11-04T16:59:59.999Z",
+          "context": {},
+          "expect": {
+            "window": false,
+            "until": true,
+            "from": false,
+            "scheduled-tenant": "after"
+          }
+        }
+      ]
     }
   ]
 }

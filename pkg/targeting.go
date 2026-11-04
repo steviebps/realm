@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/mod/semver"
 )
@@ -201,9 +202,55 @@ func bucket(seed, key string) float64 {
 	return (float64(val) / longScale) * 100
 }
 
+// Schedule limits a TargetingRule to a window of time: the rule applies from
+// Start (inclusive) until End (exclusive). Omitting a bound leaves that side of
+// the window open. Bounds are RFC 3339 timestamps, so a window is the same
+// span of instants for every host, whatever its time zone.
+type Schedule struct {
+	Start time.Time `json:"start,omitzero"`
+	End   time.Time `json:"end,omitzero"`
+}
+
+type scheduleAlias Schedule
+
+// UnmarshalJSON ensures the schedule has a bound, ends after it starts, and
+// uses no more than millisecond precision, which every SDK can represent.
+func (s *Schedule) UnmarshalJSON(b []byte) error {
+	var alias scheduleAlias
+	if err := json.Unmarshal(b, &alias); err != nil {
+		return err
+	}
+	*s = Schedule(alias)
+	if s.Start.IsZero() && s.End.IsZero() {
+		return errors.New("schedule must have a start or an end")
+	}
+	if !s.Start.IsZero() && !s.End.IsZero() && !s.Start.Before(s.End) {
+		return fmt.Errorf("schedule end %s must be after its start %s", s.End.Format(time.RFC3339Nano), s.Start.Format(time.RFC3339Nano))
+	}
+	for _, t := range []time.Time{s.Start, s.End} {
+		if t.Nanosecond()%int(time.Millisecond) != 0 {
+			return fmt.Errorf("schedule time %s is more precise than a millisecond", t.Format(time.RFC3339Nano))
+		}
+	}
+	return nil
+}
+
+// Includes reports whether the evaluation context's time falls within the
+// schedule. A nil schedule includes every time.
+func (s *Schedule) Includes(ec EvaluationContext) bool {
+	if s == nil {
+		return true
+	}
+	now := ec.now()
+	if !s.Start.IsZero() && now.Before(s.Start) {
+		return false
+	}
+	return s.End.IsZero() || now.Before(s.End)
+}
+
 // TargetingRule serves Value to contexts that match every Clause and, when a
-// Rollout is set, fall within it. Rules are evaluated in order and the first
-// one that applies wins.
+// Rollout is set, fall within it, while its Schedule (if any) is in effect.
+// Rules are evaluated in order and the first one that applies wins.
 type TargetingRule struct {
 	// ID optionally identifies the rule; when set it must be unique within the flag.
 	ID string `json:"id,omitempty"`
@@ -216,10 +263,15 @@ type TargetingRule struct {
 	Value interface{} `json:"value"`
 	// Rollout optionally limits the rule to a percentage of matching contexts.
 	Rollout *Rollout `json:"rollout,omitempty"`
+	// Schedule optionally limits the rule to a window of time.
+	Schedule *Schedule `json:"schedule,omitempty"`
 }
 
 // Applies reports whether the rule should serve its value for the context.
 func (tr *TargetingRule) Applies(flagKey string, ec EvaluationContext) bool {
+	if !tr.Schedule.Includes(ec) {
+		return false
+	}
 	for _, c := range tr.Clauses {
 		if !c.Matches(ec) {
 			return false

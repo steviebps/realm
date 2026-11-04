@@ -1,4 +1,5 @@
-import { Catalog, Chamber, Clause, Flag, FlagValue, Operator, TargetingRule } from '../models/response';
+import { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
+import { formatTime } from './schedule';
 
 export const OPERATOR_LABELS: Record<Operator, string> = {
   in: 'is one of',
@@ -18,12 +19,18 @@ export const describeClause = (clause: Clause, catalog: Catalog) => {
   return `${clause.attribute} ${OPERATOR_LABELS[clause.op]} ${values.join(', ')}`;
 };
 
+export const describeSchedule = ({ start, end }: Schedule) =>
+  [start && `from ${formatTime(start)}`, end && `until ${formatTime(end)}`].filter(Boolean).join(' ');
+
 /** A one-line, plain-language summary of a targeting rule. */
 export const describeRule = (rule: TargetingRule, catalog: Catalog) => {
   const when = rule.clauses?.length ? rule.clauses.map((c) => describeClause(c, catalog)).join(' AND ') : 'everyone';
   let serve = `serve ${formatValue(rule.value)}`;
   if (rule.rollout) {
     serve += ` to ${rule.rollout.percentage}% (by ${rule.rollout.bucketBy || 'key'})`;
+  }
+  if (rule.schedule) {
+    serve += `, ${describeSchedule(rule.schedule)}`;
   }
   return `If ${when} → ${serve}`;
 };

@@ -11,7 +11,7 @@ const conformance = JSON.parse(readFileSync(new URL('../../conformance/evaluatio
     name: string;
     defaults?: Record<string, string>;
     chamber: Chamber;
-    contexts: { context: EvaluationContext; expect: Record<string, unknown> }[];
+    contexts: { now?: string; context: EvaluationContext; expect: Record<string, unknown> }[];
   }[];
 };
 
@@ -28,7 +28,9 @@ describe('conformance', () => {
   describe.each(conformance.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     it.each(c.contexts.map((cc, i) => [i, cc] as const))('context %i', (_i, cc) => {
       const values = Object.fromEntries(
-        Object.entries(evaluateChamber(c.chamber, cc.context, c.defaults)).map(([k, f]) => [k, f.value]),
+        Object.entries(
+          evaluateChamber(c.chamber, cc.context, c.defaults, cc.now === undefined ? undefined : Date.parse(cc.now)),
+        ).map(([k, f]) => [k, f.value]),
       );
       expect(values).toEqual(cc.expect);
     });

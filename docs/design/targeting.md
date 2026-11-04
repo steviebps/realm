@@ -61,6 +61,7 @@ an ordered list of targeting **rules**. `overrides` and `rollout` are
 
 ```
 for rule in flag.targeting (top to bottom):
+    if rule.schedule is set and now is outside it: continue
     if every clause matches the context:          # clauses are ANDed; none = match all
         if rule.rollout is nil:                    return rule.value
         if bucket(seed, ctx[bucketBy]) < percentage: return rule.value
@@ -107,6 +108,34 @@ above so the UI's pickers and catalog line up across applications.
 `key`; setting it to `locationId` rolls out by **whole location**, so every
 device and user in one location gets the same answer. `seed` defaults to the
 flag key; the bucketing algorithm is unchanged (sticky across releases).
+
+### Schedules
+
+`schedule: {start?, end?}` on a rule limits it to a window of time: it applies
+from `start` (inclusive) until `end` (exclusive). Outside the window the rule
+is skipped, exactly like a rule whose clauses do not match, so the next rule or
+the default decides. For example, `true` for three hours on Wednesday
+afternoon:
+
+```json
+{ "value": true, "schedule": { "start": "2026-11-04T14:00:00-05:00", "end": "2026-11-04T17:00:00-05:00" } }
+```
+
+- Bounds are RFC 3339 timestamps with an offset, so a window is the same span
+  of instants on every host; the offset is kept as written. Either bound may
+  be omitted for an open-ended window ("on from 2pm", "until Friday"), but not
+  both. `end` must be after `start`, and bounds are limited to millisecond
+  precision so every SDK compares them exactly.
+- SDKs that evaluate locally (Go, the TypeScript `ServerClient`) compare
+  against their own clock on every evaluation, so the value changes on time
+  without a refresh; hosts switch over as closely as their clocks agree.
+  Evaluating a whole chamber uses one instant for every flag.
+- Evaluation streams (`POST /v1/evaluate/<path>?watch=true`) re-evaluate at
+  the next schedule bound as well as after writes, so browsers see the change
+  on time too. One-shot evaluations and polling clients see it at their next
+  request.
+- Windows are one-off. Recurring windows (every Wednesday 2–5pm) would need a
+  time zone and its daylight-saving rules; they are not supported yet.
 
 ## Attribute catalog
 
@@ -173,6 +202,7 @@ so S3 latency affects admin writes and cold start only.
   with an attribute dropdown (from the catalog plus recently used names),
   operator dropdown, and value pickers that search the catalog.
 - Rollout slider per rule with a "bucket by" selector.
+- Optional schedule per rule: start and end pickers in the editor's time zone.
 - Save → diff confirmation → `If-Match` write; history drawer with revert.
 
 ## Build order

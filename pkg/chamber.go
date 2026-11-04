@@ -3,6 +3,7 @@ package realm
 import (
 	"encoding/json"
 	"maps"
+	"time"
 )
 
 // Chamber is a struct that holds metadata and rules
@@ -49,8 +50,14 @@ type EvaluatedFlag struct {
 	Value interface{} `json:"value"`
 }
 
-// Evaluate resolves every flag in the chamber for ec.
-func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
+// Evaluate resolves every flag in the chamber for ec, evaluating every
+// schedule at the same instant. It also returns the next time a schedule could
+// change those values, or the zero time when none can, so a caller holding the
+// values need only re-evaluate then.
+func (c *Chamber) Evaluate(ec EvaluationContext) (map[string]EvaluatedFlag, time.Time) {
+	if ec.at.IsZero() {
+		ec.at = time.Now()
+	}
 	flags := make(map[string]EvaluatedFlag, len(c.Rules))
 	for key, f := range c.Rules {
 		if f == nil || f.Rule == nil {
@@ -58,7 +65,29 @@ func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
 		}
 		flags[key] = EvaluatedFlag{Type: f.Type, Value: f.ValueFor(key, ec)}
 	}
-	return flags
+	return flags, c.nextScheduleChange(ec.at)
+}
+
+// nextScheduleChange returns the earliest schedule bound of any targeting rule
+// in the chamber that is after t, or the zero time when there is none.
+func (c *Chamber) nextScheduleChange(t time.Time) time.Time {
+	var next time.Time
+	for _, f := range c.Rules {
+		if f == nil {
+			continue
+		}
+		for _, tr := range f.Targeting {
+			if tr.Schedule == nil {
+				continue
+			}
+			for _, bound := range []time.Time{tr.Schedule.Start, tr.Schedule.End} {
+				if bound.After(t) && (next.IsZero() || bound.Before(next)) {
+					next = bound
+				}
+			}
+		}
+	}
+	return next
 }
 
 // ChamberEntry is a read-only version of Chamber

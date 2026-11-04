@@ -3,6 +3,7 @@ import { Button, Card, Label, RangeSlider, Select, TextInput, ToggleSwitch } fro
 import { HiArrowDown, HiArrowUp, HiPlus, HiTrash } from 'react-icons/hi';
 import { Catalog, Clause, Operator, RuleType, TargetingRule } from '../../models/response';
 import { OPERATOR_LABELS, describeRule } from '../../utils/describe';
+import { fromLocalInput, nextHour, toLocalInput } from '../../utils/schedule';
 import { ValueInput } from './ValueInput';
 import { ValuesPicker } from './ValuesPicker';
 
@@ -20,6 +21,8 @@ type Props = {
 };
 
 const isSemver = (op: Operator) => op === 'semverGte' || op === 'semverLte';
+
+const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export const RuleEditor = ({
   index,
@@ -208,6 +211,37 @@ export const RuleEditor = ({
               />
             </div>
           </div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <ToggleSwitch
+          checked={!!rule.schedule}
+          label="Only during a window of time"
+          onChange={(on) => onChange({ ...rule, schedule: on ? nextHour() : undefined })}
+        />
+        {rule.schedule && (
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {(['start', 'end'] as const).map((bound) => (
+                <div key={bound}>
+                  <Label htmlFor={`${attrListId}-${bound}`}>{bound === 'start' ? 'Starts' : 'Ends'}</Label>
+                  <TextInput
+                    id={`${attrListId}-${bound}`}
+                    type="datetime-local"
+                    sizing="sm"
+                    value={toLocalInput(rule.schedule![bound])}
+                    onChange={(e) =>
+                      onChange({ ...rule, schedule: { ...rule.schedule, [bound]: fromLocalInput(e.target.value) } })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Times are in your time zone ({timeZone}). Leave one empty for an open-ended window.
+            </p>
+          </>
         )}
       </div>
     </Card>

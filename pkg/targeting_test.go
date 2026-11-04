@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClauseMatches(t *testing.T) {
@@ -107,6 +108,13 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"rollout out of range", `{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":101}}]}`, "range"},
 		{"bad clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"a","op":"nope","values":["x"]}]}]}`, "unsupported operator"},
 		{"null clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[null]}]}`, "must not be null"},
+		{"valid schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00-05:00","end":"2026-11-04T17:00:00-05:00"}}]}`, ""},
+		{"open-ended schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"end":"2026-11-04T17:00:00Z"}}]}`, ""},
+		{"empty schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{}}]}`, "start or an end"},
+		{"schedule ends before it starts", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T17:00:00Z","end":"2026-11-04T14:00:00Z"}}]}`, "must be after"},
+		{"zero-length schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00Z","end":"2026-11-04T14:00:00Z"}}]}`, "must be after"},
+		{"schedule not RFC 3339", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"Wednesday 2pm"}}]}`, "cannot parse"},
+		{"schedule finer than a millisecond", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00.0000001Z"}}]}`, "millisecond"},
 		{"legacy overrides rejected", `{"type":"boolean","value":false,"overrides":[]}`, "no longer supported"},
 		{"legacy rollout rejected", `{"type":"boolean","value":false,"rollout":{"type":"boolean","value":true,"percentage":5}}`, "no longer supported"},
 	}
@@ -325,6 +333,126 @@ func TestChamberEntryUsesProcessAttributes(t *testing.T) {
 	}
 }
 
+func TestScheduleIncludes(t *testing.T) {
+	start := time.Date(2026, 11, 4, 14, 0, 0, 0, time.UTC)
+	end := start.Add(3 * time.Hour)
+
+	tests := []struct {
+		name     string
+		schedule *Schedule
+		at       time.Time
+		want     bool
+	}{
+		{"nil schedule includes every time", nil, start, true},
+		{"before start", &Schedule{Start: start, End: end}, start.Add(-time.Millisecond), false},
+		{"at start", &Schedule{Start: start, End: end}, start, true},
+		{"inside", &Schedule{Start: start, End: end}, start.Add(90 * time.Minute), true},
+		{"just before end", &Schedule{Start: start, End: end}, end.Add(-time.Millisecond), true},
+		{"at end", &Schedule{Start: start, End: end}, end, false},
+		{"open start", &Schedule{End: end}, start.AddDate(-1, 0, 0), true},
+		{"open end", &Schedule{Start: start}, end.AddDate(1, 0, 0), true},
+		{"other time zone, same instant", &Schedule{Start: start, End: end}, start.In(time.FixedZone("UTC-5", -5*3600)), true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.schedule.Includes(EvaluationContext{at: test.at}); got != test.want {
+				t.Errorf("Includes(%s) = %v, want %v", test.at, got, test.want)
+			}
+		})
+	}
+
+	t.Run("current time when unset", func(t *testing.T) {
+		now := time.Now()
+		if !(&Schedule{Start: now.Add(-time.Hour), End: now.Add(time.Hour)}).Includes(EvaluationContext{}) {
+			t.Error("expected a window around now to include the current time")
+		}
+		if (&Schedule{End: now.Add(-time.Hour)}).Includes(EvaluationContext{}) {
+			t.Error("expected a past window to exclude the current time")
+		}
+	})
+}
+
+func TestScheduledRuleContinuesToNextRule(t *testing.T) {
+	var f Flag
+	if err := json.Unmarshal([]byte(`{"type":"string","value":"default","targeting":[
+		{"value":"window","schedule":{"start":"2026-11-04T14:00:00Z","end":"2026-11-04T17:00:00Z"}},
+		{"clauses":[{"attribute":"tenantId","op":"in","values":["t1"]}],"value":"tenant"}
+	]}`), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	attrs := map[string]string{"tenantId": "t1"}
+	for at, want := range map[string]string{
+		"2026-11-04T13:59:59Z": "tenant",
+		"2026-11-04T14:00:00Z": "window",
+		"2026-11-04T17:00:00Z": "tenant",
+	} {
+		ts, _ := time.Parse(time.RFC3339, at)
+		if got, _ := f.StringValueFor("flag", EvaluationContext{Attributes: attrs, at: ts}, ""); got != want {
+			t.Errorf("at %s: got %q, want %q", at, got, want)
+		}
+	}
+}
+
+func TestScheduleRoundTripsWithOffset(t *testing.T) {
+	input := `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00-05:00","end":"2026-11-04T17:00:00.5-05:00"}}]}`
+	var f Flag
+	if err := json.Unmarshal([]byte(input), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	out, err := json.Marshal(&f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(out) != input {
+		t.Errorf("schedule did not round-trip:\n got %s\nwant %s", out, input)
+	}
+
+	open := `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"end":"2026-11-04T17:00:00Z"}}]}`
+	if err := json.Unmarshal([]byte(open), &f); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out, _ := json.Marshal(&f); string(out) != open {
+		t.Errorf("open schedule should omit its start:\n got %s\nwant %s", out, open)
+	}
+}
+
+func TestChamberEvaluateNextScheduleChange(t *testing.T) {
+	var c Chamber
+	if err := json.Unmarshal([]byte(`{"rules":{
+		"a":{"type":"boolean","value":false,"targeting":[
+			{"value":true,"schedule":{"start":"2026-11-04T14:00:00Z","end":"2026-11-04T17:00:00Z"}}
+		]},
+		"b":{"type":"boolean","value":false,"targeting":[
+			{"value":true},
+			{"value":true,"schedule":{"end":"2026-11-04T15:30:00Z"}}
+		]},
+		"c":{"type":"boolean","value":false}
+	}}`), &c); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	tests := []struct {
+		at   string
+		want string // empty when no change is pending
+	}{
+		{"2026-11-04T00:00:00Z", "2026-11-04T14:00:00Z"},
+		{"2026-11-04T14:00:00Z", "2026-11-04T15:30:00Z"},
+		{"2026-11-04T16:00:00Z", "2026-11-04T17:00:00Z"},
+		{"2026-11-04T17:00:00Z", ""},
+	}
+	for _, test := range tests {
+		at, _ := time.Parse(time.RFC3339, test.at)
+		_, next := c.Evaluate(EvaluationContext{at: at})
+		got := ""
+		if !next.IsZero() {
+			got = next.Format(time.RFC3339)
+		}
+		if got != test.want {
+			t.Errorf("Evaluate at %s: next change %q, want %q", test.at, got, test.want)
+		}
+	}
+}
+
 func BenchmarkFlagValueForTargeting(b *testing.B) {
 	locations := make([]string, 200)
 	for i := range locations {
@@ -345,6 +473,19 @@ func BenchmarkFlagValueForTargeting(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
 			f.BoolValueFor("flag", ec, false)
+		}
+	})
+}
+
+func BenchmarkScheduleIncludes(b *testing.B) {
+	now := time.Now()
+	s := &Schedule{Start: now.Add(-time.Hour), End: now.Add(time.Hour)}
+	ec := EvaluationContext{Key: "user-1234"}
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			s.Includes(ec)
 		}
 	})
 }
