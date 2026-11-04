@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -86,7 +87,13 @@ func (p *oidcProvider) authURL(ctx context.Context, redirectURL, state, verifier
 	if err != nil {
 		return "", err
 	}
-	return conf.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce)), nil
+	opts := []oauth2.AuthCodeOption{oauth2.S256ChallengeOption(verifier), oidc.Nonce(nonce)}
+	if len(p.cfg.HostedDomains) == 1 {
+		// Google's account chooser offers only accounts in this domain. It is
+		// a hint; identify enforces the claim.
+		opts = append(opts, oauth2.SetAuthURLParam("hd", p.cfg.HostedDomains[0]))
+	}
+	return conf.AuthCodeURL(state, opts...), nil
 }
 
 func (p *oidcProvider) identify(ctx context.Context, redirectURL, code, verifier, nonce string) (*Identity, error) {
@@ -114,6 +121,7 @@ func (p *oidcProvider) identify(ctx context.Context, redirectURL, code, verifier
 		Email         string `json:"email"`
 		EmailVerified *bool  `json:"email_verified"`
 		Name          string `json:"name"`
+		HostedDomain  string `json:"hd"`
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("invalid ID token claims: %w", err)
@@ -122,6 +130,9 @@ func (p *oidcProvider) identify(ctx context.Context, redirectURL, code, verifier
 	// impersonate someone else.
 	if claims.Email == "" || claims.EmailVerified == nil || !*claims.EmailVerified {
 		return nil, errors.New("the provider did not return a verified email address")
+	}
+	if len(p.cfg.HostedDomains) > 0 && !slices.ContainsFunc(p.cfg.HostedDomains, func(d string) bool { return strings.EqualFold(d, claims.HostedDomain) }) {
+		return nil, fmt.Errorf("%s is not an account of an allowed organization domain", claims.Email)
 	}
 	return &Identity{Email: claims.Email, Name: claims.Name}, nil
 }

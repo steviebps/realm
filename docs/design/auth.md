@@ -25,6 +25,7 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
       "externalURL": "https://realm.example.com",
       "sessionSecret": "${REALM_SESSION_SECRET}",
       "sessionTTL": "12h",
+      "githubOrgsTTL": "1h",
       "access": {
         "admins":  { "emails": ["owner@example.com"] },
         "editors": { "domains": ["example.com"] },
@@ -37,7 +38,9 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
           "type": "oidc",
           "issuer": "https://accounts.google.com",
           "clientId": "1234.apps.googleusercontent.com",
-          "clientSecret": "${GOOGLE_CLIENT_SECRET}"
+          "clientSecret": "${GOOGLE_CLIENT_SECRET}",
+          "hostedDomains": ["example.com"],
+          "authoritativeDomains": ["example.com"]
         },
         {
           "name": "github",
@@ -69,10 +72,21 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
   realm requests the `openid email profile` scopes (override with `scopes`)
   and requires the ID token to carry `email_verified: true`. Discovery runs
   on first sign-in, so an unreachable issuer does not stop the server
-  starting.
+  starting. Two options harden a company identity provider:
+  - **`hostedDomains`** refuses sign-ins whose ID token lacks an `hd`
+    (hosted domain) claim naming one of these domains. Google sets `hd` only
+    for Google Workspace accounts, so this keeps out consumer Google accounts
+    that someone registered with a company address. With a single domain,
+    realm also passes it to Google as the `hd` hint, so the account chooser
+    offers only that domain's accounts.
+  - **`authoritativeDomains`** makes the provider the authority for email
+    addresses in these domains; see [Roles](#roles).
 - **`github`**: GitHub OAuth apps. GitHub is not OIDC, so realm reads the
   user's verified primary email and organization memberships from the GitHub
-  API. It requests the scopes `read:user user:email read:org`.
+  API. It requests the scopes `read:user user:email read:org`. GitHub accepts
+  any verified email and never re-checks it, so a GitHub primary email shows
+  only that the user once controlled the address. It cannot be
+  `authoritativeDomains` for a domain or have `hostedDomains`.
 
 Both use the authorization-code flow with PKCE, a `state` value bound to a
 short-lived encrypted cookie, and (for OIDC) a nonce.
@@ -89,9 +103,27 @@ A grant matches a user by verified **email**, email **domain**, or **GitHub
 organization** (GitHub sign-ins only). A user gets the highest role any grant
 matches. A user matching no grant is refused at sign-in.
 
-The session stores who signed in, not their role. The role is recomputed from
-the config on every request, so removing someone's grant and restarting the
-server takes effect immediately.
+**Which provider may vouch for an email.** By default every provider may
+vouch for every address, so with both a company IdP and GitHub configured,
+someone whose GitHub primary email is `@example.com` (perhaps an address they
+no longer control) matches `"domains": ["example.com"]`. To prevent that, list
+the domain under the company provider's `authoritativeDomains`. Once any
+provider claims a domain, email and domain grants for addresses in it match
+only users who signed in through a provider that claims it. Addresses in
+unclaimed domains still match through any provider, so existing configs keep
+working. Organization grants are unaffected.
+
+The session stores who signed in and through which provider, not their role.
+The role is recomputed from the config on every request, so removing
+someone's grant and restarting the server takes effect immediately.
+
+**GitHub organization memberships** are read once, at sign-in, and stored in
+the session. They are trusted for `githubOrgsTTL` (default `1h`). After that,
+a user whose role depends on an organization grant must sign in again, which
+reads their memberships afresh, so someone removed from an organization loses
+access within that time. A user with an email or domain grant at least as high
+keeps their session. After upgrading, sessions issued before this check
+existed count as stale.
 
 The first administrator is whoever you list under `access.admins`; no
 bootstrap token is needed.
@@ -106,6 +138,7 @@ are:
   in front-end code. It cannot read chambers, history, or the catalog. See
   [evaluation.md](evaluation.md).
 - `read`, for server SDKs: it may read and watch chambers and their history.
+  A key scoped to the root path `/` may also read the attribute catalog.
 - `write`, for automation: it may also change chambers.
 
 Each level includes the ones before it, but `read` and `write` keys are
@@ -116,6 +149,11 @@ mistake.
 A key works only for chambers at its path or beneath it (`/prod/` covers
 `/prod/` and `/prod/checkout/`, but not `/production/`). Keys cannot manage
 keys or change the catalog.
+
+The attribute catalog belongs to the whole realm, not to a chamber, and its
+labels can name every tenant or location. So only `read` and `write` keys
+scoped to `/` may read it. A key scoped to `/prod/` cannot, even though some
+of the catalog's values may appear in `/prod/` chambers.
 
 Tokens look like `realm_<id>_<secret>`. realm stores only a SHA-256 hash of
 the secret, under the reserved `/_realm/keys/` prefix, and shows the token
@@ -165,7 +203,7 @@ config file.
 | `POST /v1/auth/logout` | none | clears the session cookie |
 | `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)` |
 | `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user; only evaluate keys when the request has an `Origin` header; CORS-enabled for bearer tokens |
-| `/v1/catalog…` | key or session | read: anyone authenticated except evaluate keys, write: admin |
+| `/v1/catalog…` | key or session | read: `CanReadCatalog()`, so any signed-in user or a `read`/`write` key scoped to `/`; write: admin |
 | `/v1/keys…` | admin session | key management |
 | `/ui/` | none | static assets; the app shows the sign-in screen |
 
@@ -187,7 +225,11 @@ identity (an email, or `key:<name>`) and ignores the self-reported
   clears the cookie, but a copied cookie stays valid until it expires
   (`sessionTTL`). Revoke access by removing the user's grant.
 - **Unverified emails** are refused, because access can be granted by email
-  domain.
+  domain. A verified email is only as trustworthy as the provider behind it;
+  use `authoritativeDomains` (and `hostedDomains` with Google) so domain
+  grants depend on the company IdP alone.
+- **Organization removal** takes effect within `githubOrgsTTL`, not
+  immediately, because memberships are cached in the session.
 - **Replicas.** Sessions work on any replica that shares `sessionSecret`. Key
   verification caches keys for up to 30 seconds per process. Writes
   (concurrency checks, history, catalog, key creation) are still serialized
