@@ -85,7 +85,9 @@ type session struct {
 	Name       string   `json:"name,omitempty"`
 	Provider   string   `json:"provider"`
 	GitHubOrgs []string `json:"githubOrgs,omitempty"`
-	Expires    int64    `json:"exp"`
+	// OrgsAt is when GitHubOrgs was read from GitHub (Unix seconds).
+	OrgsAt  int64 `json:"orgsAt,omitempty"`
+	Expires int64 `json:"exp"`
 }
 
 // loginState is the content of the login cookie between redirect and callback.
@@ -128,7 +130,14 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	if !safeMethod(r.Method) && !a.sameOrigin(r) {
 		return nil, ErrCrossOrigin
 	}
-	role := a.cfg.Access.RoleFor(s.Email, s.GitHubOrgs)
+	role := a.cfg.RoleFor(s.Provider, s.Email, s.GitHubOrgs)
+	// Memberships are a snapshot from sign-in. Once they are older than
+	// githubOrgsTTL, a user who owes their role to one must sign in again,
+	// so someone removed from an organization loses access promptly.
+	if len(s.GitHubOrgs) > 0 && time.Since(time.Unix(s.OrgsAt, 0)) > a.cfg.githubOrgsTTL &&
+		a.cfg.RoleFor(s.Provider, s.Email, nil) < role {
+		return nil, nil
+	}
 	if role == RoleNone {
 		return nil, nil
 	}
@@ -257,13 +266,14 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		a.signInFailed(w, http.StatusUnauthorized, "Sign-in failed: "+err.Error())
 		return
 	}
-	if a.cfg.Access.RoleFor(id.Email, id.GitHubOrgs) == RoleNone {
+	if a.cfg.RoleFor(name, id.Email, id.GitHubOrgs) == RoleNone {
 		logger.InfoCtx(ctx).Str("provider", name).Str("email", id.Email).Msg("sign-in refused: no role granted")
 		a.signInFailed(w, http.StatusForbidden, fmt.Sprintf("%s has not been given access to this realm. Ask an administrator to grant you a role.", id.Email))
 		return
 	}
 
-	s := session{Email: id.Email, Name: id.Name, Provider: name, GitHubOrgs: id.GitHubOrgs, Expires: time.Now().Add(a.cfg.sessionTTL).Unix()}
+	now := time.Now()
+	s := session{Email: id.Email, Name: id.Name, Provider: name, GitHubOrgs: id.GitHubOrgs, OrgsAt: now.Unix(), Expires: now.Add(a.cfg.sessionTTL).Unix()}
 	sealed, err := a.sealer.seal(SessionCookie, s)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)

@@ -32,6 +32,8 @@ func TestPrincipalPermissions(t *testing.T) {
 	readKey := &Principal{Kind: KindKey, Access: AccessRead, Path: "/prod/"}
 	writeKey := &Principal{Kind: KindKey, Access: AccessWrite, Path: "/prod/"}
 	rootKey := &Principal{Kind: KindKey, Access: AccessWrite, Path: "/"}
+	rootReadKey := &Principal{Kind: KindKey, Access: AccessRead, Path: ""}
+	rootEvalKey := &Principal{Kind: KindKey, Access: AccessEvaluate, Path: "/"}
 	viewer := &Principal{Kind: KindUser, Role: RoleViewer}
 	editor := &Principal{Kind: KindUser, Role: RoleEditor}
 	admin := &Principal{Kind: KindUser, Role: RoleAdmin}
@@ -54,6 +56,8 @@ func TestPrincipalPermissions(t *testing.T) {
 		{"write key in scope", writeKey, "/prod/app/", true, true, false, true},
 		{"write key out of scope", writeKey, "/dev/", false, false, false, false},
 		{"root key", rootKey, "/anything/", true, true, false, true},
+		{"root read key", rootReadKey, "/anything/", true, false, false, true},
+		{"root evaluate key", rootEvalKey, "/anything/", false, false, false, true},
 		{"viewer", viewer, "/prod/", true, false, false, true},
 		{"editor", editor, "/prod/", true, true, false, true},
 		{"admin", admin, "/prod/", true, true, true, true},
@@ -74,36 +78,57 @@ func TestPrincipalPermissions(t *testing.T) {
 			if got := tt.p.CanEvaluate(tt.path); got != tt.eval {
 				t.Errorf("CanEvaluate = %v, want %v", got, tt.eval)
 			}
-			if got, want := tt.p.CanReadCatalog(), tt.p != nil && tt.p != evalKey; got != want {
-				t.Errorf("CanReadCatalog = %v, want %v", got, want)
+			// the catalog is realm-wide: only root-scoped read keys may read it
+			wantCatalog := tt.p != nil && tt.p != evalKey && tt.p != readKey && tt.p != writeKey && tt.p != rootEvalKey
+			if got := tt.p.CanReadCatalog(); got != wantCatalog {
+				t.Errorf("CanReadCatalog = %v, want %v", got, wantCatalog)
 			}
 		})
 	}
 }
 
 func TestRoleFor(t *testing.T) {
-	access := AccessConfig{
-		Admins:  Grant{Emails: []string{"Owner@Example.com"}},
-		Editors: Grant{Domains: []string{"example.com"}},
+	cfg := validConfig()
+	cfg.Providers = []ProviderConfig{
+		{Name: "corp", Type: ProviderOIDC, Issuer: "https://idp.example.com", ClientID: "id", ClientSecret: "s", AuthoritativeDomains: []string{"@Example.com"}},
+		{Name: "partner", Type: ProviderOIDC, Issuer: "https://idp.partner.io", ClientID: "id", ClientSecret: "s"},
+		{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "s"},
+	}
+	cfg.Access = AccessConfig{
+		Admins:  Grant{Emails: []string{"Owner@Example.com", "lead@partner.io"}},
+		Editors: Grant{Domains: []string{"example.com", "@partner.io"}},
 		Viewers: Grant{GitHubOrgs: []string{"Example-Org"}},
 	}
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
-		email string
-		orgs  []string
-		want  Role
+		provider, email string
+		orgs            []string
+		want            Role
 	}{
-		{"owner@example.com", nil, RoleAdmin},
-		{"someone@example.com", nil, RoleEditor},
-		{"someone@sub.example.com", nil, RoleNone},
-		{"someone@example.com.evil.io", nil, RoleNone},
-		{"outsider@other.io", []string{"example-org"}, RoleViewer},
-		{"owner@example.com", []string{"example-org"}, RoleAdmin},
-		{"outsider@other.io", []string{"other-org"}, RoleNone},
-		{"", nil, RoleNone},
+		{"corp", "owner@example.com", nil, RoleAdmin},
+		{"corp", "someone@example.com", nil, RoleEditor},
+		{"corp", "someone@EXAMPLE.com", nil, RoleEditor},
+		{"corp", "someone@sub.example.com", nil, RoleNone},
+		{"corp", "someone@example.com.evil.io", nil, RoleNone},
+		{"corp", "", nil, RoleNone},
+		// corp is authoritative for example.com: no other provider vouches for it
+		{"partner", "owner@example.com", nil, RoleNone},
+		{"gh", "owner@example.com", nil, RoleNone},
+		{"gh", "someone@example.com", nil, RoleNone},
+		{"gh", "someone@example.com", []string{"example-org"}, RoleViewer},
+		// nobody claims partner.io, so any provider vouches for it
+		{"partner", "lead@partner.io", nil, RoleAdmin},
+		{"corp", "lead@partner.io", nil, RoleAdmin},
+		{"gh", "someone@partner.io", nil, RoleEditor},
+		{"gh", "outsider@other.io", []string{"example-org"}, RoleViewer},
+		{"gh", "outsider@other.io", []string{"other-org"}, RoleNone},
+		{"corp", "owner@example.com", []string{"example-org"}, RoleAdmin},
 	}
 	for _, tt := range tests {
-		t.Run(tt.email+"/"+strings.Join(tt.orgs, ","), func(t *testing.T) {
-			if got := access.RoleFor(tt.email, tt.orgs); got != tt.want {
+		t.Run(tt.provider+"/"+tt.email+"/"+strings.Join(tt.orgs, ","), func(t *testing.T) {
+			if got := cfg.RoleFor(tt.provider, tt.email, tt.orgs); got != tt.want {
 				t.Errorf("RoleFor = %v, want %v", got, tt.want)
 			}
 		})
@@ -139,6 +164,20 @@ func TestConfigValidate(t *testing.T) {
 		{"github", func(c *Config) {
 			c.Providers[0] = ProviderConfig{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "s"}
 		}, ""},
+		{"github orgs ttl", func(c *Config) { c.GitHubOrgsTTL = "15m" }, ""},
+		{"bad github orgs ttl", func(c *Config) { c.GitHubOrgsTTL = "0s" }, "githubOrgsTTL"},
+		{"hosted and authoritative domains", func(c *Config) {
+			c.Providers[0].HostedDomains = []string{"example.com"}
+			c.Providers[0].AuthoritativeDomains = []string{"@example.com", "example.org"}
+		}, ""},
+		{"empty hosted domain", func(c *Config) { c.Providers[0].HostedDomains = []string{""} }, "hostedDomains"},
+		{"email as authoritative domain", func(c *Config) { c.Providers[0].AuthoritativeDomains = []string{"me@example.com"} }, "authoritativeDomains"},
+		{"github cannot be authoritative", func(c *Config) {
+			c.Providers[0] = ProviderConfig{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "s", AuthoritativeDomains: []string{"example.com"}}
+		}, "apply only"},
+		{"github has no hosted domain", func(c *Config) {
+			c.Providers[0] = ProviderConfig{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "s", HostedDomains: []string{"example.com"}}
+		}, "apply only"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -522,6 +561,165 @@ func TestGitHubSignIn(t *testing.T) {
 			}
 			if status, body := get(t, browser, srv.URL+"/whoami"); status != http.StatusOK || body != tt.want {
 				t.Fatalf("whoami = %d %q, want %q", status, body, tt.want)
+			}
+		})
+	}
+}
+
+// useFakeGitHub points the GitHub provider named name at a fake GitHub.
+func useFakeGitHub(a *Authenticator, name string, gh *httptest.Server) {
+	p := a.providers[name].(*githubProvider)
+	p.endpoint = oauth2.Endpoint{AuthURL: gh.URL + "/login/oauth/authorize", TokenURL: gh.URL + "/login/oauth/access_token"}
+	p.apiURL = gh.URL
+}
+
+func TestHostedDomain(t *testing.T) {
+	issuer := authtest.NewIssuer(t, "someone@example.com")
+	_, srv := realmServer(t, func(c *Config) {
+		c.Access = AccessConfig{Viewers: Grant{Domains: []string{"example.com"}}}
+		c.Providers = []ProviderConfig{{Name: "google", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret, HostedDomains: []string{"Example.com"}}}
+	})
+	tests := []struct {
+		name       string
+		hd         any
+		wantStatus int
+	}{
+		{"workspace account", "example.com", http.StatusOK},
+		{"workspace account, other case", "EXAMPLE.COM", http.StatusOK},
+		{"consumer account with a company address", nil, http.StatusUnauthorized},
+		{"another workspace", "other.io", http.StatusUnauthorized},
+		{"hd of the wrong type", true, http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			issuer.SetClaim("hd", tt.hd)
+			browser := authtest.Browser(t)
+			if status, _ := get(t, browser, srv.URL+"/v1/auth/login/google"); status != tt.wantStatus {
+				t.Fatalf("sign-in = %d, want %d", status, tt.wantStatus)
+			}
+			if got := issuer.LastAuthorize().Get("hd"); got != "example.com" {
+				t.Errorf("authorization request hd = %q, want the configured domain as a hint", got)
+			}
+			wantWhoami := http.StatusUnauthorized
+			if tt.wantStatus == http.StatusOK {
+				wantWhoami = http.StatusOK
+			}
+			if status, _ := get(t, browser, srv.URL+"/whoami"); status != wantWhoami {
+				t.Fatalf("whoami = %d, want %d", status, wantWhoami)
+			}
+		})
+	}
+}
+
+func TestAuthoritativeDomains(t *testing.T) {
+	corp := authtest.NewIssuer(t, "")
+	partner := authtest.NewIssuer(t, "")
+	gh := fakeGitHub(t, `[{"email":"former@example.com","primary":true,"verified":true}]`, `[]`)
+	a, srv := realmServer(t, func(c *Config) {
+		c.Access = AccessConfig{
+			Admins:  Grant{Emails: []string{"former@example.com"}},
+			Editors: Grant{Domains: []string{"example.com"}},
+			Viewers: Grant{Domains: []string{"partner.io"}},
+		}
+		c.Providers = []ProviderConfig{
+			{Name: "corp", Type: ProviderOIDC, Issuer: corp.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret, AuthoritativeDomains: []string{"example.com"}},
+			{Name: "partner", Type: ProviderOIDC, Issuer: partner.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret},
+			{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "secret"},
+		}
+	})
+	useFakeGitHub(a, "gh", gh)
+
+	tests := []struct {
+		name, provider, email string
+		issuer                *authtest.Issuer
+		wantStatus            int
+		want                  string
+	}{
+		{"authoritative provider", "corp", "someone@example.com", corp, http.StatusOK, "someone@example.com editor corp"},
+		{"authoritative provider, email grant", "corp", "former@example.com", corp, http.StatusOK, "former@example.com admin corp"},
+		{"other OIDC provider for a claimed domain", "partner", "someone@example.com", partner, http.StatusForbidden, ""},
+		{"GitHub email in a claimed domain", "gh", "", nil, http.StatusForbidden, ""},
+		{"unclaimed domain through any provider", "partner", "guest@partner.io", partner, http.StatusOK, "guest@partner.io viewer partner"},
+		{"unclaimed domain through the authoritative provider", "corp", "guest@partner.io", corp, http.StatusOK, "guest@partner.io viewer corp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.issuer != nil {
+				tt.issuer.SignInAs(tt.email, true)
+			}
+			browser := authtest.Browser(t)
+			if status, _ := get(t, browser, srv.URL+"/v1/auth/login/"+tt.provider); status != tt.wantStatus {
+				t.Fatalf("sign-in = %d, want %d", status, tt.wantStatus)
+			}
+			if tt.want == "" {
+				return
+			}
+			if status, body := get(t, browser, srv.URL+"/whoami"); status != http.StatusOK || body != tt.want {
+				t.Fatalf("whoami = %d %q, want %q", status, body, tt.want)
+			}
+		})
+	}
+
+	// A session issued before a provider claimed the domain stops matching
+	// domain grants once it does, since roles are recomputed per request.
+	s := session{Email: "someone@example.com", Provider: "partner", Expires: time.Now().Add(time.Hour).Unix()}
+	sealed, err := a.sealer.seal(SessionCookie, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/whoami", nil)
+	r.AddCookie(&http.Cookie{Name: SessionCookie, Value: sealed})
+	if p, err := a.Authenticate(r); p != nil || err != nil {
+		t.Errorf("session from a non-authoritative provider = %+v, %v", p, err)
+	}
+}
+
+func TestGitHubOrgsExpire(t *testing.T) {
+	a, _ := realmServer(t, func(c *Config) {
+		c.GitHubOrgsTTL = "1h"
+		c.Access = AccessConfig{
+			Admins:  Grant{Emails: []string{"lead@other.io"}},
+			Editors: Grant{GitHubOrgs: []string{"example-org"}},
+			Viewers: Grant{Domains: []string{"other.io"}, GitHubOrgs: []string{"viewers-org"}},
+		}
+		c.Providers = []ProviderConfig{{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "secret"}}
+	})
+	now := time.Now()
+	fresh, stale := now.Add(-time.Minute).Unix(), now.Add(-2*time.Hour).Unix()
+
+	tests := []struct {
+		name   string
+		email  string
+		orgs   []string
+		orgsAt int64
+		want   Role // RoleNone: no principal, so the user must sign in again
+	}{
+		{"fresh org grant", "octo@other.io", []string{"example-org"}, fresh, RoleEditor},
+		{"stale org grant", "octo@else.io", []string{"viewers-org"}, stale, RoleNone},
+		{"stale org grant above the user's other grants", "octo@other.io", []string{"example-org"}, stale, RoleNone},
+		{"stale org grant the user does not need", "lead@other.io", []string{"example-org"}, stale, RoleAdmin},
+		{"stale org grant matching another grant's role", "octo@other.io", []string{"viewers-org"}, stale, RoleViewer},
+		{"session from before orgsAt existed", "octo@else.io", []string{"viewers-org"}, 0, RoleNone},
+		{"no orgs", "octo@other.io", nil, 0, RoleViewer},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sealed, err := a.sealer.seal(SessionCookie, session{Email: tt.email, Provider: "gh", GitHubOrgs: tt.orgs, OrgsAt: tt.orgsAt, Expires: now.Add(time.Hour).Unix()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest(http.MethodGet, "/whoami", nil)
+			r.AddCookie(&http.Cookie{Name: SessionCookie, Value: sealed})
+			p, err := a.Authenticate(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := RoleNone
+			if p != nil {
+				got = p.Role
+			}
+			if got != tt.want {
+				t.Errorf("role = %v, want %v", got, tt.want)
 			}
 		})
 	}

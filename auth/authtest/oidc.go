@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -33,6 +34,8 @@ type Issuer struct {
 	mu            sync.Mutex
 	email         string
 	emailVerified bool
+	extra         map[string]any
+	lastAuthorize url.Values
 	codes         map[string]grant
 	signer        jose.Signer
 	jwks          jose.JSONWebKeySet
@@ -41,6 +44,7 @@ type Issuer struct {
 type grant struct {
 	nonce, challenge, redirectURI, email string
 	verified                             bool
+	extra                                map[string]any
 }
 
 // NewIssuer starts a fake issuer that signs users in as email.
@@ -79,6 +83,29 @@ func (iss *Issuer) SignInAs(email string, verified bool) {
 	iss.email, iss.emailVerified = email, verified
 }
 
+// SetClaim adds a claim, such as Google's "hd" (hosted domain), to the ID
+// tokens of later sign-ins. A nil value removes it.
+func (iss *Issuer) SetClaim(name string, value any) {
+	iss.mu.Lock()
+	defer iss.mu.Unlock()
+	if iss.extra == nil {
+		iss.extra = map[string]any{}
+	}
+	if value == nil {
+		delete(iss.extra, name)
+		return
+	}
+	iss.extra[name] = value
+}
+
+// LastAuthorize returns the query parameters of the latest authorization
+// request.
+func (iss *Issuer) LastAuthorize() url.Values {
+	iss.mu.Lock()
+	defer iss.mu.Unlock()
+	return iss.lastAuthorize
+}
+
 func (iss *Issuer) discovery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{
 		"issuer":                                iss.URL,
@@ -98,7 +125,8 @@ func (iss *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	code := rand.Text()
 	iss.mu.Lock()
-	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: q.Get("redirect_uri"), email: iss.email, verified: iss.emailVerified}
+	iss.lastAuthorize = q
+	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: q.Get("redirect_uri"), email: iss.email, verified: iss.emailVerified, extra: maps.Clone(iss.extra)}
 	iss.mu.Unlock()
 
 	target, err := url.Parse(q.Get("redirect_uri"))
@@ -150,6 +178,7 @@ func (iss *Issuer) token(w http.ResponseWriter, r *http.Request) {
 		"iat":            now.Unix(),
 		"exp":            now.Add(time.Hour).Unix(),
 	}
+	maps.Copy(claims, g.extra)
 	idToken, err := jwt.Signed(iss.signer).Claims(claims).Serialize()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
