@@ -89,6 +89,10 @@ export function rolloutIncludes(
   return bucket(rollout.seed || flagKey, v) < rollout.percentage;
 }
 
+// Parsed schedule bounds in milliseconds, so evaluation parses each schedule
+// once rather than on every call. Chambers are not mutated once received.
+const scheduleBounds = new WeakMap<Schedule, readonly [number, number]>();
+
 /**
  * Reports whether now (milliseconds since the epoch) falls within the
  * schedule: at or after its start and before its end. No schedule includes
@@ -96,8 +100,15 @@ export function rolloutIncludes(
  */
 export function scheduleIncludes(schedule: Schedule | undefined, now: number): boolean {
   if (!schedule) return true;
-  if (schedule.start !== undefined && now < Date.parse(schedule.start)) return false;
-  return schedule.end === undefined || now < Date.parse(schedule.end);
+  let bounds = scheduleBounds.get(schedule);
+  if (!bounds) {
+    bounds = [
+      schedule.start === undefined ? -Infinity : Date.parse(schedule.start),
+      schedule.end === undefined ? Infinity : Date.parse(schedule.end),
+    ];
+    scheduleBounds.set(schedule, bounds);
+  }
+  return now >= bounds[0] && now < bounds[1];
 }
 
 /**

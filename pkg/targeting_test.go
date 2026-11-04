@@ -416,7 +416,7 @@ func TestScheduleRoundTripsWithOffset(t *testing.T) {
 	}
 }
 
-func TestChamberNextScheduleChange(t *testing.T) {
+func TestChamberEvaluateNextScheduleChange(t *testing.T) {
 	var c Chamber
 	if err := json.Unmarshal([]byte(`{"rules":{
 		"a":{"type":"boolean","value":false,"targeting":[
@@ -432,20 +432,23 @@ func TestChamberNextScheduleChange(t *testing.T) {
 	}
 
 	tests := []struct {
-		after  string
-		want   string
-		wantOK bool
+		at   string
+		want string // empty when no change is pending
 	}{
-		{"2026-11-04T00:00:00Z", "2026-11-04T14:00:00Z", true},
-		{"2026-11-04T14:00:00Z", "2026-11-04T15:30:00Z", true},
-		{"2026-11-04T16:00:00Z", "2026-11-04T17:00:00Z", true},
-		{"2026-11-04T17:00:00Z", "", false},
+		{"2026-11-04T00:00:00Z", "2026-11-04T14:00:00Z"},
+		{"2026-11-04T14:00:00Z", "2026-11-04T15:30:00Z"},
+		{"2026-11-04T16:00:00Z", "2026-11-04T17:00:00Z"},
+		{"2026-11-04T17:00:00Z", ""},
 	}
 	for _, test := range tests {
-		after, _ := time.Parse(time.RFC3339, test.after)
-		got, ok := c.NextScheduleChange(after)
-		if ok != test.wantOK || (ok && got.Format(time.RFC3339) != test.want) {
-			t.Errorf("NextScheduleChange(%s) = %s, %v; want %s, %v", test.after, got.Format(time.RFC3339), ok, test.want, test.wantOK)
+		at, _ := time.Parse(time.RFC3339, test.at)
+		_, next := c.Evaluate(EvaluationContext{at: at})
+		got := ""
+		if !next.IsZero() {
+			got = next.Format(time.RFC3339)
+		}
+		if got != test.want {
+			t.Errorf("Evaluate at %s: next change %q, want %q", test.at, got, test.want)
 		}
 	}
 }

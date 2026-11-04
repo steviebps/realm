@@ -223,30 +223,20 @@ export const RuleEditor = ({
         {rule.schedule && (
           <>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div>
-                <Label htmlFor={`${attrListId}-start`}>Starts</Label>
-                <TextInput
-                  id={`${attrListId}-start`}
-                  type="datetime-local"
-                  sizing="sm"
-                  value={toLocalInput(rule.schedule.start)}
-                  onChange={(e) =>
-                    onChange({ ...rule, schedule: { ...rule.schedule, start: fromLocalInput(e.target.value) } })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor={`${attrListId}-end`}>Ends</Label>
-                <TextInput
-                  id={`${attrListId}-end`}
-                  type="datetime-local"
-                  sizing="sm"
-                  value={toLocalInput(rule.schedule.end)}
-                  onChange={(e) =>
-                    onChange({ ...rule, schedule: { ...rule.schedule, end: fromLocalInput(e.target.value) } })
-                  }
-                />
-              </div>
+              {(['start', 'end'] as const).map((bound) => (
+                <div key={bound}>
+                  <Label htmlFor={`${attrListId}-${bound}`}>{bound === 'start' ? 'Starts' : 'Ends'}</Label>
+                  <TextInput
+                    id={`${attrListId}-${bound}`}
+                    type="datetime-local"
+                    sizing="sm"
+                    value={toLocalInput(rule.schedule![bound])}
+                    onChange={(e) =>
+                      onChange({ ...rule, schedule: { ...rule.schedule, [bound]: fromLocalInput(e.target.value) } })
+                    }
+                  />
+                </div>
+              ))}
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Times are in your time zone ({timeZone}). Leave one empty for an open-ended window.

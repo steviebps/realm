@@ -8,7 +8,7 @@ import { diffChambers, formatValue } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
 import { defaultValueFor } from '../utils/flags';
-import { scheduleState } from '../utils/schedule';
+import { scheduleEnded } from '../utils/schedule';
 import { HistoryDrawer } from './HistoryDrawer';
 import { useSession } from '../session';
 
@@ -78,7 +78,7 @@ const FlagRow = ({
 }) => {
   const rules = flag.targeting ?? [];
   const rollouts = rules.filter((r) => r.rollout).length;
-  const scheduled = rules.filter((r) => r.schedule && scheduleState(r.schedule) !== 'ended').length;
+  const scheduled = rules.filter((r) => r.schedule && !scheduleEnded(r.schedule)).length;
   return (
     <div
       role="row"

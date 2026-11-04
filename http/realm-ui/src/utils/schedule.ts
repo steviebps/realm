@@ -47,9 +47,6 @@ export const nextHour = (): Schedule => {
   return { start: withOffset(start), end: withOffset(end) };
 };
 
-/** Whether a schedule is yet to start, in effect, or ended at now. */
-export const scheduleState = (schedule: Schedule, now = Date.now()): 'upcoming' | 'active' | 'ended' => {
-  if (schedule.start && now < Date.parse(schedule.start)) return 'upcoming';
-  if (schedule.end && now >= Date.parse(schedule.end)) return 'ended';
-  return 'active';
-};
+/** Whether a schedule has ended at now. */
+export const scheduleEnded = (schedule: Schedule, now = Date.now()): boolean =>
+  !!schedule.end && now >= Date.parse(schedule.end);

@@ -137,10 +137,8 @@ func (p *parsedChambers) evaluate(ctx context.Context, path string, ec realm.Eva
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	// Look for the next change before evaluating, so a boundary passed in
-	// between is re-checked (at once) rather than skipped.
-	changesAt, _ := c.NextScheduleChange(time.Now())
-	return c.Evaluate(ec), changesAt, nil
+	flags, changesAt := c.Evaluate(ec)
+	return flags, changesAt, nil
 }
 
 // parse returns the chamber stored as raw, reusing the last parse of path when

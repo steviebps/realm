@@ -27,9 +27,9 @@ type conformance struct {
 		Defaults map[string]string `json:"defaults"`
 		Chamber  Chamber           `json:"chamber"`
 		Contexts []struct {
-			// Now is the RFC 3339 time to evaluate schedules at; when empty,
-			// the case has no schedules.
-			Now     string `json:"now"`
+			// Now is the time to evaluate schedules at; when absent, the
+			// case has no schedules.
+			Now     time.Time `json:"now"`
 			Context struct {
 				Key        string            `json:"key"`
 				Attributes map[string]string `json:"attributes"`
@@ -74,14 +74,8 @@ func TestConformance(t *testing.T) {
 		t.Run(tc.Name, func(t *testing.T) {
 			for i, cc := range tc.Contexts {
 				ec := EvaluationContext{Key: cc.Context.Key, Attributes: cc.Context.Attributes}.withDefaults(tc.Defaults)
-				if cc.Now != "" {
-					at, err := time.Parse(time.RFC3339, cc.Now)
-					if err != nil {
-						t.Fatalf("context %d: %v", i, err)
-					}
-					ec.at = at
-				}
-				got := tc.Chamber.Evaluate(ec)
+				ec.at = cc.Now
+				got, _ := tc.Chamber.Evaluate(ec)
 				if len(got) != len(cc.Expect) {
 					t.Errorf("context %d: evaluated %d flags, want %d", i, len(got), len(cc.Expect))
 				}

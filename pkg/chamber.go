@@ -51,8 +51,10 @@ type EvaluatedFlag struct {
 }
 
 // Evaluate resolves every flag in the chamber for ec, evaluating every
-// schedule at the same instant.
-func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
+// schedule at the same instant. It also returns the next time a schedule could
+// change those values, or the zero time when none can, so a caller holding the
+// values need only re-evaluate then.
+func (c *Chamber) Evaluate(ec EvaluationContext) (map[string]EvaluatedFlag, time.Time) {
 	if ec.at.IsZero() {
 		ec.at = time.Now()
 	}
@@ -63,14 +65,12 @@ func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
 		}
 		flags[key] = EvaluatedFlag{Type: f.Type, Value: f.ValueFor(key, ec)}
 	}
-	return flags
+	return flags, c.nextScheduleChange(ec.at)
 }
 
-// NextScheduleChange returns the earliest schedule bound of any targeting rule
-// in the chamber that is after t, and false when there is none. Flag values
-// only change with time at these bounds, so a caller holding evaluated values
-// need only re-evaluate then.
-func (c *Chamber) NextScheduleChange(t time.Time) (time.Time, bool) {
+// nextScheduleChange returns the earliest schedule bound of any targeting rule
+// in the chamber that is after t, or the zero time when there is none.
+func (c *Chamber) nextScheduleChange(t time.Time) time.Time {
 	var next time.Time
 	for _, f := range c.Rules {
 		if f == nil {
@@ -87,7 +87,7 @@ func (c *Chamber) NextScheduleChange(t time.Time) (time.Time, bool) {
 			}
 		}
 	}
-	return next, !next.IsZero()
+	return next
 }
 
 // ChamberEntry is a read-only version of Chamber

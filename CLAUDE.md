@@ -61,7 +61,8 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   contexts, bucketed on any attribute (default `key`). Not bucketed in → next rule.
 - **Schedule** — `{start, end}` RFC 3339 bounds (either optional): the rule
   applies from `start` until `end`, judged by the evaluating host's clock.
-  `Chamber.NextScheduleChange` tells evaluation streams when to re-send.
+  `Chamber.Evaluate` also returns the next schedule bound, so evaluation
+  streams know when to re-send.
 - **EvaluationContext** — `Key` (the `key` attribute) and `Attributes`
   (`map[string]string`); falls back to process-wide attributes set with
   `WithAttributes` / `WithVersion`. Travels through the request context.
