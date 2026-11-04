@@ -29,6 +29,9 @@ archives:
       - configs/*
 checksum:
   name_template: 'checksums.txt'
+release:
+  # v1.2.3-rc.1 and the like are marked as prereleases
+  prerelease: auto
 snapshot:
   version_template: "{{ .Tag }}-next"
 changelog:
@@ -39,11 +42,15 @@ changelog:
       - '^test:'
 homebrew_casks:
   - name: realm
-    description: "Inheritable and overridable configuration management"
+    description: "Feature flags and configuration with targeting, progressive rollout, and real-time sync"
+    # prereleases do not update the cask
+    skip_upload: auto
     repository:
       owner: steviebps
       name: homebrew-realm
       branch: main
+      # a fine-grained token with contents:write on this repository only
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
     url: 
       template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}

@@ -9,17 +9,21 @@ Node 18+, Bun, Deno, browsers, and edge runtimes.
 | `ServerClient` | backend services | `read` | downloads the chamber and evaluates locally, like the Go SDK |
 | `BrowserClient` | browsers, untrusted code | `evaluate` | the server evaluates for one context; rules never reach the client |
 
-`realm-sdk/react` adds a provider and hooks for a `BrowserClient`; React is an
+`@steviebps/realm-sdk/react` adds a provider and hooks for a `BrowserClient`; React is an
 optional peer dependency, needed only if you import it.
 
-The package is not published to npm yet. Depend on it from this repository,
-for example with `"realm-sdk": "file:../realm/sdk/typescript"`; installing
-runs its build.
+```bash
+npm install @steviebps/realm-sdk
+```
+
+It is published from this repository with every realm release, at the same
+version as the server (see [Releasing](../../docs/RELEASING.md)). The package is
+ESM only: use `import`, not `require`.
 
 ## ServerClient
 
 ```ts
-import { ServerClient } from 'realm-sdk';
+import { ServerClient } from '@steviebps/realm-sdk';
 
 const realm = new ServerClient({
   address: 'https://realm.example.com',
@@ -45,7 +49,7 @@ realm.stop();
 ## BrowserClient
 
 ```ts
-import { BrowserClient } from 'realm-sdk';
+import { BrowserClient } from '@steviebps/realm-sdk';
 
 const flags = new BrowserClient({
   address: 'https://realm.example.com',
@@ -67,13 +71,13 @@ by mistake fails in development instead of exposing your rules.
 
 ## React
 
-`realm-sdk/react` reads a `BrowserClient` from React 18 or later. Wrap the app
+`@steviebps/realm-sdk/react` reads a `BrowserClient` from React 18 or later. Wrap the app
 in a `RealmProvider`, then read flags with hooks; a component renders again
 when a flag it reads changes.
 
 ```tsx
-import { BrowserClient } from 'realm-sdk';
-import { RealmProvider, useBoolFlag, useRealmStatus } from 'realm-sdk/react';
+import { BrowserClient } from '@steviebps/realm-sdk';
+import { RealmProvider, useBoolFlag, useRealmStatus } from '@steviebps/realm-sdk/react';
 
 const flags = new BrowserClient({
   address: 'https://realm.example.com',

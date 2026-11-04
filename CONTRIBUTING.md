@@ -102,9 +102,12 @@ These mirror `CLAUDE.md`, which has more detail and recipes:
 
 - Keep PRs focused; describe the change and how you verified it.
 - Ensure `make test-race` and `make lint` are green.
-- CI runs the test matrix (`.github/workflows/test.yml`), lint
-  (`.github/workflows/lint.yml`), and CodeQL. Releases are tag-triggered via
-  GoReleaser (`.github/workflows/go.yml`).
+- CI (`.github/workflows/ci.yml`) runs the Go tests with `-race` on Linux,
+  macOS, and Windows; the Postgres tests; lint and a `go mod tidy` check; the
+  TypeScript SDK on Node 18 and 24; the UI build with the embedded-UI Go
+  build; and `scripts/e2e.sh` against a real server. `ci-ok` sums them up.
+  CodeQL scans the Go and TypeScript code.
+- Releases: see [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Where to start
 

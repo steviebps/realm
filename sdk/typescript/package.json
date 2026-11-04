@@ -1,9 +1,22 @@
 {
-  "name": "realm-sdk",
-  "version": "0.1.0",
-  "private": true,
+  "name": "@steviebps/realm-sdk",
+  "version": "0.0.0-development",
   "description": "TypeScript SDK for realm feature flags: local evaluation for servers, remote evaluation for browsers, and React hooks.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/steviebps/realm.git",
+    "directory": "sdk/typescript"
+  },
+  "homepage": "https://github.com/steviebps/realm/tree/master/sdk/typescript#readme",
+  "bugs": "https://github.com/steviebps/realm/issues",
+  "keywords": [
+    "feature-flags",
+    "feature-toggles",
+    "realm",
+    "react",
+    "sse"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -46,5 +59,9 @@
     "react-dom": "^19.3.1",
     "typescript": "^5.9.3",
     "vitest": "^5.1.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

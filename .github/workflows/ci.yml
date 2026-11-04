@@ -1,0 +1,173 @@
+name: ci
+
+# Every check a change must pass. Pull requests and master run it directly;
+# release.yml runs it again (workflow_call) before publishing anything. Mark
+# the "ci-ok" job as the one required status check in branch protection: it
+# fails whenever any other job fails or is cancelled.
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    name: go (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test (race)
+        run: go test -race -count=1 ./...
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: realm
+          POSTGRES_PASSWORD: realm
+          POSTGRES_DB: realm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U realm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      REALM_POSTGRES_TEST_URL: postgres://realm:realm@localhost:5432/realm_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Test against Postgres (race)
+        run: go test -race -count=1 ./pkg/storage/... ./http/...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Fetch modules up front (with retries) so a transient proxy error
+      # doesn't surface as a misleading typecheck failure inside the linter.
+      - name: Download modules
+        run: |
+          for i in 1 2 3; do
+            go mod download && exit 0
+            echo "go mod download failed (attempt $i), retrying..."
+            sleep $((i * 5))
+          done
+          exit 1
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15
+
+  typescript-sdk:
+    name: typescript sdk (node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # the oldest Node the package supports (engines) and the current LTS
+        node: [18, 24]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Package contents
+        if: matrix.node == 24
+        run: npm pack --dry-run
+
+  ui:
+    name: ui (and embedded build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: http/realm-ui/package-lock.json
+      - name: Lint, typecheck, and build the UI
+        working-directory: http/realm-ui
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # The release binaries and the image embed the UI (-tags=ui), which
+      # the other jobs never compile.
+      - name: Vet and build with the UI embedded
+        run: |
+          go vet -tags=ui ./...
+          go build -tags=ui -o /dev/null .
+
+  e2e:
+    name: end to end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - name: Install the TypeScript SDK
+        working-directory: sdk/typescript
+        run: npm ci
+      - name: Build realm
+        run: go build -o realm .
+      - name: Run against a real server
+        run: ./scripts/e2e.sh ./realm
+      - name: Server log
+        if: failure()
+        run: cat e2e-server.log || true
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [go, postgres, lint, typescript-sdk, ui, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: |
+          echo "a required job did not pass: ${{ toJSON(needs.*.result) }}"
+          exit 1
+      - run: echo "all checks passed"
