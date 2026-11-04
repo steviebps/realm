@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { BrowserClient, type EvaluationContext, type StorageAdapter } from '../src/index.js';
 
 // fakeRealm serves one chamber the way the realm server does, and lets tests
 // push changes to open event streams.
@@ -65,4 +66,15 @@ export async function fakeRealm() {
       return new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+// seedStorage evaluates for context against the server at address once,
+// leaving its values in storage.
+export async function seedStorage(address: string, storage: StorageAdapter, context: EvaluationContext, path?: string) {
+  const client = new BrowserClient({ address, path, context, storage, streaming: false });
+  try {
+    await client.start();
+  } finally {
+    client.stop();
+  }
 }

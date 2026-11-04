@@ -1,7 +1,7 @@
 import { typedValue } from './evaluate.js';
 import { Snapshot } from './snapshot.js';
-import { decodeFlags, encodeFlags, storageKey, type StorageAdapter } from './storage.js';
-import { Transport, type ClientOptions } from './transport.js';
+import { decodeFlags, storageKey, type StorageAdapter } from './storage.js';
+import { asError, Transport, type ClientOptions } from './transport.js';
 import type { EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
 /** Options for a BrowserClient. */
@@ -37,13 +37,6 @@ interface Evaluation {
   flags: EvaluatedFlags;
 }
 
-// Shown describes the values in the snapshot: the context (as JSON) they
-// were evaluated for and where they came from.
-interface Shown {
-  contextKey: string;
-  source: FlagSource;
-}
-
 /**
  * Asks the server to evaluate flags for one context, using an `evaluate` key.
  * The rules never reach the client, so it is safe in browsers and other
@@ -54,21 +47,30 @@ export class BrowserClient {
   readonly #options: BrowserClientOptions;
   readonly #evaluation = new Snapshot<Evaluation>({ flags: {} });
   #context: EvaluationContext;
-  // The context as JSON, and the context bootstrap values are for.
+  // The context as JSON, and the key its values are stored under.
   #contextKey: string;
-  readonly #bootstrapFor: string;
-  // What the snapshot holds; undefined while it is empty and getters return
-  // fallbacks. Its context is always the current one.
-  #shown: Shown | undefined;
+  #storageKey: string;
+  // The prefix of every storage key: the evaluate URL (server and chamber).
+  readonly #storagePrefix: string;
+  // The bootstrap values, and the context (as JSON) they are for.
+  readonly #bootstrap: { contextKey: string; flags: EvaluatedFlags } | undefined;
+  // Where the snapshot's values came from; undefined while it is empty and
+  // getters return fallbacks. They are always the current context's.
+  #source: FlagSource | undefined;
+  // What storage is known to hold under #storageKey, so unchanged values are
+  // not written again.
+  #stored: string | undefined;
   // The background refresh, and its first evaluation, while started.
   #running: { controller: AbortController; started: Promise<void> } | undefined;
 
   constructor(options: BrowserClientOptions) {
     this.#options = options;
     this.#transport = new Transport(options);
+    this.#storagePrefix = this.#transport.url('evaluate');
     this.#context = options.context ?? {};
     this.#contextKey = JSON.stringify(this.#context);
-    this.#bootstrapFor = this.#contextKey;
+    this.#storageKey = this.#options.storage ? storageKey(this.#storagePrefix, this.#context) : '';
+    this.#bootstrap = options.bootstrap && { contextKey: this.#contextKey, flags: options.bootstrap };
     this.#restore();
   }
 
@@ -92,9 +94,13 @@ export class BrowserClient {
    * fails. On a stopped client it only sets the context.
    */
   async identify(context: EvaluationContext): Promise<void> {
+    const contextKey = JSON.stringify(context);
     this.#context = context;
-    this.#contextKey = JSON.stringify(context);
-    if (this.#shown?.contextKey !== this.#contextKey) this.#restore();
+    if (contextKey !== this.#contextKey) {
+      this.#contextKey = contextKey;
+      this.#storageKey = this.#options.storage ? storageKey(this.#storagePrefix, context) : '';
+      this.#restore();
+    }
     if (this.#running) await this.#connect();
   }
 
@@ -109,7 +115,7 @@ export class BrowserClient {
    * Bootstrap and stored values do not count, even for the same context.
    */
   isReady(): boolean {
-    return this.#shown?.source === 'network';
+    return this.#source === 'network';
   }
 
   /**
@@ -117,12 +123,15 @@ export class BrowserClient {
    * and getters return their fallbacks.
    */
   source(): FlagSource | undefined {
-    return this.#shown?.source;
+    return this.#source;
   }
 
-  /** The context flags are evaluated for. */
-  context(): EvaluationContext {
-    return this.#context;
+  /**
+   * The context flags are evaluated for, as JSON: compare it to tell whether
+   * the values are for a given context.
+   */
+  contextKey(): string {
+    return this.#contextKey;
   }
 
   /**
@@ -155,7 +164,7 @@ export class BrowserClient {
 
   /** Every flag's current value. */
   allFlags(): EvaluatedFlags {
-    return this.#shown ? (this.#evaluation.value.flags ?? noFlags) : noFlags;
+    return this.#evaluation.value.flags ?? noFlags;
   }
 
   #typed<T>(key: string, want: FlagType, fallback: T): T {
@@ -163,28 +172,19 @@ export class BrowserClient {
     return flag ? typedValue(flag.type, flag.value, want, fallback) : fallback;
   }
 
-  // show records that the snapshot holds shown's values, then applies update,
-  // telling listeners if only the source changed. It reports whether a value
-  // changed.
-  #show(shown: Shown, update: () => boolean): boolean {
-    const before = this.#shown;
-    this.#shown = shown;
+  // show records that the snapshot holds values from source, then applies
+  // update, telling listeners if only the source changed.
+  #show(source: FlagSource | undefined, update: () => boolean): void {
+    const before = this.#source;
+    this.#source = source;
     let changed: boolean;
     try {
       changed = update();
     } catch (e) {
-      this.#shown = before;
+      this.#source = before;
       throw e;
     }
-    if (!changed && before?.source !== shown.source) this.#evaluation.notify();
-    return changed;
-  }
-
-  // clear empties the snapshot, so getters return their fallbacks.
-  #clear(): void {
-    const before = this.#shown;
-    this.#shown = undefined;
-    if (!this.#evaluation.set({ flags: {} }) && before !== undefined) this.#evaluation.notify();
+    if (!changed && before !== source) this.#evaluation.notify();
   }
 
   // restore replaces the values with the best ones available for the current
@@ -194,63 +194,61 @@ export class BrowserClient {
   #restore(): void {
     const contextKey = this.#contextKey;
     const storage = this.#options.storage;
+    this.#stored = undefined;
     if (storage) {
       let stored: ReturnType<StorageAdapter['getItem']>;
       try {
-        stored = storage.getItem(this.#storageKey(this.#context));
+        stored = storage.getItem(this.#storageKey);
       } catch (e) {
         this.#reportStorage(e);
       }
       if (isPromise(stored)) {
         stored.then(
-          (raw) => this.#applyStored(contextKey, raw),
+          // by now the server's values, or other stored ones, may be shown
+          (raw) => this.#source !== 'network' && this.#source !== 'cache' && this.#applyStored(contextKey, raw),
           (e: unknown) => this.#reportStorage(e),
         );
       } else if (this.#applyStored(contextKey, stored)) {
         return;
       }
     }
-    const bootstrap = this.#options.bootstrap;
-    if (bootstrap && contextKey === this.#bootstrapFor) {
-      this.#show({ contextKey, source: 'bootstrap' }, () => this.#evaluation.set({ flags: bootstrap }));
+    const bootstrap = this.#bootstrap;
+    if (bootstrap?.contextKey === contextKey) {
+      this.#show('bootstrap', () => this.#evaluation.set({ flags: bootstrap.flags }));
     } else {
-      this.#clear();
+      this.#show(undefined, () => this.#evaluation.set({ flags: {} }));
     }
   }
 
   // applyStored serves the values raw holds for contextKey, unless the
-  // context has changed since they were read, or values at least as fresh
-  // (stored or from the server) are already shown. It reports whether it
-  // served them.
+  // context has changed since they were read or raw holds no evaluation. It
+  // reports whether it served them.
   #applyStored(contextKey: string, raw: string | null | undefined): boolean {
     if (contextKey !== this.#contextKey) return false;
-    const shown = this.#shown;
-    if (shown?.contextKey === contextKey && (shown.source === 'network' || shown.source === 'cache')) return false;
     const flags = decodeFlags(raw);
     if (!flags) return false;
-    this.#show({ contextKey, source: 'cache' }, () => this.#evaluation.set({ flags }));
+    this.#stored = raw!;
+    this.#show('cache', () => this.#evaluation.setRaw(raw!, () => ({ flags })));
     return true;
   }
 
-  // persist stores the current values under key.
-  #persist(key: string): void {
+  // persist stores the current values for the current context, unless
+  // storage already holds them.
+  #persist(): void {
     const storage = this.#options.storage;
-    if (!storage) return;
+    const raw = this.#evaluation.raw;
+    if (!storage || raw === this.#stored) return;
+    this.#stored = raw;
     try {
-      const done = storage.setItem(key, encodeFlags(this.allFlags()));
+      const done = storage.setItem(this.#storageKey, raw);
       if (isPromise(done)) done.catch((e: unknown) => this.#reportStorage(e));
     } catch (e) {
       this.#reportStorage(e);
     }
   }
 
-  #storageKey(context: EvaluationContext): string {
-    return storageKey(this.#transport.url('evaluate'), context);
-  }
-
   #reportStorage(e: unknown): void {
-    const message = e instanceof Error ? e.message : String(e);
-    this.#transport.onError(new Error(`flag storage failed: ${message}`));
+    this.#transport.onError(new Error(`flag storage failed: ${asError(e).message}`));
   }
 
   // connect evaluates for the current context, replacing any refresh for an
@@ -258,23 +256,20 @@ export class BrowserClient {
   #connect(): Promise<void> {
     this.#running?.controller.abort();
     const controller = new AbortController();
-    const context = this.#context;
-    const contextKey = this.#contextKey;
-    const key = this.#options.storage ? this.#storageKey(context) : '';
-    // receive serves the server's values for context, applied by update, and
-    // stores them when they are new to storage.
+    // receive serves the server's values for the current context (a
+    // superseded evaluation is aborted before it can deliver), applied by
+    // update, and stores them.
     const receive = (update: () => boolean) => {
-      const wasNetwork = this.#shown?.source === 'network';
-      const changed = this.#show({ contextKey, source: 'network' }, update);
-      if (changed || !wasNetwork) this.#persist(key);
+      this.#show('network', update);
+      this.#persist();
     };
     const started = this.#transport
       .follow<Evaluation>(
         'evaluate',
-        { method: 'POST', body: JSON.stringify(context) },
+        { method: 'POST', body: this.#contextKey },
         'flags',
         {
-          set: (value) => receive(() => this.#evaluation.set({ flags: value.flags ?? {} })),
+          set: (value) => receive(() => this.#evaluation.set(value)),
           setRaw: (raw) => receive(() => this.#evaluation.setRaw(raw)),
         },
         this.#options.streaming ?? true,
@@ -284,9 +279,7 @@ export class BrowserClient {
       .catch((e: unknown) => {
         // identify or stop aborted this evaluation and may have started another.
         if (controller.signal.aborted) return;
-        // Defensive: values are only ever shown for the current context, so
-        // stored or bootstrap values for it stay in use.
-        if (this.#shown && this.#shown.contextKey !== this.#contextKey) this.#clear();
+        // Stored or bootstrap values for the context stay in use.
         throw e;
       });
     this.#running = { controller, started };

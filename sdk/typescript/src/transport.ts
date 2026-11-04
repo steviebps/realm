@@ -232,7 +232,7 @@ async function errorFrom(res: Response, body?: { errors?: string[] }): Promise<R
   return new RealmError(message, res.status);
 }
 
-function asError(e: unknown): Error {
+export function asError(e: unknown): Error {
   return e instanceof Error ? e : new Error(String(e));
 }
 

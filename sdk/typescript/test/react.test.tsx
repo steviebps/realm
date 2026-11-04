@@ -14,7 +14,7 @@ import {
   useRealmStatus,
   useStringFlag,
 } from '../src/react.js';
-import { fakeRealm } from './fake-realm.js';
+import { fakeRealm, seedStorage } from './fake-realm.js';
 
 const betaOn = { rules: { beta: { type: 'boolean', value: true } } };
 
@@ -158,10 +158,7 @@ describe('offline start', () => {
     const storage = localStorageAdapter();
     localStorage.clear();
     cleanup.push(() => localStorage.clear());
-    const seeded = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, streaming: false });
-    cleanup.push(() => seeded.stop());
-    await seeded.start();
-    seeded.stop();
+    await seedStorage(realm.address, storage, { key: 'vip' });
 
     function Source() {
       const beta = useBoolFlag('beta', false);
@@ -193,10 +190,7 @@ describe('offline start', () => {
     const storage = localStorageAdapter();
     localStorage.clear();
     cleanup.push(() => localStorage.clear());
-    const seeded = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, streaming: false });
-    cleanup.push(() => seeded.stop());
-    await seeded.start();
-    seeded.stop();
+    await seedStorage(realm.address, storage, { key: 'vip' });
 
     // the client's own context has stored values; the provider's does not
     realm.setHang(true);
@@ -215,7 +209,7 @@ describe('offline start', () => {
         <Record />
       </RealmProvider>,
     );
-    await vi.waitFor(() => expect(client.context()).toEqual({ key: 'u1' }));
+    await vi.waitFor(() => expect(client.contextKey()).toBe(JSON.stringify({ key: 'u1' })));
     await vi.waitFor(() => expect(view.text()).toBe('undefined beta=false'));
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((t) => t === 'undefined beta=false')).toBe(true);

@@ -1,6 +1,8 @@
 import { sha1 } from './sha1.js';
 import type { EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
+const encoder = new TextEncoder();
+
 /**
  * Where a BrowserClient keeps the values it last received, so that a reload
  * without a network starts from them instead of from fallbacks. Its methods
@@ -43,7 +45,7 @@ export function localStorageAdapter(storage?: Storage): StorageAdapter {
  * not written in the clear.
  */
 export function storageKey(evaluateUrl: string, context: EvaluationContext): string {
-  return `realm:v1:${evaluateUrl}:${hex(sha1(new TextEncoder().encode(canonicalContext(context))))}`;
+  return `realm:v1:${evaluateUrl}:${hex(sha1(encoder.encode(canonicalContext(context))))}`;
 }
 
 // canonicalContext is context as JSON with its attributes sorted, so the same
@@ -59,15 +61,11 @@ function hex(bytes: Uint8Array): string {
   return s;
 }
 
-/** The stored form of a client's values. */
-export function encodeFlags(flags: EvaluatedFlags): string {
-  return JSON.stringify({ flags });
-}
-
 const flagTypes = new Set<FlagType>(['string', 'number', 'boolean', 'custom']);
 
 /**
- * The flags raw (as encodeFlags wrote it) holds, or undefined if raw is
+ * The flags raw holds (a stored evaluation, `{"flags": …}`, as the server
+ * sends it), or undefined if raw is
  * missing or is not a stored evaluation: an entry another program wrote, or
  * one cut short.
  */

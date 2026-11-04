@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BrowserClient, localStorageAdapter, type StorageAdapter } from '../src/index.js';
+import { BrowserClient, localStorageAdapter, type EvaluationContext, type StorageAdapter } from '../src/index.js';
 import { decodeFlags, storageKey } from '../src/storage.js';
-import { fakeRealm } from './fake-realm.js';
+import { fakeRealm, seedStorage } from './fake-realm.js';
 
 let cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -41,14 +41,8 @@ const offline: typeof fetch = () => Promise.reject(new TypeError('Failed to fetc
 const betaTrue = { beta: { type: 'boolean' as const, value: true } };
 
 // seed evaluates for context against realm once, leaving its values in storage.
-async function seed(address: string, storage: StorageAdapter, context: { key?: string; attributes?: Record<string, string> }) {
-  const client = new BrowserClient({ address, path: '/prod/web/', context, storage, streaming: false });
-  try {
-    await client.start();
-  } finally {
-    client.stop();
-  }
-}
+const seed = (address: string, storage: StorageAdapter, context: EvaluationContext) =>
+  seedStorage(address, storage, context, '/prod/web/');
 
 describe('BrowserClient bootstrap', () => {
   it('serves bootstrap values until the evaluation arrives, without storing them', async () => {
@@ -259,10 +253,23 @@ describe('BrowserClient storage', () => {
     ]);
   });
 
+  it('does not write values storage already holds', async () => {
+    const realm = await setup();
+    const storage = memoryStorage();
+    await seed(realm.address, storage, { key: 'vip' });
+    const setItem = vi.spyOn(storage, 'setItem');
+    const client = new BrowserClient({ address: realm.address, path: '/prod/web/', context: { key: 'vip' }, storage, streaming: false });
+    cleanup.push(() => client.stop());
+    await client.start();
+    expect(client.source()).toBe('network');
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
   it('applies values read asynchronously, unless the context changed or the server answered first', async () => {
     const realm = await setup();
-    const items = memoryStorage().items;
-    await seed(realm.address, { getItem: (k) => items.get(k), setItem: (k, v) => void items.set(k, v) }, { key: 'vip' });
+    const seeded = memoryStorage();
+    await seed(realm.address, seeded, { key: 'vip' });
+    const items = seeded.items;
     const opts = { address: realm.address, path: '/prod/web/', fetch: offline, onError: () => {} };
 
     const storage = asyncStorage(items);
@@ -300,12 +307,7 @@ describe('BrowserClient storage', () => {
 
 describe('localStorageAdapter', () => {
   it('reads and writes a Web Storage area', () => {
-    const items = new Map<string, string>();
-    const area = {
-      getItem: (k: string) => items.get(k) ?? null,
-      setItem: (k: string, v: string) => void items.set(k, v),
-    } as Storage;
-    const adapter = localStorageAdapter(area);
+    const adapter = localStorageAdapter(memoryStorage() as unknown as Storage);
     adapter.setItem('a', '1');
     expect(adapter.getItem('a')).toBe('1');
     expect(adapter.getItem('b')).toBeNull();

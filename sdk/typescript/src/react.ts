@@ -55,7 +55,7 @@ interface RealmContextValue {
 // not between a render with a new context and the effect that hands it to
 // the client.
 function forContext(client: BrowserClient, contextKey: string | undefined): boolean {
-  return contextKey === undefined || JSON.stringify(client.context()) === contextKey;
+  return contextKey === undefined || client.contextKey() === contextKey;
 }
 
 const RealmContext = createContext<RealmContextValue | undefined>(undefined);
@@ -100,11 +100,6 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
   }, [client, contextKey]);
 
   const subscribe = useCallback((onChange: () => void) => client.subscribe(onChange), [client]);
-  const clientReady = useSyncExternalStore(
-    subscribe,
-    () => client.isReady(),
-    () => false,
-  );
   const clientSource = useSyncExternalStore(
     subscribe,
     () => client.source(),
@@ -113,7 +108,7 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
   // Until the effect has handed the client this render's context, its
   // readiness is for another one.
   const current = applied !== undefined && applied.client === client && applied.contextKey === contextKey;
-  const ready = current && clientReady;
+  const ready = current && clientSource === 'network';
   const error = current && !ready ? applied.error : undefined;
   const source = forContext(client, contextKey) ? clientSource : undefined;
   const value = useMemo(
