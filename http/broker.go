@@ -14,10 +14,10 @@ import (
 // signal rather than the changed data, so a slow subscriber can never block a
 // writer and at most one pending signal is ever queued per subscriber.
 //
-// The broker is process-local. With multiple server replicas, a write handled
-// by one replica does not notify watchers connected to another; those watchers
-// converge on their next reconnect or poll. Cross-replica fanout is a follow-up
-// (see docs/ARCHITECTURE.md).
+// The broker is process-local. When the storage is Watchable, its change feed
+// (which includes other replicas' writes) drives Notify, so watchers on every
+// replica hear of every change; otherwise the handler notifies it after its own
+// writes only (see docs/ARCHITECTURE.md).
 type broker struct {
 	mu   sync.Mutex
 	subs map[int]*subscription

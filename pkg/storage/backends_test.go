@@ -3,19 +3,26 @@ package storage
 import (
 	"context"
 	"errors"
+	"os"
 	"slices"
 	"testing"
+
+	"github.com/steviebps/realm/pkg/storage/pgtest"
 )
 
 // backends returns a fresh instance of every locally testable backend.
 func backends(t *testing.T) map[string]Storage {
 	t.Helper()
 	out := map[string]Storage{}
-	for name, conf := range map[string]map[string]string{
+	confs := map[string]map[string]string{
 		"file":     {"path": t.TempDir()},
 		"boltdb":   {"path": t.TempDir()},
 		"bigcache": {},
-	} {
+	}
+	if os.Getenv(pgtest.EnvURL) != "" {
+		confs["postgres"] = map[string]string{"url": pgtest.URL(t)}
+	}
+	for name, conf := range confs {
 		s, err := StorageOptions[name](conf)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
@@ -41,9 +48,13 @@ func TestDeleteMissingIsNotFound(t *testing.T) {
 
 func TestListImmediateChildren(t *testing.T) {
 	ctx := context.Background()
-	// bigcache and file storage share the "." / "child/" listing format.
-	for _, name := range []string{"file", "bigcache"} {
-		s := backends(t)[name]
+	// these backends share the "." / "child/" listing format
+	all := backends(t)
+	for _, name := range []string{"file", "bigcache", "postgres"} {
+		s, ok := all[name]
+		if !ok {
+			continue
+		}
 		t.Run(name, func(t *testing.T) {
 			for _, key := range []string{"/", "/a/", "/a/b/", "/a/b/c/", "/a/d/", "/x/"} {
 				if err := s.Put(ctx, StorageEntry{Key: key, Value: []byte(`{}`)}); err != nil {

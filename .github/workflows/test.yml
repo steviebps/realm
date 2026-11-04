@@ -33,6 +33,37 @@ jobs:
           go test ./...
           go test -race ./...
 
+  test-postgres:
+    name: "postgres"
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: realm
+          POSTGRES_PASSWORD: realm
+          POSTGRES_DB: realm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U realm"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      REALM_POSTGRES_TEST_URL: postgres://realm:realm@localhost:5432/realm_test?sslmode=disable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: 1.27.x
+
+      - name: Test
+        run: go test -race ./pkg/storage/... ./http/...
+
   test-typescript-sdk:
     name: "typescript sdk"
     runs-on: ubuntu-latest

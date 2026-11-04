@@ -22,7 +22,8 @@ services and in browsers, with hooks for React.
 - **Scheduled rules:** limit a rule to a window of time, such as three hours on a Wednesday.
 - **Real-time updates:** the SDK polls, or receives changes over server-sent events.
 - **Safe editing:** ETag optimistic concurrency and per-chamber change history.
-- **Storage:** file, BoltDB, in-memory, Google Cloud Storage, and Amazon S3.
+- **Storage:** file, BoltDB, in-memory, Google Cloud Storage, Amazon S3, and
+  PostgreSQL (which supports running several replicas).
 - **Optional auth:** OIDC or GitHub sign-in with roles, and path-scoped API keys.
 - **Browsers and other languages:** the server evaluates flags for a context and
   returns only the values, never the rules.
@@ -211,13 +212,40 @@ Server settings:
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory. Data is lost when the server stops. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
 | `s3` | `bucket`, `region`, `prefix`, `endpoint`, `force_path_style` | Amazon S3 or an S3-compatible service. Uses the standard AWS credential chain. |
-| `cacheable` | `cache`, `source`, plus the options of both | A write-through `cache` in front of a `source`. |
+| `postgres` | `url`, `max_conns` | PostgreSQL. Supports several server replicas. Refer to [Run several replicas](#run-several-replicas). |
+| `cacheable` | `cache`, `source`, plus the options of both | A write-through `cache` in front of a `source`. The source cannot be `postgres`. |
 
-For production, we recommend `cacheable` with `bigcache` in front of `s3`.
+For production, we recommend `postgres`. For a single replica, `cacheable`
+with `bigcache` in front of `s3` also works.
 
 > [!IMPORTANT]
-> Run only one server replica. The server sends real-time updates only to its
-> own clients, so other replicas do not get them.
+> With any backend other than `postgres`, run only one server replica. Other
+> backends check concurrent changes and send real-time updates only within one
+> server.
+
+### Run several replicas
+
+Use the `postgres` backend. The server creates its tables on startup.
+
+```json
+{
+  "server": {
+    "storage": "postgres",
+    "options": { "url": "postgres://realm@db.internal:5432/realm?sslmode=verify-full" },
+    "port": "8080",
+    "inheritable": true
+  }
+}
+```
+
+- When `url` is empty, the standard `PG*` environment variables are used. Put
+  the password in `PGPASSWORD` or a `.pgpass` file, not in the config.
+- Every replica sees every change within milliseconds: writes are checked in
+  the database (so `If-Match` works across replicas), and each replica learns
+  of others' writes with `LISTEN`/`NOTIFY` and pushes them to its streams.
+- Each replica holds one connection open for `LISTEN`. That connection cannot
+  go through a pooler in transaction mode, such as PgBouncer's
+  `pool_mode = transaction`. Use session mode or connect directly.
 
 ### With Docker
 

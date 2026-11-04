@@ -68,7 +68,7 @@ func TestS3StorageIntegration(t *testing.T) {
 	}
 	got, err := strg.Get(ctx, "/app/prod/")
 	if err != nil || string(got.Value) != `{"rules":{}}` {
-		t.Fatalf("Get: %v %q", err, got)
+		t.Fatalf("Get: %v %+v", err, got)
 	}
 
 	names, err := strg.List(ctx, "/app/")
