@@ -3,7 +3,7 @@ import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BrowserClient, type EvaluationContext } from '../src/index.js';
+import { BrowserClient, localStorageAdapter, type EvaluationContext } from '../src/index.js';
 import {
   RealmProvider,
   useAllFlags,
@@ -149,6 +149,75 @@ describe('RealmProvider', () => {
 
     realm.setStatus(200);
     await vi.waitFor(() => expect(view.text()).toBe('ready beta=false'), { timeout: 3000 });
+  });
+});
+
+describe('offline start', () => {
+  it('renders stored values for the context before the evaluation, and reports their source', async () => {
+    const realm = await setup();
+    const storage = localStorageAdapter();
+    localStorage.clear();
+    cleanup.push(() => localStorage.clear());
+    const seeded = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, streaming: false });
+    await seeded.start();
+    seeded.stop();
+
+    function Source() {
+      const beta = useBoolFlag('beta', false);
+      const { ready, source } = useRealmStatus();
+      return <p>{`${ready ? 'ready' : 'loading'} ${source} beta=${beta}`}</p>;
+    }
+    realm.setHang(true);
+    const client = new BrowserClient({ address: realm.address, storage, onError: () => {} });
+    const view = render(
+      <RealmProvider client={client} context={{ key: 'vip' }}>
+        <Source />
+      </RealmProvider>,
+    );
+    await vi.waitFor(() => expect(view.text()).toBe('loading cache beta=true'));
+
+    realm.setHang(false);
+    client.stop();
+    const online = new BrowserClient({ address: realm.address, storage, bootstrap: { beta: { type: 'boolean', value: true } } });
+    view.rerender(
+      <RealmProvider client={online}>
+        <Source />
+      </RealmProvider>,
+    );
+    await vi.waitFor(() => expect(view.text()).toBe('ready network beta=false'));
+  });
+
+  it("never renders another context's stored values", async () => {
+    const realm = await setup();
+    const storage = localStorageAdapter();
+    localStorage.clear();
+    cleanup.push(() => localStorage.clear());
+    const seeded = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, streaming: false });
+    await seeded.start();
+    seeded.stop();
+
+    // the client's own context has stored values; the provider's does not
+    realm.setHang(true);
+    const client = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, onError: () => {} });
+    expect(client.bool('beta', false)).toBe(true);
+    const seen: string[] = [];
+    function Record() {
+      const beta = useBoolFlag('beta', false);
+      const { source } = useRealmStatus();
+      const text = `${source} beta=${beta}`;
+      seen.push(text);
+      return <p>{text}</p>;
+    }
+    const view = render(
+      <RealmProvider client={client} context={{ key: 'u1' }}>
+        <Record />
+      </RealmProvider>,
+    );
+    await vi.waitFor(() => expect(client.context()).toEqual({ key: 'u1' }));
+    await vi.waitFor(() => expect(view.text()).toBe('undefined beta=false'));
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((t) => t === 'undefined beta=false')).toBe(true);
+    realm.setHang(false);
   });
 });
 

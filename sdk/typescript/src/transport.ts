@@ -71,7 +71,8 @@ export class Transport {
       .join('/');
   }
 
-  #url(route: 'chambers' | 'evaluate', query = ''): string {
+  /** The URL of route for this chamber, with an optional query such as `?watch=true`. */
+  url(route: 'chambers' | 'evaluate', query = ''): string {
     const path = this.#path === '' ? '' : this.#path + '/';
     return new URL(`/v1/${route}/${path}${query}`, this.#base).toString();
   }
@@ -91,7 +92,7 @@ export class Transport {
   async request<T>(route: 'chambers' | 'evaluate', init: RequestInit, signal?: AbortSignal): Promise<T> {
     const d = deadline(this.#timeout, signal);
     try {
-      const res = await this.#fetch(this.#url(route), this.#init(init, 'application/json', d.signal));
+      const res = await this.#fetch(this.url(route), this.#init(init, 'application/json', d.signal));
       const body = (await res.json().catch(() => undefined)) as { data?: T; errors?: string[] } | undefined;
       if (d.expired()) throw d.error();
       if (!res.ok) throw await errorFrom(res, body);
@@ -132,7 +133,7 @@ export class Transport {
       try {
         let res: Response;
         try {
-          res = await this.#fetch(this.#url(route, '?watch=true'), this.#init(init, 'text/event-stream', d.signal));
+          res = await this.#fetch(this.url(route, '?watch=true'), this.#init(init, 'text/event-stream', d.signal));
           if (!res.ok) throw await errorFrom(res);
         } catch (e) {
           throw d.expired() ? d.error() : e;

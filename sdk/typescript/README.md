@@ -65,6 +65,50 @@ Use only an `evaluate` key in a browser. The server refuses `read` and
 `write` keys on browser requests (`start` rejects with a 403), so shipping one
 by mistake fails in development instead of exposing your rules.
 
+### Starting offline
+
+By default a `BrowserClient` starts empty, so an app that loads without a
+network (a PWA reloaded offline, say) gets every flag's fallback until the
+server answers. Two options give it values to start from:
+
+```ts
+import { BrowserClient, localStorageAdapter } from 'realm-sdk';
+
+const flags = new BrowserClient({
+  address: 'https://realm.example.com',
+  token: 'realm_…',
+  path: '/prod/web/',
+  context: { key: device.id, attributes: { location: device.location } },
+  storage: localStorageAdapter(), // keep each context's latest values
+  bootstrap: { 'new-checkout': { type: 'boolean', value: false } }, // values for `context`
+});
+flags.source(); // 'cache' if this context was evaluated here before, else 'bootstrap'
+void flags.start().catch(() => {}); // offline: keeps the stored values and retries
+```
+
+- **`storage`** keeps the latest values the server evaluated (never the
+  rules) for each context, and writes them whenever they change. At
+  construction and on `identify`, the client reads back the values stored for
+  that context only. Entries are keyed by server, chamber, and a hash of the
+  context (which keeps attributes out of the key), so one user on a shared
+  device never sees values stored for another. `localStorageAdapter()` uses
+  `localStorage` (or a Web Storage area you pass) and stores nothing where
+  there is none, such as in server rendering. To use another store, implement
+  `StorageAdapter`: `getItem` and `setItem`, synchronous or returning
+  promises. Values from an asynchronous store apply when they arrive, unless
+  the server answered first or the context changed. Storage failures go to
+  `onError`; the client carries on without the cache.
+- **`bootstrap`** is a set of evaluated values (as `allFlags` returns them,
+  from a `ServerClient` render or shipped with the app) for the `context`
+  option. It is never stored and never served after `identify` switches to
+  another context. When storage holds values for the context, those win.
+
+`source()` reports where the current values came from: `'bootstrap'`,
+`'cache'`, `'network'`, or `undefined` when there are none and getters return
+their fallbacks. `isReady()` is true only for `'network'`: the server's
+evaluation for the current context. Listeners are called when the source
+changes, even if no value does.
+
 ## React
 
 `realm-sdk/react` reads a `BrowserClient` from React 18 or later. Wrap the app
@@ -108,8 +152,14 @@ context; an inline object that keeps the same value does not.
 | `useNumberFlag(flag, fallback)` | a number flag's value |
 | `useJsonFlag<T>(flag, fallback)` | a custom (JSON) flag's value |
 | `useAllFlags()` | every flag's value |
-| `useRealmStatus()` | `{ ready, error }`: whether the evaluation for the current context arrived, or why starting failed |
+| `useRealmStatus()` | `{ ready, source, error }`: whether the evaluation for the current context arrived, where the values came from (`'bootstrap'`, `'cache'`, `'network'`, or `undefined`), or why starting failed |
 | `useRealmClient()` | the provider's `BrowserClient` |
+
+Until the provider's `context` reaches the client, and whenever the client
+holds values for another context, hooks return their fallbacks. With the
+`bootstrap` or `storage` options, they return those values for the
+provider's context before the server answers; `ready` stays false until it
+does.
 
 Hooks throw outside a `RealmProvider`. On the server (`renderToString` and
 friends), flag hooks return their fallbacks.
@@ -126,14 +176,18 @@ friends), flag hooks return their fallbacks.
 | `requestTimeout` | 10 s | milliseconds to wait for a response (or a stream's headers) before retrying; `0` waits forever |
 | `onError` | `console.warn` | called when a refresh fails; the last known values stay in use |
 | `fetch` | global `fetch` | a custom fetch implementation |
+| `context` | `{}` | browser only: who flags are evaluated for |
+| `storage` | none | browser only: where to keep each context's latest values, for starting offline; see [Starting offline](#starting-offline) |
+| `bootstrap` | none | browser only: evaluated values for `context` to serve until the server answers |
 
 Streams reconnect with exponential backoff from 1 to 30 seconds; in a
 browser, the `online` event cuts a backoff short. When the first load fails,
 `start` rejects but the client keeps retrying in the background, so values
 arrive once the server is reachable. After `identify` with a new
-context, a `BrowserClient` serves fallbacks (never the previous context's
-values, which may be another user's on a shared device) until the new
-context's evaluation arrives, retrying if it fails. A stream that
+context, a `BrowserClient` serves values stored for that context, if any, or
+else fallbacks (never the previous context's values, which may be another
+user's on a shared device) until the new context's evaluation arrives,
+retrying if it fails. A stream that
 goes silent for 75 seconds (the server sends a heartbeat every 30) is
 reconnected. Getters never throw: a missing flag, or a flag of another type,
 returns the fallback.

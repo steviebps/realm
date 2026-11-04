@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
-import type { BrowserClient } from './browser.js';
+import type { BrowserClient, FlagSource } from './browser.js';
 import type { EvaluatedFlags, EvaluationContext } from './types.js';
 
 /** Props for a RealmProvider. */
@@ -28,18 +28,34 @@ export interface RealmProviderProps {
 /** Whether a RealmProvider's client has its first evaluation. */
 export interface RealmStatus {
   /**
-   * True once the evaluation for the provider's context has arrived. Until
-   * then, and again after the context changes, hooks return their fallbacks
-   * (or, briefly, the previous context's values).
+   * True once the server's evaluation for the provider's context has
+   * arrived. Until then, and again after the context changes, hooks return
+   * bootstrap or stored values for that context, if the client has any, or
+   * else their fallbacks; never another context's values.
    */
   ready: boolean;
+  /**
+   * Where the values hooks return came from: `bootstrap`, `cache` (stored
+   * from an earlier evaluation for this context), or `network`; undefined
+   * while hooks return their fallbacks.
+   */
+  source: FlagSource | undefined;
   /** Why the latest start failed, if it did and no evaluation has arrived since. */
   error: Error | undefined;
 }
 
 interface RealmContextValue {
   client: BrowserClient;
+  // The provider's context as JSON, or undefined to follow the client's own.
+  contextKey: string | undefined;
   status: RealmStatus;
+}
+
+// forContext reports whether client's values are for contextKey. They are
+// not between a render with a new context and the effect that hands it to
+// the client.
+function forContext(client: BrowserClient, contextKey: string | undefined): boolean {
+  return contextKey === undefined || JSON.stringify(client.context()) === contextKey;
 }
 
 const RealmContext = createContext<RealmContextValue | undefined>(undefined);
@@ -89,12 +105,21 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
     () => client.isReady(),
     () => false,
   );
+  const clientSource = useSyncExternalStore(
+    subscribe,
+    () => client.source(),
+    () => undefined,
+  );
   // Until the effect has handed the client this render's context, its
   // readiness is for another one.
   const current = applied !== undefined && applied.client === client && applied.contextKey === contextKey;
   const ready = current && clientReady;
   const error = current && !ready ? applied.error : undefined;
-  const value = useMemo(() => ({ client, status: { ready, error } }), [client, ready, error]);
+  const source = forContext(client, contextKey) ? clientSource : undefined;
+  const value = useMemo(
+    () => ({ client, contextKey, status: { ready, source, error } }),
+    [client, contextKey, ready, source, error],
+  );
   return createElement(RealmContext.Provider, { value }, children);
 }
 
@@ -105,13 +130,15 @@ function useRealm(hook: string): RealmContextValue {
 }
 
 // useClientValue reads from the provider's client and renders again whenever
-// it reports a change. Server rendering has no evaluation, so it reads fallback.
+// it reports a change. It reads fallback while the client's values are for
+// another context than the provider's, and in server rendering, which has no
+// evaluation.
 function useClientValue<T>(hook: string, read: (client: BrowserClient) => T, fallback: T): T {
-  const { client } = useRealm(hook);
+  const { client, contextKey } = useRealm(hook);
   const subscribe = useCallback((onChange: () => void) => client.subscribe(onChange), [client]);
   return useSyncExternalStore(
     subscribe,
-    () => read(client),
+    () => (forContext(client, contextKey) ? read(client) : fallback),
     () => fallback,
   );
 }
@@ -121,7 +148,7 @@ export function useRealmClient(): BrowserClient {
   return useRealm('useRealmClient').client;
 }
 
-/** Whether the provider's client has its first evaluation, or why it failed. */
+/** Whether the provider's client has its first evaluation, where its values came from, or why starting failed. */
 export function useRealmStatus(): RealmStatus {
   return useRealm('useRealmStatus').status;
 }
