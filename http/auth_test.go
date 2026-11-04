@@ -222,6 +222,7 @@ func TestAPIKeys(t *testing.T) {
 	}
 	readKey, readToken := create(`{"name":"sdk","access":"read","path":"/prod/"}`)
 	_, writeToken := create(`{"name":"ci","access":"write","path":"/prod/"}`)
+	_, rootReadToken := create(`{"name":"labels","access":"read","path":"/"}`)
 	if readKey.CreatedBy != "admin@example.com" {
 		t.Errorf("createdBy = %q", readKey.CreatedBy)
 	}
@@ -240,6 +241,10 @@ func TestAPIKeys(t *testing.T) {
 		{"read key history outside scope", http.MethodGet, "/v1/history/", readToken, http.StatusForbidden},
 		{"keys cannot manage keys", http.MethodGet, "/v1/keys", writeToken, http.StatusForbidden},
 		{"keys cannot change the catalog", http.MethodPost, "/v1/catalog/region", writeToken, http.StatusForbidden},
+		{"scoped keys cannot read the catalog", http.MethodGet, "/v1/catalog", readToken, http.StatusForbidden},
+		{"scoped write keys cannot read the catalog", http.MethodGet, "/v1/catalog/region", writeToken, http.StatusForbidden},
+		{"root read key reads the catalog", http.MethodGet, "/v1/catalog", rootReadToken, http.StatusOK},
+		{"root read key cannot change the catalog", http.MethodPost, "/v1/catalog/region", rootReadToken, http.StatusForbidden},
 		{"unknown token", http.MethodGet, "/v1/chambers/prod/", "realm_0000_bogus", http.StatusUnauthorized},
 	}
 	for _, tt := range tests {
@@ -272,7 +277,7 @@ func TestAPIKeys(t *testing.T) {
 	}
 
 	status, out := call(t, admin, http.MethodGet, srv.URL+"/v1/keys", "", "")
-	if status != http.StatusOK || strings.Contains(string(out.Data), "hash") || strings.Count(string(out.Data), `"id"`) != 1 {
+	if status != http.StatusOK || strings.Contains(string(out.Data), "hash") || strings.Count(string(out.Data), `"id"`) != 2 {
 		t.Errorf("key list = %d %s", status, out.Data)
 	}
 }

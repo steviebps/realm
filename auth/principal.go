@@ -119,16 +119,12 @@ func (p *Principal) CanWrite(path string) bool {
 }
 
 // CanReadCatalog reports whether p may read the attribute catalog, which maps
-// attribute values to labels. It needs read access, so evaluate keys (which
-// are public) may not.
+// attribute values to labels. The catalog belongs to the whole realm rather
+// than to a chamber, and its labels can name every tenant or location, so a
+// key needs read access to the root path: keys scoped beneath it, and
+// evaluate keys (which are public), may not read it.
 func (p *Principal) CanReadCatalog() bool {
-	if p == nil {
-		return false
-	}
-	if p.Kind == KindKey {
-		return p.Access.atLeast(AccessRead)
-	}
-	return p.Role >= RoleViewer
+	return p.allows(AccessRead, RoleViewer, "/")
 }
 
 // allows reports whether p has at least access (for keys, at path) or role
