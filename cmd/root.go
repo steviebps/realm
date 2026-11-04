@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
@@ -38,6 +38,7 @@ func init() {
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
+	zerolog.TimeFieldFormat = time.RFC3339Nano
 	logger := logging.NewTracedLogger()
 	ctx := logger.WithContext(context.Background())
 
@@ -45,7 +46,7 @@ func Execute() {
 
 	if shutdownFn != nil {
 		if shutdownErr := shutdownFn(ctx); shutdownErr != nil {
-			fmt.Printf("failed to shutdown TracerProvider: %s\n", shutdownErr)
+			logger.ErrorCtx(ctx).Str("error", shutdownErr.Error()).Msg("could not flush telemetry")
 		}
 	}
 
@@ -69,9 +70,12 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
 
+	// The server exports telemetry unless told not to; other commands only
+	// when a collector is configured, so CLI runs do not log export failures.
 	devMode, _ := flags.GetBool("dev")
-	if !devMode && !noTraces {
-		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces)
+	wanted := cmd == serverCmd || stdoutTraces || os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") != ""
+	if wanted && !devMode && !noTraces {
+		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces, Version)
 		if err != nil {
 			return err
 		}

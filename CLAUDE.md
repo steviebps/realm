@@ -132,6 +132,12 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
 - **Wrap meaningful work in an OTel span:** `ctx, span := tracer.Start(ctx, "…")`.
 - **SDK config uses functional options** (`WithX(...) RealmOption`). Extend that
   pattern rather than adding constructor parameters.
+- **Writes are strict, reads are lenient.** The server parses chamber writes
+  with `realm.ParseChamber`, which rejects unknown fields at every level (add
+  a new field to its `shape` tables in `pkg/chamber.go`); the SDK decodes
+  leniently so older SDKs survive newer servers.
+- **Paths are canonicalized once** (`canonicalPath` in `http/agent.go`) and
+  never unescaped twice; check `storage.IsReservedPath` on the canonical form.
 - **Domain types validate in `UnmarshalJSON`.** Values that depend on the
   flag's type (like `TargetingRule.Value`) are type-checked by the owning
   `Flag` via `Rule.assertType`; other types validate their own invariants. Give them json tags so they round-trip through the server
@@ -177,6 +183,6 @@ The server needs a config unless in dev mode: `realm server --config ./configs/r
 ## Verifying changes
 
 For anything touching evaluation or the server, don't stop at unit tests — drive
-it end to end: `make run`, `PUT` a chamber via `realm client put` or curl, `GET`
+it end to end: `make run`, `PUT` a chamber via `realm client put -f <file>` or curl, `GET`
 it back, and exercise the SDK path. See the verification section of any change
 plan and `docs/ARCHITECTURE.md`.

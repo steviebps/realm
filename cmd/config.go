@@ -26,8 +26,13 @@ type ServerConfig struct {
 	Port           string            `json:"port"`
 	CertFile       string            `json:"certFile"`
 	KeyFile        string            `json:"keyFile"`
-	LogLevel       string            `json:"logLevel"`
-	Inheritable    bool              `json:"inheritable"`
+	// LogLevel is the minimum level logged: debug, info, warn, or error.
+	LogLevel    string `json:"logLevel"`
+	Inheritable bool   `json:"inheritable"`
+	// ShutdownDelay is how long the server keeps serving after a shutdown
+	// signal while GET /readyz reports 503, so load balancers stop sending it
+	// traffic first (a duration such as "5s"; default none).
+	ShutdownDelay string `json:"shutdownDelay,omitempty"`
 	// Auth enables authentication; without it the server is open to anyone
 	// who can reach it.
 	Auth *auth.Config `json:"auth,omitempty"`

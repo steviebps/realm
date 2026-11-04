@@ -12,17 +12,36 @@ export class Snapshot<T> {
     this.value = initial;
   }
 
-  /** Replaces the value with the one raw (JSON text) holds, unless raw is unchanged. */
-  setRaw(raw: string, parse: (raw: string) => T = JSON.parse): void {
-    if (raw === this.#raw) return;
+  /**
+   * Replaces the value with the one raw (JSON text) holds, unless raw is
+   * unchanged. It reports whether the value changed.
+   */
+  setRaw(raw: string, parse: (raw: string) => T = JSON.parse): boolean {
+    if (raw === this.#raw) return false;
     this.value = parse(raw);
     this.#raw = raw;
-    for (const listener of this.#listeners) listener();
+    this.notify();
+    return true;
   }
 
-  /** Replaces the value with already-parsed data, unless it is unchanged. */
-  set(value: T): void {
-    this.setRaw(JSON.stringify(value), () => value);
+  /** Replaces the value with already-parsed data, unless it is unchanged. It reports whether the value changed. */
+  set(value: T): boolean {
+    return this.setRaw(JSON.stringify(value), () => value);
+  }
+
+  /**
+   * Calls every listener. A listener that throws is reported to
+   * console.error; it neither stops the others nor reaches the caller, which
+   * may be reading an event stream.
+   */
+  notify(): void {
+    for (const listener of this.#listeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.error('[realm] a subscriber threw', e);
+      }
+    }
   }
 
   /** Calls listener on every change. Returns a function that unsubscribes. */

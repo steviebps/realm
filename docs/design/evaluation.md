@@ -139,5 +139,5 @@ evaluation changes.
 - Publishing to npm.
 - A per-key allowlist of flags for evaluate keys (they see every flag's value
   beneath their path).
-- Cross-replica fanout: like chamber streams, evaluation streams only see
-  writes made on the same replica.
+- Cross-replica fanout with backends other than `postgres`: there, like
+  chamber streams, evaluation streams only see writes made on the same replica.

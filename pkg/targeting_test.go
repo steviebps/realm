@@ -515,3 +515,30 @@ func TestBucketMatchesHexAlgorithm(t *testing.T) {
 		}
 	}
 }
+
+// TestProcessVersionMatchesAsGiven verifies that a version set with
+// WithVersion is matched as given by in/startsWith clauses (as the server's
+// evaluation endpoint matches it) and as a semantic version by semver
+// clauses, which do not allocate for it.
+func TestProcessVersionMatchesAsGiven(t *testing.T) {
+	var c Chamber
+	if err := json.Unmarshal([]byte(`{"rules":{
+		"exact":  {"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"version","op":"in","values":["1.2.3"]}]}]},
+		"prefix": {"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"version","op":"startsWith","values":["1.2."]}]}]},
+		"semver": {"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"version","op":"semverGte","values":["1.2.0"]}]}]}
+	}}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	entry := NewChamberEntry(&c, map[string]string{VersionAttribute: "1.2.3"})
+	for _, key := range []string{"exact", "prefix", "semver"} {
+		if got, err := entry.BoolValueFor(key, EvaluationContext{}, false); err != nil || !got {
+			t.Errorf("%s = %v, %v; want true", key, got, err)
+		}
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = entry.BoolValueFor("semver", EvaluationContext{}, false)
+	})
+	if allocs != 0 {
+		t.Errorf("semver clause on the process version allocated %v times", allocs)
+	}
+}

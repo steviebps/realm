@@ -80,3 +80,26 @@ func TestGetSurfacesParentReadErrors(t *testing.T) {
 		t.Fatalf("expected the parent's read error, got %v", err)
 	}
 }
+
+// TestInheritableFailsOnUnparsableParent verifies a parent chamber that cannot
+// be parsed fails the read instead of silently dropping its flags.
+func TestInheritableFailsOnUnparsableParent(t *testing.T) {
+	ctx := context.Background()
+	src, err := NewBigCacheStorage(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Put(ctx, StorageEntry{Key: "/a/", Value: []byte(`{"rules":{"kill":{"type":"boolean","value":true,"overrides":[]}}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := src.Put(ctx, StorageEntry{Key: "/a/b/", Value: []byte(`{"rules":{}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	inh, err := NewInheritableStorage(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err := inh.Get(ctx, "/a/b/"); err == nil {
+		t.Fatalf("Get = %s, want an error for the unparsable parent", e.Value)
+	}
+}

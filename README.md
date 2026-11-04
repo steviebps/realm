@@ -200,7 +200,8 @@ Server settings:
 | `port` | The HTTP port. |
 | `inheritable` | If `true`, child chambers inherit the flags of their parents. |
 | `certFile`, `keyFile` | A TLS certificate and key. If you set both, the server uses HTTPS. |
-| `logLevel` | The log level. |
+| `logLevel` | The minimum level logged: `debug`, `info` (default), `warn`, or `error`. `--debug` overrides it. |
+| `shutdownDelay` | How long to keep serving after `SIGTERM` while `/readyz` reports 503, such as `"5s"`. Gives load balancers time to stop routing to the server. Default: none. |
 | `auth` | Sign-in and API keys. Refer to [Authentication](#authentication). |
 
 ### Storage backends
@@ -262,7 +263,31 @@ docker run -p 8080:8080 \
   directory in `/var/lib/realm`. That directory is a volume.
 - The `s3` and `gcs` backends work with Kubernetes workload identity. They need
   no more configuration.
-- Use `GET /healthz` for liveness probes.
+- Use `GET /healthz` for liveness probes and `GET /readyz` for readiness
+  probes. `/readyz` reports 503 when storage does not answer within 2 seconds
+  and while the server drains for shutdown.
+
+### Run in production
+
+- **Shutdown.** On `SIGTERM` the server fails `/readyz`, waits
+  `shutdownDelay`, closes open streams (clients reconnect to another replica),
+  and lets in-flight requests finish for up to 20 seconds. Keep
+  `terminationGracePeriodSeconds` above `shutdownDelay` + 20s.
+- **Logs** are one JSON object per line on standard error. On a terminal they
+  are human-readable instead; set `REALM_LOG_FORMAT` to `json` or `console` to
+  choose.
+- **Telemetry** is exported over OTLP/HTTP and configured by the standard
+  `OTEL_*` variables: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`
+  (default `realm`), `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER`.
+  `OTEL_SDK_DISABLED=true` or `--notraces` turns it off. Every request except
+  probes and streams gets a span, and the server records
+  `realm.server.streams.active` and `realm.postgres.feed.reconnects`.
+- **Streams.** Each server holds at most 10,000 streams; beyond that, new
+  streams get 503 and clients retry with backoff. Streams close after about 20
+  to 25 minutes and clients reconnect, so a revoked key or expired session
+  loses its stream within that time.
+- **Limits.** Request bodies are limited to 4 MiB (evaluation contexts to
+  64 KiB), and request headers must arrive within 10 seconds.
 
 ## Manage flags
 
@@ -281,13 +306,15 @@ You can change flags in three ways:
 ```bash
 realm client list /                  # list the chambers below a path
 realm client get /prod/checkout/     # show one chamber as JSON
-realm client put /prod/checkout/     # make an empty chamber
+realm client put /prod/checkout/     # make an empty chamber (fails if it exists)
+realm client put /prod/checkout/ -f checkout.json  # create or replace from a file ("-" for stdin)
 realm client delete /prod/checkout/  # delete a chamber
 ```
 
 > [!NOTE]
-> `realm client put` makes an empty chamber only. To add flags, use the web UI
-> or the HTTP API.
+> `realm client put -f` replaces the whole chamber. The file is validated
+> first: an unknown field anywhere (a misspelled `schedule`, say) is an error,
+> as it is for every write to the server.
 
 ### HTTP API
 

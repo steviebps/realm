@@ -1,10 +1,12 @@
 package http
 
 import (
+	"context"
 	"strings"
 	"sync"
 
 	"github.com/steviebps/realm/utils"
+	"go.opentelemetry.io/otel/metric"
 )
 
 // broker is an in-process publish/subscribe hub that notifies chamber watchers
@@ -22,6 +24,8 @@ type broker struct {
 	mu   sync.Mutex
 	subs map[int]*subscription
 	next int
+	// max caps len(subs); zero means unlimited.
+	max int
 }
 
 type subscription struct {
@@ -32,32 +36,44 @@ type subscription struct {
 	ch chan struct{}
 }
 
-func newBroker() *broker {
-	return &broker{subs: make(map[int]*subscription)}
+// newBroker returns a broker holding at most max subscriptions (zero means
+// unlimited).
+func newBroker(max int) *broker {
+	return &broker{subs: make(map[int]*subscription), max: max}
 }
 
 // Subscribe registers a watcher for watchPath and returns a channel that
 // receives a signal whenever a change affects that path, along with a function
-// that unregisters the watcher and closes the channel.
-func (b *broker) Subscribe(watchPath string) (<-chan struct{}, func()) {
+// that unregisters the watcher. ok is false, and nothing is registered, when
+// the broker already holds its maximum number of subscriptions.
+func (b *broker) Subscribe(watchPath string) (_ <-chan struct{}, _ func(), ok bool) {
 	sub := &subscription{
 		path: utils.EnsureTrailingSlash(watchPath),
 		ch:   make(chan struct{}, 1),
 	}
 
 	b.mu.Lock()
+	if b.max > 0 && len(b.subs) >= b.max {
+		b.mu.Unlock()
+		return nil, nil, false
+	}
 	id := b.next
 	b.next++
 	b.subs[id] = sub
+	activeStreams.Add(context.Background(), 1)
 	b.mu.Unlock()
 
+	var once sync.Once
 	unsubscribe := func() {
-		b.mu.Lock()
-		delete(b.subs, id)
-		b.mu.Unlock()
+		once.Do(func() {
+			b.mu.Lock()
+			delete(b.subs, id)
+			b.mu.Unlock()
+			activeStreams.Add(context.Background(), -1)
+		})
 	}
 
-	return sub.ch, unsubscribe
+	return sub.ch, unsubscribe, true
 }
 
 // Notify wakes every subscriber whose watched path is at or below changedPath.
@@ -81,3 +97,8 @@ func (b *broker) Notify(changedPath string) {
 		}
 	}
 }
+
+var activeStreams, _ = meter.Int64UpDownCounter(
+	"realm.server.streams.active",
+	metric.WithDescription("Watch (SSE) streams currently open."),
+	metric.WithUnit("{stream}"))

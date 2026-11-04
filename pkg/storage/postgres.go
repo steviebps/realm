@@ -17,6 +17,7 @@ import (
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -63,8 +64,10 @@ var (
 	// watchPollInterval is how often a Watch checks for changes when no
 	// notification arrives, in case one was lost.
 	watchPollInterval = 5 * time.Second
-	// watchRetryInterval is how long a Watch waits before reconnecting.
-	watchRetryInterval = time.Second
+	// watchRetryInterval is how long a Watch first waits before reconnecting;
+	// the wait doubles up to maxWatchRetryInterval.
+	watchRetryInterval    = time.Second
+	maxWatchRetryInterval = 30 * time.Second
 	// pruneInterval is how often a Watch deletes old change records.
 	pruneInterval = 10 * time.Minute
 )
@@ -154,7 +157,7 @@ func (p *PostgresStorage) Get(ctx context.Context, logicalPath string) (*Storage
 	logging.Ctx(ctx).DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -164,7 +167,7 @@ func (p *PostgresStorage) Get(ctx context.Context, logicalPath string) (*Storage
 		return nil, &NotFoundError{Key: logicalPath}
 	}
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 	return e, nil
@@ -177,7 +180,7 @@ func (p *PostgresStorage) Put(ctx context.Context, e StorageEntry) error {
 	logging.Ctx(ctx).DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 	value := e.Value
@@ -187,7 +190,7 @@ func (p *PostgresStorage) Put(ctx context.Context, e StorageEntry) error {
 	}
 	err := p.commit(ctx, nil, []Op{{Key: e.Key, Value: value}}, false)
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 	}
 	return err
 }
@@ -199,12 +202,12 @@ func (p *PostgresStorage) Delete(ctx context.Context, logicalPath string) error 
 	logging.Ctx(ctx).DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 	err := p.commit(ctx, nil, []Op{{Key: logicalPath}}, true)
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 	}
 	return err
 }
@@ -218,7 +221,7 @@ func (p *PostgresStorage) List(ctx context.Context, prefix string) ([]string, er
 	logging.Ctx(ctx).DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -230,12 +233,12 @@ func (p *PostgresStorage) List(ctx context.Context, prefix string) ([]string, er
 		ELSE split_part(substr(key, length($1) + 1), '/', 1) || '/' END AS name
 		FROM realm_entries WHERE key >= $1 AND key < $2 ORDER BY name`, lower, upper)
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 	names, err := pgx.CollectRows(rows, pgx.RowTo[string])
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 	if names == nil {
@@ -251,13 +254,13 @@ func (p *PostgresStorage) Txn(ctx context.Context, checks []Check, ops []Op) err
 
 	for _, k := range append(checkKeys(checks), opKeys(ops)...) {
 		if err := ValidatePath(k); err != nil {
-			span.RecordError(err)
+			recordError(span, err)
 			return err
 		}
 	}
 	err := p.commit(ctx, checks, ops, false)
 	if err != nil && !errors.Is(err, ErrConflict) {
-		span.RecordError(err)
+		recordError(span, err)
 	}
 	return err
 }
@@ -388,16 +391,31 @@ type watcher struct {
 
 func (w *watcher) run(ctx context.Context) {
 	logger := logging.Ctx(ctx)
+	delay := watchRetryInterval
 	for ctx.Err() == nil {
-		if err := w.listen(ctx); err != nil && ctx.Err() == nil {
-			logger.WarnCtx(ctx).Str("error", err.Error()).Msg("postgres change feed disconnected; reconnecting")
-			select {
-			case <-ctx.Done():
-			case <-time.After(watchRetryInterval):
-			}
+		began := time.Now()
+		err := w.listen(ctx)
+		if ctx.Err() != nil {
+			return
 		}
+		// a connection that held for a while starts the backoff over
+		if time.Since(began) > maxWatchRetryInterval {
+			delay = watchRetryInterval
+		}
+		feedReconnects.Add(ctx, 1)
+		logger.WarnCtx(ctx).Str("error", fmt.Sprint(err)).Dur("retry_in", delay).Msg("postgres change feed disconnected; reconnecting")
+		select {
+		case <-ctx.Done():
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, maxWatchRetryInterval)
 	}
 }
+
+var feedReconnects, _ = otel.Meter("github.com/steviebps/realm").Int64Counter(
+	"realm.postgres.feed.reconnects",
+	metric.WithDescription("Times the Postgres change feed lost its LISTEN connection."),
+	metric.WithUnit("{reconnect}"))
 
 // listen holds one LISTEN connection, catching up whenever a notification
 // arrives or the poll interval passes, until the connection fails.

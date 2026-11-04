@@ -149,3 +149,132 @@ func TestRealmStopIsIdempotent(t *testing.T) {
 	rlm.Stop()
 	rlm.Stop()
 }
+
+// TestRealmRecoversWhenServerIsDownAtStart verifies Start reports the failed
+// first load but keeps retrying, so the flags load once the server is up.
+func TestRealmRecoversWhenServerIsDownAtStart(t *testing.T) {
+	var mu sync.Mutex
+	up := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !up {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			fmt.Fprint(w, `{"errors":["Service Unavailable"]}`)
+			return
+		}
+		fmt.Fprintf(w, `{"data":%s}`, chamberJSON("one"))
+	}))
+	defer srv.Close()
+
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+			mu.Lock()
+			up = false
+			mu.Unlock()
+			c, err := client.NewHttpClient(&client.HttpClientConfig{Address: srv.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rlm, err := NewRealm(WithHttpClient(c), WithPath("root"), WithStreaming(streaming), WithPollingInterval(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer rlm.Stop()
+			if err := rlm.Start(); err == nil {
+				t.Fatal("Start succeeded against a server that is down")
+			}
+			if _, err := rlm.String(context.Background(), "msg", "default"); err != ErrChamberEmpty {
+				t.Fatalf("before a load, err = %v, want ErrChamberEmpty", err)
+			}
+			mu.Lock()
+			up = true
+			mu.Unlock()
+			if !eventually(5*time.Second, func() bool {
+				got, _ := rlm.String(context.Background(), "msg", "default")
+				return got == "one"
+			}) {
+				t.Fatal("realm did not recover after the server came up")
+			}
+		})
+	}
+}
+
+// TestRealmStreamRetriesAfterServerError verifies a 503 on the watch request
+// (a proxy during a deploy, say) is retried as a stream, not treated as a
+// server without streaming.
+func TestRealmStreamRetriesAfterServerError(t *testing.T) {
+	var mu sync.Mutex
+	watches := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("watch") != "true" {
+			fmt.Fprintf(w, `{"data":%s}`, chamberJSON("one"))
+			return
+		}
+		mu.Lock()
+		watches++
+		n := watches
+		mu.Unlock()
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprintf(w, "event: chamber\ndata: %s\n\n", chamberJSON("streamed"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	rlm := newStreamingRealm(t, srv.URL, time.Hour)
+	if err := rlm.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer rlm.Stop()
+	if !eventually(5*time.Second, func() bool {
+		got, _ := rlm.String(context.Background(), "msg", "default")
+		return got == "streamed"
+	}) {
+		t.Fatal("the stream was not retried after a 503")
+	}
+}
+
+// TestRealmStreamReconnectsWhenSilent verifies a stream that stops sending
+// anything (heartbeats included) is reopened.
+func TestRealmStreamReconnectsWhenSilent(t *testing.T) {
+	old := streamIdleTimeout
+	streamIdleTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { streamIdleTimeout = old })
+
+	var mu sync.Mutex
+	watches := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("watch") != "true" {
+			fmt.Fprintf(w, `{"data":%s}`, chamberJSON("one"))
+			return
+		}
+		mu.Lock()
+		watches++
+		n := watches
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		if n > 1 {
+			fmt.Fprintf(w, "event: chamber\ndata: %s\n\n", chamberJSON("fresh"))
+		}
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // then silence
+	}))
+	defer srv.Close()
+
+	rlm := newStreamingRealm(t, srv.URL, time.Hour)
+	if err := rlm.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer rlm.Stop()
+	if !eventually(5*time.Second, func() bool {
+		got, _ := rlm.String(context.Background(), "msg", "default")
+		return got == "fresh"
+	}) {
+		t.Fatal("a silent stream was not reopened")
+	}
+}

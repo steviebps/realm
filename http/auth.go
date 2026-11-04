@@ -12,11 +12,11 @@ import (
 	"github.com/steviebps/realm/utils"
 )
 
-// publicPaths need no credentials: liveness, the UI's static assets, and
+// publicPaths need no credentials: liveness, readiness, the UI's static assets, and
 // sign-in itself. Every other route refuses requests without them. A path
 // ending in "/" also covers the path without it, so "/ui" reaches the
 // router's redirect to "/ui/".
-var publicPaths = []string{"/healthz", "/ui/", "/v1/auth/"}
+var publicPaths = []string{"/healthz", "/readyz", "/ui/", "/v1/auth/"}
 
 func isPublic(path string) bool {
 	return slices.ContainsFunc(publicPaths, func(p string) bool {

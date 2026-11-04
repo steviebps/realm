@@ -27,9 +27,13 @@ export interface RealmProviderProps {
 
 /** Whether a RealmProvider's client has its first evaluation. */
 export interface RealmStatus {
-  /** True once the first evaluation has arrived. Until then, hooks return their fallbacks. */
+  /**
+   * True once the evaluation for the provider's context has arrived. Until
+   * then, and again after the context changes, hooks return their fallbacks
+   * (or, briefly, the previous context's values).
+   */
   ready: boolean;
-  /** Why the latest start failed, if it did. */
+  /** Why the latest start failed, if it did and no evaluation has arrived since. */
   error: Error | undefined;
 }
 
@@ -40,17 +44,22 @@ interface RealmContextValue {
 
 const RealmContext = createContext<RealmContextValue | undefined>(undefined);
 
+// What the provider's effect last applied to the client: its context, and
+// how starting for it failed, if it did.
+interface Applied {
+  client: BrowserClient;
+  contextKey: string | undefined;
+  error: Error | undefined;
+}
+
 /**
  * Makes client available to the hooks in children. It starts the client when
  * it mounts and stops it when it unmounts; the last known values stay
- * available after that.
+ * available after that. When a start fails, the client keeps retrying, and
+ * ready turns true once an evaluation arrives.
  */
 export function RealmProvider({ client, context, children }: RealmProviderProps) {
-  const [status, setStatus] = useState<RealmStatus & { client: BrowserClient }>({
-    client,
-    ready: false,
-    error: undefined,
-  });
+  const [applied, setApplied] = useState<Applied | undefined>(undefined);
   // Compare contexts by value, so an inline object does not re-evaluate on every render.
   const contextKey = context === undefined ? undefined : JSON.stringify(context);
 
@@ -62,24 +71,29 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
       client.stop();
       void client.identify(JSON.parse(contextKey) as EvaluationContext);
     }
-    client.start().then(
-      () => {
-        if (active) setStatus({ client, ready: true, error: undefined });
-      },
-      (e: unknown) => {
-        if (!active) return;
-        const error = e instanceof Error ? e : new Error(String(e));
-        setStatus((s) => ({ client, ready: s.client === client && s.ready, error }));
-      },
-    );
+    setApplied({ client, contextKey, error: undefined });
+    client.start().catch((e: unknown) => {
+      if (!active) return;
+      const error = e instanceof Error ? e : new Error(String(e));
+      setApplied({ client, contextKey, error });
+    });
     return () => {
       active = false;
       client.stop();
     };
   }, [client, contextKey]);
 
-  const ready = status.client === client && status.ready;
-  const error = status.client === client ? status.error : undefined;
+  const subscribe = useCallback((onChange: () => void) => client.subscribe(onChange), [client]);
+  const clientReady = useSyncExternalStore(
+    subscribe,
+    () => client.isReady(),
+    () => false,
+  );
+  // Until the effect has handed the client this render's context, its
+  // readiness is for another one.
+  const current = applied !== undefined && applied.client === client && applied.contextKey === contextKey;
+  const ready = current && clientReady;
+  const error = current && !ready ? applied.error : undefined;
   const value = useMemo(() => ({ client, status: { ready, error } }), [client, ready, error]);
   return createElement(RealmContext.Provider, { value }, children);
 }

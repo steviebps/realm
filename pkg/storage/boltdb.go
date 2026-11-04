@@ -63,7 +63,7 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -80,18 +80,18 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 		return nil
 	})
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 	if file == nil {
 		err := &NotFoundError{logicalPath}
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}
@@ -107,7 +107,7 @@ func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	if err := ValidatePath(e.Key); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -115,7 +115,7 @@ func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -126,7 +126,7 @@ func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
 		return err
 	})
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -141,7 +141,7 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
 	if err := ValidatePath(logicalPath); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -149,7 +149,7 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return ctx.Err()
 	default:
 	}
@@ -163,7 +163,7 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 	})
 
 	if err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return err
 	}
 
@@ -178,7 +178,7 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
 	if err := ValidatePath(prefix); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
@@ -208,13 +208,13 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 
 		return nil
 	}); err != nil {
-		span.RecordError(err)
+		recordError(span, err)
 		return nil, err
 	}
 
 	select {
 	case <-ctx.Done():
-		span.RecordError(ctx.Err())
+		recordError(span, ctx.Err())
 		return nil, ctx.Err()
 	default:
 	}

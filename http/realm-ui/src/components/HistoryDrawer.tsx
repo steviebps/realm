@@ -9,11 +9,13 @@ type Props = {
   onClose: () => void;
   /** Offers to restore earlier revisions; omitted for users who cannot edit. */
   onRestore?: (revision: number) => void;
+  /** Why the latest restore failed, if it did. */
+  error?: string;
 };
 
 const operationLabel = { put: 'saved', patch: 'patched', delete: 'deleted' } as const;
 
-export const HistoryDrawer = ({ path, open, onClose, onRestore }: Props) => {
+export const HistoryDrawer = ({ path, open, onClose, onRestore, error: restoreError }: Props) => {
   const { data, isLoading, error } = useQuery({
     queryKey: ['history', path],
     queryFn: () => getHistory(path),
@@ -26,6 +28,11 @@ export const HistoryDrawer = ({ path, open, onClose, onRestore }: Props) => {
       <DrawerItems>
         {isLoading && <Spinner />}
         {error instanceof Error && <p className="text-red-600">{error.message}</p>}
+        {restoreError && (
+          <p role="alert" className="mb-2 text-sm text-red-600">
+            {restoreError}
+          </p>
+        )}
         {data?.length === 0 && <p className="text-gray-500">No changes recorded yet.</p>}
         <ol className="flex flex-col gap-2">
           {data?.map((rev, i) => (

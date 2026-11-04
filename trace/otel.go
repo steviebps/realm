@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
+	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -31,9 +33,22 @@ func newStdOutExporter() (trace.SpanExporter, error) {
 		stdouttrace.WithPrettyPrint())
 }
 
-func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx context.Context) error, error) {
+// SetupOtelInstrumentation installs global trace and metric providers that
+// export over OTLP/HTTP, configured by the standard OTEL_* environment
+// variables (OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME,
+// OTEL_RESOURCE_ATTRIBUTES, OTEL_TRACES_SAMPLER, …). OTEL_SDK_DISABLED=true
+// turns telemetry off. Export errors are logged with the logger in ctx.
+func SetupOtelInstrumentation(ctx context.Context, withStdOut bool, version string) (func(ctx context.Context) error, error) {
 	var shutdownFuncs []func(context.Context) error
 	var err error
+
+	if strings.EqualFold(os.Getenv("OTEL_SDK_DISABLED"), "true") {
+		return func(context.Context) error { return nil }, nil
+	}
+	logger := logging.Ctx(ctx)
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		logger.WarnCtx(ctx).Str("error", err.Error()).Msg("telemetry export failed")
+	}))
 
 	shutdown := func(ctx context.Context) error {
 		var err error
@@ -54,19 +69,18 @@ func SetupOtelInstrumentation(ctx context.Context, withStdOut bool) (func(ctx co
 	if err != nil {
 		return nil, fmt.Errorf("creating exporter: %w", err)
 	}
-	hostname, _ := os.Hostname()
-	// The attributes are schemaless so they merge under the SDK's default
-	// schema URL; pairing them with semconv.SchemaURL would fail at startup
-	// whenever the SDK and this semconv import disagree on schema versions.
-	res, err := resource.Merge(
-		resource.Default(),
-		resource.NewSchemaless(
-			semconv.ServiceName("realm"),
-			semconv.HostName(hostname),
-		),
+	// Later detectors win, so OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES
+	// override the defaults. The attributes are schemaless so they merge under
+	// the SDK's schema URL; pairing them with semconv.SchemaURL would fail at
+	// startup whenever the SDK and this semconv import disagree on versions.
+	res, err := resource.New(ctx,
+		resource.WithAttributes(semconv.ServiceName("realm"), semconv.ServiceVersion(version)),
+		resource.WithHost(),
+		resource.WithTelemetrySDK(),
+		resource.WithFromEnv(),
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating telemetry resource: %w", err)
 	}
 
 	prop := newPropagator()
