@@ -43,8 +43,11 @@ const betaTrue = { beta: { type: 'boolean' as const, value: true } };
 // seed evaluates for context against realm once, leaving its values in storage.
 async function seed(address: string, storage: StorageAdapter, context: { key?: string; attributes?: Record<string, string> }) {
   const client = new BrowserClient({ address, path: '/prod/web/', context, storage, streaming: false });
-  await client.start();
-  client.stop();
+  try {
+    await client.start();
+  } finally {
+    client.stop();
+  }
 }
 
 describe('BrowserClient bootstrap', () => {

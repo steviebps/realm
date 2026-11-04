@@ -159,6 +159,7 @@ describe('offline start', () => {
     localStorage.clear();
     cleanup.push(() => localStorage.clear());
     const seeded = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, streaming: false });
+    cleanup.push(() => seeded.stop());
     await seeded.start();
     seeded.stop();
 
@@ -193,6 +194,7 @@ describe('offline start', () => {
     localStorage.clear();
     cleanup.push(() => localStorage.clear());
     const seeded = new BrowserClient({ address: realm.address, context: { key: 'vip' }, storage, streaming: false });
+    cleanup.push(() => seeded.stop());
     await seeded.start();
     seeded.stop();
 
