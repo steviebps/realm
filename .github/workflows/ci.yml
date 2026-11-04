@@ -88,8 +88,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # the oldest Node the package supports (engines) and the current LTS
-        node: [18, 24]
+        # the oldest Node the test tooling runs on, and the current LTS
+        node: [22, 24]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -108,6 +108,28 @@ jobs:
       - name: Package contents
         if: matrix.node == 24
         run: npm pack --dry-run
+
+  # The package supports Node 18 (engines), which the test tooling no longer
+  # runs on: build on a current Node, then smoke-test the build on Node 18.
+  typescript-sdk-node18:
+    name: typescript sdk (node 18 runtime)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/typescript
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sdk/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 18
+      - run: node test/smoke-node18.mjs
 
   ui:
     name: ui (and embedded build)
@@ -162,7 +184,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [go, postgres, lint, typescript-sdk, ui, e2e]
+    needs: [go, postgres, lint, typescript-sdk, typescript-sdk-node18, ui, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
