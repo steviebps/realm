@@ -15,7 +15,8 @@ Chamber                        // a namespace: map[flagKey] -> Flag   (json "rul
     └── Targeting []TargetingRule
         ├── Clauses []Clause   // ANDed: { attribute, op, values }
         ├── Value              // served when the rule applies
-        └── Rollout *Rollout   // optional: { percentage, bucketBy, seed }
+        ├── Rollout *Rollout   // optional: { percentage, bucketBy, seed }
+        └── Schedule *Schedule // optional: { start, end } (RFC 3339)
 ```
 
 - **`Rule`** (`pkg/rule.go`) — a typed value: `type` and `value`.
@@ -24,9 +25,10 @@ Chamber                        // a namespace: map[flagKey] -> Flag   (json "rul
 - **`Flag`** (`pkg/flag.go`) — a default value plus ordered `targeting` rules.
   `UnmarshalJSON` type-checks every rule value against the flag type and
   rejects the removed `overrides`/`rollout` fields with migration guidance.
-- **`TargetingRule` / `Clause` / `Rollout`** (`pkg/targeting.go`) — a rule
-  applies when all its clauses match the evaluation context and, if it has a
-  rollout, the context buckets in. Operators: `in`, `notIn`, `startsWith`,
+- **`TargetingRule` / `Clause` / `Rollout` / `Schedule`** (`pkg/targeting.go`)
+  — a rule applies while its schedule (if any) is in effect, when all its
+  clauses match the evaluation context and, if it has a rollout, the context
+  buckets in. Operators: `in`, `notIn`, `startsWith`,
   `semverGte`, `semverLte`.
 - **`Chamber`** (`pkg/chamber.go`) — `map[string]*Flag` plus `InheritFrom`
   (fill missing flags from a parent) and `OverwriteFrom` (PATCH merges).
@@ -41,7 +43,8 @@ The design rationale is in [design/targeting.md](design/targeting.md).
 
 ```
 for rule in flag.targeting (in order):
-    if all clauses match and rule.rollout includes ec: return rule.value
+    if rule.schedule includes now and all clauses match
+        and rule.rollout includes ec: return rule.value
 return flag.value
 ```
 
@@ -174,6 +177,8 @@ Handlers and commands wrap work in `tracer.Start(ctx, "…")`.
 | **Percentage rollout (deterministic, `bucketBy` any attribute)** | ✅ Done | `pkg/targeting.go` |
 | Hierarchy / inheritance (proto "zones") | ✅ Done | `pkg/storage/inheritable.go` |
 | Attribute targeting (ordered rules on `EvaluationContext.Attributes`) | ✅ Done | `pkg/targeting.go`, `pkg/flag.go` |
+| Scheduled rules (one-off time windows) | ✅ Done | `Schedule` in `pkg/targeting.go`; evaluation streams re-send at bounds |
+| Recurring schedules (weekly windows in a time zone) | ⬜ Next | `pkg/targeting.go` |
 | Optimistic concurrency, change history, attribute catalog | ✅ Done | `http/meta.go`, `http/meta_handlers.go` |
 | S3 storage | ✅ Done | `pkg/storage/s3.go` |
 | Postgres storage + multi-replica safety | ⬜ Next | new backend; replaces per-process lock |

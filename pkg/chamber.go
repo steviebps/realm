@@ -3,6 +3,7 @@ package realm
 import (
 	"encoding/json"
 	"maps"
+	"time"
 )
 
 // Chamber is a struct that holds metadata and rules
@@ -49,8 +50,12 @@ type EvaluatedFlag struct {
 	Value interface{} `json:"value"`
 }
 
-// Evaluate resolves every flag in the chamber for ec.
+// Evaluate resolves every flag in the chamber for ec, evaluating every
+// schedule at the same instant.
 func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
+	if ec.at.IsZero() {
+		ec.at = time.Now()
+	}
 	flags := make(map[string]EvaluatedFlag, len(c.Rules))
 	for key, f := range c.Rules {
 		if f == nil || f.Rule == nil {
@@ -59,6 +64,30 @@ func (c *Chamber) Evaluate(ec EvaluationContext) map[string]EvaluatedFlag {
 		flags[key] = EvaluatedFlag{Type: f.Type, Value: f.ValueFor(key, ec)}
 	}
 	return flags
+}
+
+// NextScheduleChange returns the earliest schedule bound of any targeting rule
+// in the chamber that is after t, and false when there is none. Flag values
+// only change with time at these bounds, so a caller holding evaluated values
+// need only re-evaluate then.
+func (c *Chamber) NextScheduleChange(t time.Time) (time.Time, bool) {
+	var next time.Time
+	for _, f := range c.Rules {
+		if f == nil {
+			continue
+		}
+		for _, tr := range f.Targeting {
+			if tr.Schedule == nil {
+				continue
+			}
+			for _, bound := range []time.Time{tr.Schedule.Start, tr.Schedule.End} {
+				if bound.After(t) && (next.IsZero() || bound.Before(next)) {
+					next = bound
+				}
+			}
+		}
+	}
+	return next, !next.IsZero()
 }
 
 // ChamberEntry is a read-only version of Chamber

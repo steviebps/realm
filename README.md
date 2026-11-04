@@ -19,6 +19,7 @@ services and in browsers, with hooks for React.
 - **Targeting rules:** match on any attribute (tenant, location, environment,
   semver `version`, build SHA, …).
 - **Progressive rollout:** deterministic, sticky percentages, bucketed on any attribute.
+- **Scheduled rules:** limit a rule to a window of time, such as three hours on a Wednesday.
 - **Real-time updates:** the SDK polls, or receives changes over server-sent events.
 - **Safe editing:** ETag optimistic concurrency and per-chamber change history.
 - **Storage:** file, BoltDB, in-memory, Google Cloud Storage, and Amazon S3.

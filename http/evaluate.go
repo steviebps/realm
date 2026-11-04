@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
@@ -41,6 +42,7 @@ type evaluateResponse struct {
 //
 //	POST /v1/evaluate/<path>             → {"flags": {"<name>": {"type", "value"}}}
 //	POST /v1/evaluate/<path>?watch=true  → the same as server-sent events, re-sent when the values change
+//	                                       (after a write, or when a targeting rule's schedule starts or ends)
 func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 	chambers := &parsedChambers{strg: strg}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -84,17 +86,18 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 		ec := realm.EvaluationContext{Key: req.Key, Attributes: req.Attributes}
 
 		if isWatchRequest(r) {
-			streamEvents(w, r, brk, path, "flags", func(ctx context.Context) ([]byte, error) {
-				flags, err := chambers.evaluate(ctx, path, ec)
+			streamEvents(w, r, brk, path, "flags", func(ctx context.Context) ([]byte, time.Time, error) {
+				flags, changesAt, err := chambers.evaluate(ctx, path, ec)
 				if err != nil {
-					return nil, err
+					return nil, time.Time{}, err
 				}
-				return json.Marshal(evaluateResponse{Flags: flags})
+				data, err := json.Marshal(evaluateResponse{Flags: flags})
+				return data, changesAt, err
 			})
 			return
 		}
 
-		flags, err := chambers.evaluate(ctx, path, ec)
+		flags, _, err := chambers.evaluate(ctx, path, ec)
 		if err != nil {
 			var nf *storage.NotFoundError
 			if errors.As(err, &nf) {
@@ -123,16 +126,21 @@ type parsedChamber struct {
 }
 
 // evaluate resolves every flag of the chamber at path (as inherited) for ec.
-func (p *parsedChambers) evaluate(ctx context.Context, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, error) {
+// It also returns the next time a schedule could change those values, or the
+// zero time when none can.
+func (p *parsedChambers) evaluate(ctx context.Context, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, time.Time, error) {
 	entry, err := p.strg.Get(ctx, path)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	c, err := p.parse(path, entry.Value)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	return c.Evaluate(ec), nil
+	// Look for the next change before evaluating, so a boundary passed in
+	// between is re-checked (at once) rather than skipped.
+	changesAt, _ := c.NextScheduleChange(time.Now())
+	return c.Evaluate(ec), changesAt, nil
 }
 
 // parse returns the chamber stored as raw, reusing the last parse of path when

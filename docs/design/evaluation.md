@@ -32,8 +32,9 @@ chamber that does not exist returns `404`.
 
 `POST /v1/evaluate/<path>?watch=true` with the same body opens a server-sent
 event stream. The server sends an `event: flags` with the current results at
-once, then again whenever a write changes the results for that context.
-Writes that do not change this context's values send nothing. Comment
+once, then again whenever a write changes the results for that context, or a
+targeting rule's schedule starts or ends. Writes and schedule bounds that do
+not change this context's values send nothing. Comment
 heartbeats (`: ping`) arrive every 30 seconds.
 
 The stream is a `POST` because the context travels in the body. Browsers'

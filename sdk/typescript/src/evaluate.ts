@@ -4,7 +4,7 @@
 
 import { canonical, compareParsed, parse } from './semver.js';
 import { sha1Words } from './sha1.js';
-import type { Chamber, Clause, EvaluatedFlags, EvaluationContext, Flag, FlagType, Rollout } from './types.js';
+import type { Chamber, Clause, EvaluatedFlags, EvaluationContext, Flag, FlagType, Rollout, Schedule } from './types.js';
 
 /** The attribute name under which `EvaluationContext.key` is exposed. */
 export const KEY_ATTRIBUTE = 'key';
@@ -89,29 +89,49 @@ export function rolloutIncludes(
   return bucket(rollout.seed || flagKey, v) < rollout.percentage;
 }
 
-/** Returns the value of the first targeting rule that applies, or the flag's default. */
+/**
+ * Reports whether now (milliseconds since the epoch) falls within the
+ * schedule: at or after its start and before its end. No schedule includes
+ * every time.
+ */
+export function scheduleIncludes(schedule: Schedule | undefined, now: number): boolean {
+  if (!schedule) return true;
+  if (schedule.start !== undefined && now < Date.parse(schedule.start)) return false;
+  return schedule.end === undefined || now < Date.parse(schedule.end);
+}
+
+/**
+ * Returns the value of the first targeting rule that applies, or the flag's
+ * default. Schedules are evaluated at now, which defaults to the current time.
+ */
 export function flagValue(
   flagKey: string,
   flag: Flag,
   context: EvaluationContext,
   defaults?: Record<string, string>,
+  now: number = Date.now(),
 ): unknown {
   for (const rule of flag.targeting ?? []) {
+    if (!scheduleIncludes(rule.schedule, now)) continue;
     const matches = (rule.clauses ?? []).every((c) => clauseMatches(c, context, defaults));
     if (matches && rolloutIncludes(rule.rollout, flagKey, context, defaults)) return rule.value;
   }
   return flag.value;
 }
 
-/** Resolves every flag in the chamber for context. */
+/**
+ * Resolves every flag in the chamber for context, evaluating every schedule at
+ * the same instant, now (the current time by default).
+ */
 export function evaluateChamber(
   chamber: Chamber,
   context: EvaluationContext,
   defaults?: Record<string, string>,
+  now: number = Date.now(),
 ): EvaluatedFlags {
   const flags: EvaluatedFlags = {};
   for (const [key, flag] of Object.entries(chamber.rules ?? {})) {
-    if (flag) flags[key] = { type: flag.type, value: flagValue(key, flag, context, defaults) };
+    if (flag) flags[key] = { type: flag.type, value: flagValue(key, flag, context, defaults, now) };
   }
   return flags;
 }

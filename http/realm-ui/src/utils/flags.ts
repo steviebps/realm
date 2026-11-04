@@ -23,6 +23,11 @@ export const validateFlag = (flag: Flag): string[] => {
       if (!clause.attribute.trim()) problems.push(`${where}: choose an attribute.`);
       if (clause.values.length === 0) problems.push(`${where}: add at least one value.`);
     });
+    const { start, end } = rule.schedule ?? {};
+    if (rule.schedule && !start && !end) problems.push(`Rule ${i + 1}: set a start or an end for the schedule.`);
+    if (start && end && Date.parse(end) <= Date.parse(start)) {
+      problems.push(`Rule ${i + 1}: the schedule must end after it starts.`);
+    }
   });
   return problems;
 };

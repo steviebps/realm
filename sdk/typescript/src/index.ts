@@ -12,5 +12,6 @@ export type {
   FlagType,
   Operator,
   Rollout,
+  Schedule,
   TargetingRule,
 } from './types.js';

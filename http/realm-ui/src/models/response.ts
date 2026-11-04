@@ -32,12 +32,19 @@ export type Rollout = {
   seed?: string;
 };
 
+/** A window of time, as RFC 3339 times: from start (inclusive) until end (exclusive). */
+export type Schedule = {
+  start?: string;
+  end?: string;
+};
+
 export type TargetingRule = {
   id?: string;
   description?: string;
   clauses?: Clause[];
   value: FlagValue;
   rollout?: Rollout;
+  schedule?: Schedule;
 };
 
 export type Flag = {

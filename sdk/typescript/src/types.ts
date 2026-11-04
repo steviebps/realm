@@ -21,13 +21,27 @@ export interface Rollout {
   seed?: string;
 }
 
-/** Serves `value` to contexts that match every clause and fall within the rollout. */
+/**
+ * Limits a targeting rule to a window of time: from `start` (inclusive) until
+ * `end` (exclusive), as RFC 3339 timestamps. An omitted bound leaves that side
+ * of the window open.
+ */
+export interface Schedule {
+  start?: string;
+  end?: string;
+}
+
+/**
+ * Serves `value` to contexts that match every clause and fall within the
+ * rollout, while the schedule (if any) is in effect.
+ */
 export interface TargetingRule {
   id?: string;
   description?: string;
   clauses?: Clause[];
   value: unknown;
   rollout?: Rollout;
+  schedule?: Schedule;
 }
 
 /** A flag: a typed default value plus ordered targeting rules. */

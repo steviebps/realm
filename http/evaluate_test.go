@@ -236,3 +236,30 @@ func TestEvaluateRefusesSecretKeysFromBrowsers(t *testing.T) {
 		res.Body.Close()
 	}
 }
+
+func TestEvaluateStreamSendsAtScheduleBounds(t *testing.T) {
+	srv := newInheritableTestServer(t)
+	start := time.Now().Add(300 * time.Millisecond).Truncate(time.Millisecond)
+	end := start.Add(300 * time.Millisecond)
+	putChamber(t, srv.URL, "app/", fmt.Sprintf(`{"rules":{"window":{"type":"boolean","value":false,"targeting":[
+		{"value":true,"schedule":{"start":%q,"end":%q}}]}}}`, start.Format(time.RFC3339Nano), end.Format(time.RFC3339Nano)))
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/evaluate/app/?watch=true", strings.NewReader(`{}`))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	events := dataEvents(bufio.NewScanner(resp.Body))
+
+	// No writes follow: the stream re-evaluates when the window opens and
+	// again when it closes.
+	for i, want := range []string{`"value":false`, `"value":true`, `"value":false`} {
+		if got := waitData(t, events, 2*time.Second); !strings.Contains(got, want) {
+			t.Fatalf("event %d = %s, want %s", i, got, want)
+		}
+	}
+	if now := time.Now(); now.Before(end) {
+		t.Errorf("window closed early, %s before its end", end.Sub(now))
+	}
+}
