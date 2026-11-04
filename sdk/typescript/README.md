@@ -76,7 +76,7 @@ network (a PWA reloaded offline, say) gets every flag's fallback until the
 server answers. Two options give it values to start from:
 
 ```ts
-import { BrowserClient, localStorageAdapter } from 'realm-sdk';
+import { BrowserClient, localStorageAdapter } from '@steviebps/realm-sdk';
 
 const flags = new BrowserClient({
   address: 'https://realm.example.com',
