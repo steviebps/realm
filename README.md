@@ -527,8 +527,11 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
    }
    ```
 
-Until the first evaluation arrives, the hooks return their fallbacks;
-`useRealmStatus()` tells you when it has. When a value changes on the server,
+Until the first evaluation arrives, the hooks return their fallbacks, or
+the `bootstrap` or stored values for the context if you set the client's
+`bootstrap` or `storage` options (see
+[Starting offline](sdk/typescript/README.md#starting-offline));
+`useRealmStatus()` tells you when it has arrived and where the values came from. When a value changes on the server,
 React renders the components that use that flag again. For every hook, refer
 to [sdk/typescript/README.md](sdk/typescript/README.md#react).
 
