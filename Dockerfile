@@ -43,4 +43,5 @@ WORKDIR /var/lib/realm
 VOLUME /var/lib/realm
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/realm"]
-CMD ["server", "--config", "/etc/realm/realm.json"]
+# Reads /etc/realm/realm.json, one of realm's default config locations.
+CMD ["server"]

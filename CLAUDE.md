@@ -122,7 +122,9 @@ make tidy         # go mod tidy
 make sdk-test     # typecheck, test, and build the TypeScript SDK
 ```
 
-The server needs a config unless in dev mode: `realm server --config ./configs/realm.json`.
+The server needs a config unless in dev mode: `realm server --config ./configs/realm.json`,
+`$REALM_CONFIG`, or a default location (`cmd/config.go` `findConfig`). The CLI
+reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
 
 ## Conventions to follow
 
