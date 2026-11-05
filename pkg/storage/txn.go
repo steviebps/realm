@@ -57,6 +57,16 @@ type Watchable interface {
 	Watch(ctx context.Context) <-chan Change
 }
 
+// Locker is implemented by backends that are not Transactional but can
+// serialize Updates across every process sharing them, such as the file
+// backend's lock file.
+type Locker interface {
+	Storage
+	// LockUpdate blocks until the caller alone may update keys, or ctx is
+	// done, and returns a function that releases the lock.
+	LockUpdate(ctx context.Context, keys []string) (unlock func(), err error)
+}
+
 // maxUpdateAttempts bounds the retries of an Update that keeps conflicting.
 const maxUpdateAttempts = 10
 
@@ -69,8 +79,9 @@ const maxUpdateAttempts = 10
 // transforms reads. On a Transactional backend each read key is
 // version-checked when the ops are applied, and fn is retried when another
 // writer got there first; after repeated conflicts Update returns
-// ErrConflict. Other backends are only safe within one process: Update holds
-// a process-wide lock on the keys and applies the ops one at a time.
+// ErrConflict. On other backends Update holds a process-wide lock on the keys,
+// plus the backend's own lock when it is a Locker (which extends the guarantee
+// to other processes on the same machine), and applies the ops one at a time.
 func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*StorageEntry) ([]Op, error)) error {
 	s = Raw(s)
 	if t, ok := s.(Transactional); ok {
@@ -78,6 +89,13 @@ func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*S
 	}
 	unlock := localLocks.lock(keys)
 	defer unlock()
+	if l, ok := s.(Locker); ok {
+		release, err := l.LockUpdate(ctx, keys)
+		if err != nil {
+			return err
+		}
+		defer release()
+	}
 	current, err := readEntries(ctx, s, keys)
 	if err != nil {
 		return err

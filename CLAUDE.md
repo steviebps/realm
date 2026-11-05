@@ -94,7 +94,7 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `main.go` | Entry point → `cmd.Execute()` |
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
 | `pkg/` | Core domain + SDK (package `realm`) |
-| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` capabilities and `Update` in `txn.go` |
+| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
 | `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`) |
@@ -123,7 +123,9 @@ make sdk-test     # typecheck, test, and build the TypeScript SDK
 make e2e          # build, then scripts/e2e.sh against a real server
 ```
 
-The server needs a config unless in dev mode: `realm server --config ./configs/realm.json`.
+The server needs a config unless in dev mode: `realm server --config ./configs/realm.json`,
+`$REALM_CONFIG`, or a default location (`cmd/config.go` `findConfig`). The CLI
+reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
 
 ## Conventions to follow
 

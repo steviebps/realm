@@ -234,7 +234,8 @@ identity (an email, or `key:<name>`) and ignores the self-reported
   verification caches keys for up to 30 seconds per process. With the
   `postgres` backend, writes (concurrency checks, history, catalog, key
   creation) are checked in the database, so any number of replicas is safe;
-  with other backends they are serialized per process, so run one replica.
+  with other backends they are serialized per process (and, with `file`, across
+  processes on one machine through a lock file), so run one replica.
 
 ## Not yet built
 

@@ -191,6 +191,27 @@ realm server --dev
    realm server --config ./configs/realm.json
    ```
 
+   Or skip `--config` by putting the file where realm finds it; see
+   [Where realm finds its config](#where-realm-finds-its-config).
+
+#### Where realm finds its config
+
+Every command (`server`, `client`, `keys`) uses the first of:
+
+1. `--config <file>`
+2. `$REALM_CONFIG`
+3. `realm/realm.json` in your user config directory: `$XDG_CONFIG_HOME` or
+   `~/.config` on Linux, `~/Library/Application Support` on macOS, `%AppData%`
+   on Windows
+4. `/etc/realm/realm.json` (not on Windows)
+
+A file named by `--config` or `$REALM_CONFIG` must exist; the default locations
+are skipped if they do not. realm never reads a config file from the working
+directory, so a `realm.json` in a cloned repository cannot redirect the CLI,
+and your `$REALM_TOKEN`, to another server. `realm --help` prints the default
+paths for your machine. `realm client` works without any config file; the
+server needs one unless you use `--dev`.
+
 Server settings:
 
 | Key | Meaning |
@@ -208,8 +229,8 @@ Server settings:
 
 | `storage` | Options | Notes |
 |---|---|---|
-| `file` | `path` | JSON files on disk, in the directory `path`. |
-| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database. |
+| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so `realm keys` can run beside the server. |
+| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory. Data is lost when the server stops. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
 | `s3` | `bucket`, `region`, `prefix`, `endpoint`, `force_path_style` | Amazon S3 or an S3-compatible service. Uses the standard AWS credential chain. |
@@ -250,7 +271,8 @@ Use the `postgres` backend. The server creates its tables on startup.
 
 ### With Docker
 
-The image reads its config from `/etc/realm/realm.json`. Mount your config file at that path:
+The image reads its config from `/etc/realm/realm.json`, a default location.
+Mount your config file at that path, or set `REALM_CONFIG` to another path:
 
 ```bash
 docker run -p 8080:8080 \
@@ -300,8 +322,9 @@ You can change flags in three ways:
 
 ### CLI
 
-`realm client` sends requests to a running server. Set the server address with
-`--address`, or with `client.address` in the config file.
+`realm client` sends requests to a running server. realm uses the first server
+address it finds: `--address`, then `$REALM_ADDRESS`, then `client.address` in
+the [config file](#where-realm-finds-its-config).
 
 ```bash
 realm client list /                  # list the chambers below a path
@@ -593,8 +616,9 @@ The SDK and the CLI send the key as a bearer token
   then `client.token` in the config file.
 
 ```bash
+export REALM_ADDRESS=https://realm.example.com
 export REALM_TOKEN=realm_…
-realm client --address https://realm.example.com get /prod/checkout/
+realm client get /prod/checkout/
 ```
 
 ## Reference
@@ -603,8 +627,8 @@ realm client --address https://realm.example.com get /prod/checkout/
 
 | Flag | Meaning |
 |---|---|
-| `-c`, `--config` | The realm config file. |
-| `-a`, `--address` | The address of the realm server (`realm client`). |
+| `-c`, `--config` | The realm config file. Default: `$REALM_CONFIG`, then the [default locations](#where-realm-finds-its-config). |
+| `-a`, `--address` | The address of the realm server (`realm client`). Default: `$REALM_ADDRESS`, then `client.address` in the config file. |
 | `--token` | The API key (`realm client`). |
 | `-d`, `--debug` | Run in debug mode. |
 | `--stdouttraces` | Write traces to stdout. |
@@ -612,6 +636,15 @@ realm client --address https://realm.example.com get /prod/checkout/
 
 `realm server` also accepts `--dev` (in-memory storage, no config file) and
 `--port`.
+
+### Environment variables
+
+| Variable | Meaning |
+|---|---|
+| `REALM_CONFIG` | The config file, when `--config` is not given. |
+| `REALM_ADDRESS` | The server address for `realm client`, when `--address` is not given. |
+| `REALM_TOKEN` | The API key for `realm client`, when `--token` is not given. |
+| `REALM_LOG_FORMAT` | `json` or `console` log output. |
 
 ## Documentation
 
