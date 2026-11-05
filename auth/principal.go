@@ -58,10 +58,15 @@ const (
 	AccessRead Access = "read"
 	// AccessWrite also allows creating, changing, and deleting chambers.
 	AccessWrite Access = "write"
+	// AccessAdmin also allows managing the API keys at or beneath the key's
+	// path: listing them, revoking them, and creating keys of any access
+	// there. An admin key at the root path administers the whole realm, so
+	// it may also change the attribute catalog.
+	AccessAdmin Access = "admin"
 )
 
 // accessRank orders access levels: each includes everything below it.
-var accessRank = map[Access]int{AccessEvaluate: 1, AccessRead: 2, AccessWrite: 3}
+var accessRank = map[Access]int{AccessEvaluate: 1, AccessRead: 2, AccessWrite: 3, AccessAdmin: 4}
 
 func (a Access) valid() bool {
 	return accessRank[a] > 0
@@ -139,10 +144,26 @@ func (p *Principal) allows(access Access, role Role, path string) bool {
 	return p.Role >= role
 }
 
-// IsAdmin reports whether p may manage API keys and the catalog. API keys are
-// never administrators.
+// IsAdmin reports whether p administers the whole realm: it may manage every
+// API key and change the attribute catalog. Signed-in admins and anonymous
+// callers do, and so do admin keys at the root path.
 func (p *Principal) IsAdmin() bool {
-	return p != nil && p.Kind != KindKey && p.Role >= RoleAdmin
+	return p.CanManageKeys("/")
+}
+
+// CanManageKeys reports whether p may list, create, and revoke the API keys
+// scoped to path.
+func (p *Principal) CanManageKeys(path string) bool {
+	return p.allows(AccessAdmin, RoleAdmin, path)
+}
+
+// ManagesKeys reports whether p may manage any API keys at all: it is a
+// signed-in admin, an anonymous caller, or an admin key.
+func (p *Principal) ManagesKeys() bool {
+	if p != nil && p.Kind == KindKey {
+		return p.CanManageKeys(p.Path)
+	}
+	return p.CanManageKeys("/")
 }
 
 // Actor is how p is recorded in change history.

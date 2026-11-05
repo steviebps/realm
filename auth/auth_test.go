@@ -27,6 +27,44 @@ func newStorage(t *testing.T) storage.Storage {
 	return s
 }
 
+func TestPrincipalManagesKeys(t *testing.T) {
+	adminKey := &Principal{Kind: KindKey, Access: AccessAdmin, Path: "/prod/"}
+	rootAdminKey := &Principal{Kind: KindKey, Access: AccessAdmin, Path: "/"}
+	writeKey := &Principal{Kind: KindKey, Access: AccessWrite, Path: "/"}
+	admin := &Principal{Kind: KindUser, Role: RoleAdmin}
+	editor := &Principal{Kind: KindUser, Role: RoleEditor}
+	var none *Principal
+
+	tests := []struct {
+		name    string
+		p       *Principal
+		path    string
+		manages bool // ManagesKeys
+		can     bool // CanManageKeys(path)
+	}{
+		{"admin key in scope", adminKey, "/prod/app/", true, true},
+		{"admin key at scope", adminKey, "/prod", true, true},
+		{"admin key above scope", adminKey, "/", true, false},
+		{"admin key prefix lookalike", adminKey, "/production/", true, false},
+		{"root admin key", rootAdminKey, "/staging/", true, true},
+		{"write key", writeKey, "/prod/", false, false},
+		{"admin", admin, "/prod/", true, true},
+		{"editor", editor, "/prod/", false, false},
+		{"anonymous", Anonymous, "/prod/", true, true},
+		{"nil", none, "/prod/", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.p.ManagesKeys(); got != tt.manages {
+				t.Errorf("ManagesKeys = %v, want %v", got, tt.manages)
+			}
+			if got := tt.p.CanManageKeys(tt.path); got != tt.can {
+				t.Errorf("CanManageKeys(%q) = %v, want %v", tt.path, got, tt.can)
+			}
+		})
+	}
+}
+
 func TestPrincipalPermissions(t *testing.T) {
 	evalKey := &Principal{Kind: KindKey, Access: AccessEvaluate, Path: "/prod/"}
 	readKey := &Principal{Kind: KindKey, Access: AccessRead, Path: "/prod/"}
@@ -34,6 +72,8 @@ func TestPrincipalPermissions(t *testing.T) {
 	rootKey := &Principal{Kind: KindKey, Access: AccessWrite, Path: "/"}
 	rootReadKey := &Principal{Kind: KindKey, Access: AccessRead, Path: ""}
 	rootEvalKey := &Principal{Kind: KindKey, Access: AccessEvaluate, Path: "/"}
+	adminKey := &Principal{Kind: KindKey, Access: AccessAdmin, Path: "/prod/"}
+	rootAdminKey := &Principal{Kind: KindKey, Access: AccessAdmin, Path: "/"}
 	viewer := &Principal{Kind: KindUser, Role: RoleViewer}
 	editor := &Principal{Kind: KindUser, Role: RoleEditor}
 	admin := &Principal{Kind: KindUser, Role: RoleAdmin}
@@ -58,6 +98,9 @@ func TestPrincipalPermissions(t *testing.T) {
 		{"root key", rootKey, "/anything/", true, true, false, true},
 		{"root read key", rootReadKey, "/anything/", true, false, false, true},
 		{"root evaluate key", rootEvalKey, "/anything/", false, false, false, true},
+		{"admin key in scope", adminKey, "/prod/app/", true, true, false, true},
+		{"admin key out of scope", adminKey, "/dev/", false, false, false, false},
+		{"root admin key", rootAdminKey, "/anything/", true, true, true, true},
 		{"viewer", viewer, "/prod/", true, false, false, true},
 		{"editor", editor, "/prod/", true, true, false, true},
 		{"admin", admin, "/prod/", true, true, true, true},
@@ -79,7 +122,7 @@ func TestPrincipalPermissions(t *testing.T) {
 				t.Errorf("CanEvaluate = %v, want %v", got, tt.eval)
 			}
 			// the catalog is realm-wide: only root-scoped read keys may read it
-			wantCatalog := tt.p != nil && tt.p != evalKey && tt.p != readKey && tt.p != writeKey && tt.p != rootEvalKey
+			wantCatalog := tt.p != nil && tt.p != evalKey && tt.p != readKey && tt.p != writeKey && tt.p != adminKey && tt.p != rootEvalKey
 			if got := tt.p.CanReadCatalog(); got != wantCatalog {
 				t.Errorf("CanReadCatalog = %v, want %v", got, wantCatalog)
 			}
@@ -229,7 +272,7 @@ func TestKeyStore(t *testing.T) {
 	if _, _, err := keys.Create(ctx, NewKeyRequest{Name: "", Access: AccessRead}, "t"); err == nil {
 		t.Error("created a key without a name")
 	}
-	if _, _, err := keys.Create(ctx, NewKeyRequest{Name: "x", Access: "admin"}, "t"); err == nil {
+	if _, _, err := keys.Create(ctx, NewKeyRequest{Name: "x", Access: "root"}, "t"); err == nil {
 		t.Error("created a key with unknown access")
 	}
 	if _, _, err := keys.Create(ctx, NewKeyRequest{Name: "x", Access: AccessRead, Path: "/_realm/keys"}, "t"); err == nil {
@@ -260,6 +303,23 @@ func TestKeyStore(t *testing.T) {
 	list, err := keys.List(ctx)
 	if err != nil || len(list) != 1 || list[0].Hash != "" {
 		t.Fatalf("List = %+v, %v", list, err)
+	}
+
+	// an admin key revokes only keys within its own path; others look absent
+	ci, _, err := keys.Create(ctx, NewKeyRequest{Name: "ci", Access: AccessWrite, Path: "/prod/ci/"}, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingAdmin := &Principal{Kind: KindKey, Access: AccessAdmin, Path: "/staging/"}
+	if err := keys.RevokeFor(ctx, ci.ID, stagingAdmin); !errors.As(err, new(*storage.NotFoundError)) {
+		t.Fatalf("RevokeFor out of scope = %v, want NotFoundError", err)
+	}
+	prodAdmin := &Principal{Kind: KindKey, Access: AccessAdmin, Path: "/prod/"}
+	if err := keys.RevokeFor(ctx, ci.ID, prodAdmin); err != nil {
+		t.Fatalf("RevokeFor in scope: %v", err)
+	}
+	if list, _ = keys.List(ctx); len(list) != 1 || list[0].ID != key.ID {
+		t.Fatalf("after RevokeFor, List = %+v", list)
 	}
 
 	if err := keys.Revoke(ctx, key.ID); err != nil {

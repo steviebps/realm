@@ -2,6 +2,7 @@ package http
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -64,11 +65,13 @@ func withPrincipal(authn *auth.Authenticator, h http.Handler) http.Handler {
 	})
 }
 
-// requireAdmin refuses callers who are not administrators.
-func requireAdmin(h http.Handler) http.Handler {
+// requireKeyManager refuses callers who may not manage any API keys: users
+// below admin and keys below admin access. handleKeys narrows the rest to the
+// keys within each caller's scope.
+func requireKeyManager(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !auth.FromContext(r.Context()).IsAdmin() {
-			forbidden(w, r, "only administrators may do this")
+		if !auth.FromContext(r.Context()).ManagesKeys() {
+			forbidden(w, r, "only administrators and admin keys may manage API keys")
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -118,15 +121,19 @@ type createdKey struct {
 	Token string   `json:"token"`
 }
 
-// handleKeys manages API keys. Register it behind requireAdmin:
+// handleKeys manages API keys. Register it behind requireKeyManager. Each
+// caller sees and changes only the keys at or beneath the paths where it may
+// manage keys: everything for signed-in admins, and an admin key's own path
+// for admin keys.
 //
-//	GET    /v1/keys       → every key (without secrets)
-//	POST   /v1/keys       → {"name", "access": "read"|"write", "path"} creates a key
+//	GET    /v1/keys       → the caller's keys (without secrets)
+//	POST   /v1/keys       → {"name", "access": "evaluate"|"read"|"write"|"admin", "path"} creates a key
 //	DELETE /v1/keys/<id>  → revokes a key
 func handleKeys(keys *auth.KeyStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
+		p := auth.FromContext(ctx)
 		fail := func(status int, err error) {
 			logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path).Msg(err.Error())
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
@@ -140,6 +147,7 @@ func handleKeys(keys *auth.KeyStore) http.Handler {
 				fail(http.StatusInternalServerError, err)
 				return
 			}
+			list = slices.DeleteFunc(list, func(k auth.Key) bool { return !p.CanManageKeys(k.Path) })
 			handleOkJSON(ctx, w, list)
 
 		case r.Method == http.MethodPost && id == "":
@@ -148,7 +156,15 @@ func handleKeys(keys *auth.KeyStore) http.Handler {
 				fail(http.StatusBadRequest, err)
 				return
 			}
-			key, token, err := keys.Create(ctx, req, auth.FromContext(ctx).Actor())
+			if err := req.Validate(); err != nil {
+				fail(http.StatusBadRequest, err)
+				return
+			}
+			if !p.CanManageKeys(req.Path) {
+				forbidden(w, r, fmt.Sprintf("this key may only create keys at or beneath %s", p.Path))
+				return
+			}
+			key, token, err := keys.Create(ctx, req, p.Actor())
 			if errors.Is(err, auth.ErrInvalidKeyRequest) {
 				fail(http.StatusBadRequest, err)
 				return
@@ -160,7 +176,7 @@ func handleKeys(keys *auth.KeyStore) http.Handler {
 			handleJSON(ctx, w, http.StatusCreated, createdKey{Key: key, Token: token})
 
 		case r.Method == http.MethodDelete && id != "":
-			if err := keys.Revoke(ctx, id); err != nil {
+			if err := keys.RevokeFor(ctx, id, p); err != nil {
 				var nf *storage.NotFoundError
 				if errors.As(err, &nf) {
 					fail(http.StatusNotFound, err)

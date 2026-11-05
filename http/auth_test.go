@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -239,7 +240,7 @@ func TestAPIKeys(t *testing.T) {
 		{"read key cannot write", http.MethodPost, "/v1/chambers/prod/app/", readToken, http.StatusForbidden},
 		{"read key outside scope", http.MethodGet, "/v1/chambers/", readToken, http.StatusForbidden},
 		{"read key history outside scope", http.MethodGet, "/v1/history/", readToken, http.StatusForbidden},
-		{"keys cannot manage keys", http.MethodGet, "/v1/keys", writeToken, http.StatusForbidden},
+		{"write keys cannot manage keys", http.MethodGet, "/v1/keys", writeToken, http.StatusForbidden},
 		{"keys cannot change the catalog", http.MethodPost, "/v1/catalog/region", writeToken, http.StatusForbidden},
 		{"scoped keys cannot read the catalog", http.MethodGet, "/v1/catalog", readToken, http.StatusForbidden},
 		{"scoped write keys cannot read the catalog", http.MethodGet, "/v1/catalog/region", writeToken, http.StatusForbidden},
@@ -279,5 +280,114 @@ func TestAPIKeys(t *testing.T) {
 	status, out := call(t, admin, http.MethodGet, srv.URL+"/v1/keys", "", "")
 	if status != http.StatusOK || strings.Contains(string(out.Data), "hash") || strings.Count(string(out.Data), `"id"`) != 2 {
 		t.Errorf("key list = %d %s", status, out.Data)
+	}
+}
+
+// TestAdminKeys checks that an admin key manages exactly the keys at or
+// beneath its path, and administers the realm only when scoped to the root.
+func TestAdminKeys(t *testing.T) {
+	srv := newAuthTestServer(t)
+	admin := srv.signIn(t, "admin@example.com")
+
+	create := func(token, body string) (int, createdKey) {
+		t.Helper()
+		var client *http.Client
+		if token == "" {
+			client = admin
+		}
+		status, out := call(t, client, http.MethodPost, srv.URL+"/v1/keys", body, token)
+		var created createdKey
+		if status == http.StatusCreated {
+			if err := json.Unmarshal(out.Data, &created); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return status, created
+	}
+	mustCreate := func(token, body string) createdKey {
+		t.Helper()
+		status, created := create(token, body)
+		if status != http.StatusCreated {
+			t.Fatalf("create %s = %d", body, status)
+		}
+		return created
+	}
+
+	prodAdmin := mustCreate("", `{"name":"prod-admin","access":"admin","path":"/prod/"}`)
+	rootAdmin := mustCreate("", `{"name":"root-admin","access":"admin","path":"/"}`)
+	staging := mustCreate("", `{"name":"staging-sdk","access":"read","path":"/staging/"}`)
+	prodSDK := mustCreate("", `{"name":"prod-sdk","access":"read","path":"/prod/app/"}`)
+
+	// creating
+	for _, tt := range []struct {
+		body string
+		want int
+	}{
+		{`{"name":"ci","access":"write","path":"/prod/ci/"}`, http.StatusCreated},
+		{`{"name":"sub-admin","access":"admin","path":"/prod/eu/"}`, http.StatusCreated},
+		{`{"name":"escape","access":"read","path":"/staging/"}`, http.StatusForbidden},
+		{`{"name":"root","access":"admin","path":"/"}`, http.StatusForbidden},
+		{`{"name":"lookalike","access":"read","path":"/production/"}`, http.StatusForbidden},
+		{`{"name":"bad","access":"root","path":"/prod/"}`, http.StatusBadRequest},
+	} {
+		if status, created := create(prodAdmin.Token, tt.body); status != tt.want {
+			t.Errorf("prod admin key creating %s = %d, want %d", tt.body, status, tt.want)
+		} else if status == http.StatusCreated && created.Key.CreatedBy != "key:prod-admin" {
+			t.Errorf("createdBy = %q, want key:prod-admin", created.Key.CreatedBy)
+		}
+	}
+
+	// listing shows only the keys within the caller's path
+	names := func(token string) []string {
+		t.Helper()
+		status, out := call(t, nil, http.MethodGet, srv.URL+"/v1/keys", "", token)
+		var list []auth.Key
+		if status != http.StatusOK || json.Unmarshal(out.Data, &list) != nil {
+			t.Fatalf("list = %d %s", status, out.Data)
+		}
+		var names []string
+		for _, k := range list {
+			names = append(names, k.Name)
+		}
+		slices.Sort(names)
+		return names
+	}
+	if got, want := names(prodAdmin.Token), []string{"ci", "prod-admin", "prod-sdk", "sub-admin"}; !slices.Equal(got, want) {
+		t.Errorf("prod admin key lists %v, want %v", got, want)
+	}
+	if got, want := names(rootAdmin.Token), []string{"ci", "prod-admin", "prod-sdk", "root-admin", "staging-sdk", "sub-admin"}; !slices.Equal(got, want) {
+		t.Errorf("root admin key lists %v, want every key %v", got, want)
+	}
+
+	// revoking: keys outside the caller's path look absent
+	if status, _ := call(t, nil, http.MethodDelete, srv.URL+"/v1/keys/"+staging.Key.ID, "", prodAdmin.Token); status != http.StatusNotFound {
+		t.Errorf("prod admin key revoking a staging key = %d, want 404", status)
+	}
+	if status, _ := call(t, nil, http.MethodDelete, srv.URL+"/v1/keys/"+prodSDK.Key.ID, "", prodAdmin.Token); status != http.StatusNoContent {
+		t.Errorf("prod admin key revoking a prod key = %d, want 204", status)
+	}
+
+	for _, tt := range []struct {
+		name, method, path, token string
+		want                      int
+	}{
+		{"admin key writes chambers in scope", http.MethodPost, "/v1/chambers/prod/app/", prodAdmin.Token, http.StatusCreated},
+		{"admin key outside scope", http.MethodPost, "/v1/chambers/staging/", prodAdmin.Token, http.StatusForbidden},
+		{"scoped admin key cannot change the catalog", http.MethodPost, "/v1/catalog/region", prodAdmin.Token, http.StatusForbidden},
+		{"root admin key changes the catalog", http.MethodPost, "/v1/catalog/region", rootAdmin.Token, http.StatusNoContent},
+		{"read key cannot manage keys", http.MethodGet, "/v1/keys", staging.Token, http.StatusForbidden},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := ""
+			if tt.method == http.MethodPost {
+				body = chamberBody
+				if strings.Contains(tt.path, "catalog") {
+					body = `{"values":{}}`
+				}
+			}
+			if status, out := call(t, nil, tt.method, srv.URL+tt.path, body, tt.token); status != tt.want {
+				t.Errorf("%d %v, want %d", status, out.Errors, tt.want)
+			}
+		})
 	}
 }

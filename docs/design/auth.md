@@ -4,7 +4,7 @@ realm has two kinds of callers, and each authenticates differently:
 
 | Caller | Credential | Can do |
 |---|---|---|
-| Applications (SDKs, browsers), automation, the CLI | **API key**, sent as `Authorization: Bearer realm_…` | `evaluate`, `read`, or `write` chambers at or beneath the key's **path** |
+| Applications (SDKs, browsers), automation, the CLI | **API key**, sent as `Authorization: Bearer realm_…` | `evaluate`, `read`, or `write` chambers, or `admin` keys, at or beneath the key's **path** |
 | People using the UI | **Sign-in** with an OIDC provider or GitHub, kept in a session cookie | depends on their **role**: viewer, editor, or admin |
 
 Authentication is **off unless the server config has an `auth` block**. Without
@@ -140,45 +140,60 @@ are:
 - `read`, for server SDKs: it may read and watch chambers and their history.
   A key scoped to the root path `/` may also read the attribute catalog.
 - `write`, for automation: it may also change chambers.
+- `admin`, for scripts that manage keys (such as `realm keys`): it may also
+  list, create, and revoke the keys at or beneath its path, with any access.
+  An `admin` key scoped to `/` administers the whole realm, so it may also
+  change the catalog.
 
-Each level includes the ones before it, but `read` and `write` keys are
-secrets: the evaluate endpoint refuses them on requests from a browser (those
-with an `Origin` header), so one cannot be shipped in front-end code by
+Each level includes the ones before it, but every level above `evaluate` is a
+secret: the evaluate endpoint refuses those keys on requests from a browser
+(those with an `Origin` header), so one cannot be shipped in front-end code by
 mistake.
 
-A key works only for chambers at its path or beneath it (`/prod/` covers
-`/prod/` and `/prod/checkout/`, but not `/production/`). Keys cannot manage
-keys or change the catalog.
+A key works only for chambers and keys at its path or beneath it (`/prod/`
+covers `/prod/` and `/prod/checkout/`, but not `/production/`). An `admin` key
+cannot create a key outside its path, and it neither sees nor can revoke keys
+outside it: `DELETE /v1/keys/<id>` answers 404 for them, as for a missing key.
+So a scoped admin key can never grant more than it has.
 
 The attribute catalog belongs to the whole realm, not to a chamber, and its
-labels can name every tenant or location. So only `read` and `write` keys
-scoped to `/` may read it. A key scoped to `/prod/` cannot, even though some
+labels can name every tenant or location. So only keys scoped to `/` (other
+than `evaluate` keys) may read it. A key scoped to `/prod/` cannot, even though some
 of the catalog's values may appear in `/prod/` chambers.
 
 Tokens look like `realm_<id>_<secret>`. realm stores only a SHA-256 hash of
 the secret, under the reserved `/_realm/keys/` prefix, and shows the token
 once, when the key is created.
 
-Admins manage keys in the UI ("API keys" in the header) or with the API:
+Admins manage keys in the UI ("API keys" in the header). Admins and `admin`
+keys can also use the API, which `realm keys create`, `list`, and `revoke`
+call:
 
 ```text
-GET    /v1/keys           list keys (no secrets)
+GET    /v1/keys           list the caller's keys (no secrets)
 POST   /v1/keys           {"name": "checkout", "access": "read", "path": "/prod/"}
 DELETE /v1/keys/<id>      revoke
 ```
 
-For headless installs, `realm keys` works directly on the storage named by a
-server config, with no running server or sign-in:
+Keys are managed through the server so that the server applies every change
+immediately: it holds the keys in memory and, with a `cacheable` backend, in
+its cache, neither of which another process could update. The server records
+who made each key (`createdBy`), and the caller needs only a key, not the
+storage's credentials.
+
+The one exception is the first key. A headless install has nobody to sign in,
+so `realm keys bootstrap` writes an `admin` key (by default scoped to `/`)
+directly to the storage named by a server config:
 
 ```bash
-realm keys create --config realm.json --name ci --access write --path /prod/
-realm keys list   --config realm.json
-realm keys revoke --config realm.json <id>
+realm keys bootstrap --config realm.json --name ops
 ```
 
-A running server sees keys created this way immediately, and sees revocations
-within 30 seconds. BoltDB is locked by a running server, so with it use the UI
-(or stop the server). bigcache is in memory, so `realm keys` refuses it.
+Run it before the server starts or while it is stopped: a running server locks
+boltdb, and with a cacheable backend it may not see the key for minutes. With
+postgres or file storage it is safe beside running servers. bigcache is in
+memory, so `bootstrap` refuses it. Running it again is also how to recover
+after losing every admin key.
 
 ### Using a key
 

@@ -84,9 +84,16 @@ func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, er
 }
 
 func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
+	return c.NewAPIRequest(ctx, method, "/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
+}
+
+// NewAPIRequest returns a request for any server endpoint, such as
+// "/v1/keys"; apiPath is relative to the server's root. Send it with Do,
+// which adds the client's API key.
+func (c *HttpClient) NewAPIRequest(ctx context.Context, method string, apiPath string, body io.Reader) (*http.Request, error) {
 	logger := logging.Ctx(ctx)
-	logger.DebugCtx(ctx).Str("method", method).Str("path", path).Msg("creating a new request")
-	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
+	logger.DebugCtx(ctx).Str("method", method).Str("path", apiPath).Msg("creating a new request")
+	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/"+strings.TrimPrefix(apiPath, "/"), body)
 }
 
 func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
