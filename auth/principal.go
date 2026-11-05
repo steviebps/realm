@@ -78,6 +78,9 @@ type Kind string
 const (
 	KindUser Kind = "user"
 	KindKey  Kind = "key"
+	// KindAdminKey is the admin key declared in the server config
+	// (Config.AdminKey). It acts with RoleAdmin.
+	KindAdminKey Kind = "adminKey"
 	// KindAnonymous is used for every request when authentication is not
 	// configured. It may do anything.
 	KindAnonymous Kind = "anonymous"
@@ -86,12 +89,14 @@ const (
 // Principal is the authenticated caller of a request.
 type Principal struct {
 	Kind Kind `json:"kind"`
-	// ID is the user's email address or the API key's ID.
+	// ID is the user's email address, the API key's ID, or "admin" for the
+	// admin key.
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
 	// Provider is the sign-in provider of a user.
 	Provider string `json:"provider,omitempty"`
-	// Role applies to users (and is RoleAdmin for anonymous callers).
+	// Role applies to users (and is RoleAdmin for the admin key and for
+	// anonymous callers).
 	Role Role `json:"role"`
 	// Access and Path apply to API keys: the key may act only on chambers
 	// at or beneath Path.
@@ -101,6 +106,9 @@ type Principal struct {
 
 // Anonymous is the principal of every request when authentication is off.
 var Anonymous = &Principal{Kind: KindAnonymous, ID: "anonymous", Role: RoleAdmin}
+
+// adminKeyPrincipal is the principal of requests presenting the admin key.
+var adminKeyPrincipal = Principal{Kind: KindAdminKey, ID: "admin", Name: "admin key", Role: RoleAdmin}
 
 // CanEvaluate reports whether p may evaluate the flags of the chamber at path
 // for a context.
@@ -139,16 +147,25 @@ func (p *Principal) allows(access Access, role Role, path string) bool {
 	return p.Role >= role
 }
 
-// IsAdmin reports whether p may manage API keys and the catalog. API keys are
-// never administrators.
+// IsAdmin reports whether p may manage API keys and the catalog. Stored API
+// keys are never administrators; the admin key declared in the config is.
 func (p *Principal) IsAdmin() bool {
 	return p != nil && p.Kind != KindKey && p.Role >= RoleAdmin
 }
 
+// IsSecretKey reports whether p presented a key that must never reach a
+// browser: a read or write key, or the admin key.
+func (p *Principal) IsSecretKey() bool {
+	return p != nil && (p.Kind == KindAdminKey || (p.Kind == KindKey && p.Access != AccessEvaluate))
+}
+
 // Actor is how p is recorded in change history.
 func (p *Principal) Actor() string {
-	if p.Kind == KindKey {
+	switch p.Kind {
+	case KindKey:
 		return "key:" + p.Name
+	case KindAdminKey:
+		return "key:admin"
 	}
 	return p.ID
 }

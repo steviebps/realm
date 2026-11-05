@@ -83,10 +83,17 @@ func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, er
 	return c.streaming.Do(req)
 }
 
+// NewRequest returns a request for the chamber at path.
 func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
+	return c.NewAPIRequest(ctx, method, "/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
+}
+
+// NewAPIRequest returns a request for apiPath, a path on the server such as
+// "/v1/keys".
+func (c *HttpClient) NewAPIRequest(ctx context.Context, method string, apiPath string, body io.Reader) (*http.Request, error) {
 	logger := logging.Ctx(ctx)
-	logger.DebugCtx(ctx).Str("method", method).Str("path", path).Msg("creating a new request")
-	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
+	logger.DebugCtx(ctx).Str("method", method).Str("path", apiPath).Msg("creating a new request")
+	return http.NewRequestWithContext(ctx, method, c.address.Scheme+"://"+c.address.Host+"/"+strings.TrimPrefix(apiPath, "/"), body)
 }
 
 func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {

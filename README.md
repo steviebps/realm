@@ -6,7 +6,7 @@ realm is an open-source feature-flag and configuration platform written in Go.
 One binary gives you three things:
 
 - **A server** that stores flags and serves them over HTTP, with a web UI at `/ui/`.
-- **A CLI** (`realm server`, `realm client`, `realm keys`).
+- **A CLI** (`realm server`, `realm client`).
 - **A Go SDK** that your application embeds to read flags from a local snapshot.
 
 A TypeScript SDK in [`sdk/typescript`](sdk/typescript) reads flags in Node
@@ -229,7 +229,7 @@ Server settings:
 
 | `storage` | Options | Notes |
 |---|---|---|
-| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so `realm keys` can run beside the server. |
+| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so other processes can share the directory. |
 | `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory. Data is lost when the server stops. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
@@ -281,6 +281,18 @@ docker run -p 8080:8080 \
 ```
 
 - The image runs as a non-root user.
+- To require authentication without setting up sign-in, put an admin key in
+  the config and pass it in from a secret. Then make API keys with
+  `realm client keys` from anywhere that can reach the server. Refer to
+  [Make the first API key](#make-the-first-api-key).
+
+  ```bash
+  # realm.json: "auth": {"adminKey": "${REALM_ADMIN_KEY}"}
+  docker run -p 8080:8080 -e REALM_ADMIN_KEY \
+    -v "$PWD/realm.json:/etc/realm/realm.json:ro" \
+    ghcr.io/steviebps/realm
+  ```
+
 - To keep data from the `file` or `boltdb` backends, set `path` to a
   directory in `/var/lib/realm`. That directory is a volume.
 - The `s3` and `gcs` backends work with Kubernetes workload identity. They need
@@ -563,7 +575,7 @@ to [sdk/typescript/README.md](sdk/typescript/README.md#react).
 > If the server config has no `auth` block, all users that can connect to the
 > server can read and change all flags.
 
-Authentication has two parts:
+Authentication has three parts:
 
 - **Sign-in** for the web UI, with any OIDC provider or GitHub. Each user gets
   the role `viewer`, `editor`, or `admin`.
@@ -572,38 +584,56 @@ Authentication has two parts:
   `read` key is for server SDKs. A `write` key is for automation. Keep `read`
   and `write` keys secret: the server refuses them on requests from browsers.
   A key gives access to its path and to all chambers below it.
+- **An admin key**, declared in the server config, for headless installs and
+  automation. It can do everything an `admin` user can, including making and
+  revoking API keys.
 
+You need sign-in, an admin key, or both. Without sign-in, nobody can use the
+web UI and only API keys work, which suits a container that only serves SDKs.
 For the `auth` config block, refer to [docs/design/auth.md](docs/design/auth.md).
 
 ### Make the first API key
 
-Administrators manage keys in the web UI (**API keys** in the header menu). To
-make a key without the UI, use `realm keys`. This command writes directly to the
-storage in the server config. It needs no running server and no sign-in.
+Administrators who sign in manage keys in the web UI (**API keys** in the
+header menu). Without the UI, use the admin key:
 
-1. If the server uses `boltdb`, stop the server. A running server locks the database.
-2. Make a key:
+1. Make a secret of at least 32 characters, and give it to the server as an
+   environment variable:
 
    ```bash
-   realm keys create --config realm.json --name checkout --access read --path /prod/
+   export REALM_ADMIN_KEY=$(openssl rand -hex 32)
    ```
 
-3. Copy the token from the output. realm shows the token one time only and
+2. Refer to it in the server config, and start the server:
+
+   ```json
+   "auth": {
+     "adminKey": "${REALM_ADMIN_KEY}"
+   }
+   ```
+
+3. Make a key with `realm client keys`, which calls the running server:
+
+   ```bash
+   REALM_TOKEN=$REALM_ADMIN_KEY realm client keys create --name checkout --access read --path /prod/
+   ```
+
+4. Copy the token from the output. realm shows the token one time only and
    keeps only a hash of it.
 
 Other key commands:
 
 ```bash
-realm keys list   --config realm.json
-realm keys revoke --config realm.json <id>
+realm client keys list
+realm client keys revoke <id>
 ```
 
-A running server accepts a new key immediately. It stops accepting a revoked
-key in 30 seconds or less.
+The server accepts a new key immediately. With several replicas, the others
+stop accepting a revoked key in 30 seconds or less.
 
-> [!NOTE]
-> `realm keys` does not work with the `bigcache` backend, because its data is
-> in the memory of the server.
+The admin key is not stored: realm keeps a hash of it in memory. To change it,
+change the variable and restart the server. Do not use it in browsers; the
+server refuses it there, as it does `read` and `write` keys.
 
 ### Use an API key
 

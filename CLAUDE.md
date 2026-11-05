@@ -28,8 +28,10 @@ offers ETag optimistic concurrency, per-chamber change history, and an
 attribute catalog (value → label) for the UI; storage includes S3 and
 Postgres, which is safe for many replicas (writes are version-checked in the
 database and every replica streams every change via LISTEN/NOTIFY). Optional
-auth: path-scoped read/write **API keys** for SDKs and automation, and
-OIDC / GitHub **sign-in** with viewer / editor / admin roles for the UI.
+auth: path-scoped read/write **API keys** for SDKs and automation, an
+optional **admin key** declared in the config (for headless installs; it
+manages keys over `/v1/keys`), and optional OIDC / GitHub **sign-in** with
+viewer / editor / admin roles for the UI.
 Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
 public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
 which also evaluates locally for Node services. Not yet built: revisioned
@@ -81,7 +83,8 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   stored under the reserved `/_realm/` prefix in the raw storage beneath the
   `inheritable` wrapper.
 - **Principal** (`auth/`) — the caller of a request: an API key (`Access`
-  evaluate/read/write, `Path` scope), a signed-in user (`Role`), or `auth.Anonymous`
+  evaluate/read/write, `Path` scope), the config's admin key (`KindAdminKey`,
+  `RoleAdmin`), a signed-in user (`Role`), or `auth.Anonymous`
   when the server has no `auth` config. Handlers read it with
   `auth.FromContext(ctx)` and check `CanEvaluate(path)` / `CanRead(path)` /
   `CanWrite(path)` / `CanReadCatalog()` / `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted

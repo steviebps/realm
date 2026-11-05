@@ -5,6 +5,7 @@ realm has two kinds of callers, and each authenticates differently:
 | Caller | Credential | Can do |
 |---|---|---|
 | Applications (SDKs, browsers), automation, the CLI | **API key**, sent as `Authorization: Bearer realm_…` | `evaluate`, `read`, or `write` chambers at or beneath the key's **path** |
+| Headless installs and provisioning | the **admin key** declared in the config, sent the same way | everything an admin may do, including managing API keys |
 | People using the UI | **Sign-in** with an OIDC provider or GitHub, kept in a session cookie | depends on their **role**: viewer, editor, or admin |
 
 Authentication is **off unless the server config has an `auth` block**. Without
@@ -22,6 +23,7 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
     "storage": "s3",
     "options": { "bucket": "my-realm" },
     "auth": {
+      "adminKey": "${REALM_ADMIN_KEY}",
       "externalURL": "https://realm.example.com",
       "sessionSecret": "${REALM_SESSION_SECRET}",
       "sessionTTL": "12h",
@@ -55,15 +57,24 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
 }
 ```
 
+- **`adminKey`**: optional; see [The admin key](#the-admin-key).
 - **`externalURL`**: the address users reach realm at. Sign-in callbacks are
   `<externalURL>/v1/auth/callback/<provider name>`; register that URL with each
   provider. When it is `https`, cookies are marked `Secure`.
 - **`sessionSecret`**: at least 32 characters, for example
   `openssl rand -hex 32`. It encrypts session cookies, so every replica must
   share it. Changing it signs everyone out.
-- **Secrets** (`sessionSecret`, `clientSecret`) may reference environment
+- **Secrets** (`adminKey`, `sessionSecret`, `clientSecret`) may reference environment
   variables as `${NAME}`. This keeps them out of the config file and works
   with Docker and Kubernetes secrets.
+
+The block needs `providers`, an `adminKey`, or both. With no providers nobody
+can sign in, only API keys authenticate, and `externalURL`, `sessionSecret`,
+and `access` are not needed:
+
+```json
+"auth": { "adminKey": "${REALM_ADMIN_KEY}" }
+```
 
 ### Providers
 
@@ -125,8 +136,8 @@ access within that time. A user with an email or domain grant at least as high
 keeps their session. After upgrading, sessions issued before this check
 existed count as stale.
 
-The first administrator is whoever you list under `access.admins`; no
-bootstrap token is needed.
+The first administrator is whoever you list under `access.admins`. Installs
+without sign-in start from the admin key instead.
 
 ## API keys
 
@@ -141,10 +152,10 @@ are:
   A key scoped to the root path `/` may also read the attribute catalog.
 - `write`, for automation: it may also change chambers.
 
-Each level includes the ones before it, but `read` and `write` keys are
-secrets: the evaluate endpoint refuses them on requests from a browser (those
-with an `Origin` header), so one cannot be shipped in front-end code by
-mistake.
+Each level includes the ones before it, but `read` and `write` keys (and the
+admin key) are secrets: the evaluate endpoint refuses them on requests from a
+browser (those with an `Origin` header), so one cannot be shipped in
+front-end code by mistake.
 
 A key works only for chambers at its path or beneath it (`/prod/` covers
 `/prod/` and `/prod/checkout/`, but not `/production/`). Keys cannot manage
@@ -159,7 +170,8 @@ Tokens look like `realm_<id>_<secret>`. realm stores only a SHA-256 hash of
 the secret, under the reserved `/_realm/keys/` prefix, and shows the token
 once, when the key is created.
 
-Admins manage keys in the UI ("API keys" in the header) or with the API:
+Admins (signed-in admins, or the admin key) manage keys in the UI ("API keys"
+in the header) or with the API:
 
 ```text
 GET    /v1/keys           list keys (no secrets)
@@ -167,18 +179,41 @@ POST   /v1/keys           {"name": "checkout", "access": "read", "path": "/prod/
 DELETE /v1/keys/<id>      revoke
 ```
 
-For headless installs, `realm keys` works directly on the storage named by a
-server config, with no running server or sign-in:
+`realm client keys create|list|revoke` calls the same API, so a script holding
+the admin key can provision keys:
 
 ```bash
-realm keys create --config realm.json --name ci --access write --path /prod/
-realm keys list   --config realm.json
-realm keys revoke --config realm.json <id>
+export REALM_TOKEN=$REALM_ADMIN_KEY
+realm client keys create --name ci --access write --path /prod/
+realm client keys list
+realm client keys revoke <id>
 ```
 
-A running server sees keys created this way immediately, and sees revocations
-within 30 seconds. BoltDB is locked by a running server, so with it use the UI
-(or stop the server). bigcache is in memory, so `realm keys` refuses it.
+The server that handles a change sees it immediately; other replicas sharing
+the storage see new keys within 5 seconds and revocations within 30.
+
+### The admin key
+
+`adminKey` declares one key with the administrator role, so a server without
+sign-in still has a first credential, and automation can manage keys without
+a person. It is presented as a bearer token like any API key and may do
+anything an admin user may: read and change every chamber, edit the catalog,
+and create and revoke API keys. Keys it creates are ordinary stored keys
+(`evaluate`, `read`, or `write`); there is no way to store another admin key,
+so rotating the admin key revokes all administrator access by key.
+
+It is never written to storage: at startup the server hashes it and compares
+presented tokens against that hash in constant time. It must be at least 32
+characters (`openssl rand -hex 32`). A `${NAME}` reference to an unset
+variable is an error, so a missing secret cannot silently switch the admin key
+off. To rotate or revoke it, change the value and restart every replica.
+History records its changes as `key:admin`.
+
+There is deliberately no command that writes keys straight into the storage
+named by a config file. A second process writing the server's storage cannot
+open BoltDB while the server holds it, and leaves a server using `cacheable`
+storage serving stale keys from its cache. Every key change goes through a
+running server instead.
 
 ### Using a key
 
@@ -204,14 +239,14 @@ config file.
 | `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)` |
 | `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user; only evaluate keys when the request has an `Origin` header; CORS-enabled for bearer tokens |
 | `/v1/catalog…` | key or session | read: `CanReadCatalog()`, so any signed-in user or a `read`/`write` key scoped to `/`; write: admin |
-| `/v1/keys…` | admin session | key management |
+| `/v1/keys…` | admin session or the admin key | key management |
 | `/ui/` | none | static assets; the app shows the sign-in screen |
 
 Routes are private by default: only `/healthz`, `/ui/`, and `/v1/auth/` are
 reachable without credentials (`publicPaths` in `http/auth.go`), so a new
 route needs no opt-in to be protected. Requests with no credentials get `401`. Requests with credentials that lack
 permission get `403`. When auth is on, history records the authenticated
-identity (an email, or `key:<name>`) and ignores the self-reported
+identity (an email, `key:<name>`, or `key:admin`) and ignores the self-reported
 `X-Realm-Actor` header.
 
 ## Security notes
