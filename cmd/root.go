@@ -28,6 +28,10 @@ var rootCmd = &cobra.Command{
 
 var shutdownFn func(ctx context.Context) error
 
+// telemetryFlushTimeout bounds how long exporting buffered telemetry may delay
+// the process's exit.
+const telemetryFlushTimeout = 5 * time.Second
+
 func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file (or set $"+ConfigEnv+"; default: "+strings.Join(DefaultConfigPaths(), ", ")+")")
@@ -46,7 +50,10 @@ func Execute() {
 	err := rootCmd.ExecuteContext(ctx)
 
 	if shutdownFn != nil {
-		if shutdownErr := shutdownFn(ctx); shutdownErr != nil {
+		// Bounded so an unreachable collector cannot hold up the exit.
+		flushCtx, cancel := context.WithTimeout(ctx, telemetryFlushTimeout)
+		defer cancel()
+		if shutdownErr := shutdownFn(flushCtx); shutdownErr != nil {
 			logger.ErrorCtx(ctx).Str("error", shutdownErr.Error()).Msg("could not flush telemetry")
 		}
 	}
