@@ -4,7 +4,8 @@ name: release
 # everything at that version, once every CI check passes again on the tag:
 #   - binaries and a GitHub release, plus the Homebrew cask (GoReleaser)
 #   - the container image, ghcr.io/<owner>/realm
-#   - the TypeScript SDK on npm, @steviebps/realm-sdk
+#   - the TypeScript SDK on npm, @steviebps/realm-sdk (when the repository
+#     variable NPM_PUBLISH is "true")
 # See docs/RELEASING.md.
 
 on:
@@ -103,6 +104,9 @@ jobs:
 
   npm:
     needs: [ci, version]
+    # Skipped until the repository variable NPM_PUBLISH is "true", which
+    # needs the package on npm with a trusted publisher (docs/RELEASING.md).
+    if: vars.NPM_PUBLISH == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
