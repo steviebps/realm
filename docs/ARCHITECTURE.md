@@ -201,7 +201,10 @@ Recommended production setups: `postgres` for several replicas, or
 memory, so storage latency only affects writes and cold start.
 
 Server config (`configs/realm.json`, parsed in `cmd/config.go`) selects the
-storage type and options, TLS cert/key, port, and `inheritable`.
+storage type and options, TLS cert/key, port, and `inheritable`. Every command
+finds the file the same way (`findConfig`): `--config`, then `$REALM_CONFIG`,
+then `realm/realm.json` in the user config directory, then
+`/etc/realm/realm.json` — never the working directory.
 
 ## Observability
 
