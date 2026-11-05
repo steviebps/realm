@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -18,7 +18,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/steviebps/realm/helper/logging"
 	realmhttp "github.com/steviebps/realm/http"
-	realm "github.com/steviebps/realm/pkg"
 	storage "github.com/steviebps/realm/pkg/storage"
 )
 
@@ -32,177 +31,156 @@ var serverCmd = &cobra.Command{
 			_ = cmd.MarkFlagRequired("config")
 		}
 	},
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		flags := cmd.Flags()
-		debug, _ := flags.GetBool("debug")
-		logger := logging.Ctx(ctx)
-
-		configPath, err := flags.GetString("config")
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			os.Exit(1)
+		if err := runServer(cmd); err != nil {
+			// Logged here rather than printed by cobra, so startup failures
+			// stay in the server's structured log.
+			logging.Ctx(ctx).ErrorCtx(ctx).Msg(err.Error())
+			cmd.SilenceUsage, cmd.SilenceErrors = true, true
+			return err
 		}
-
-		devMode, _ := flags.GetBool("dev")
-		if !devMode && configPath == "" {
-			logger.ErrorCtx(ctx).Msg("config must be specified")
-			os.Exit(1)
-		}
-		var realmConfig RealmConfig
-
-		if devMode {
-			realmConfig = NewDefaultServerConfig()
-		} else {
-			realmConfig, err = parseConfig(configPath)
-			if err != nil {
-				logger.ErrorCtx(ctx).Msg(err.Error())
-				os.Exit(1)
-			}
-		}
-
-		serverConfig := realmConfig.Server
-
-		if serverConfig.LogLevel != "" && !debug {
-			level, err := zerolog.ParseLevel(serverConfig.LogLevel)
-			if err != nil {
-				logger.ErrorCtx(ctx).Msgf("invalid logLevel %q", serverConfig.LogLevel)
-				os.Exit(1)
-			}
-			zerolog.SetGlobalLevel(level)
-		}
-
-		var shutdownDelay time.Duration
-		if serverConfig.ShutdownDelay != "" {
-			if shutdownDelay, err = time.ParseDuration(serverConfig.ShutdownDelay); err != nil || shutdownDelay < 0 {
-				logger.ErrorCtx(ctx).Msgf("invalid shutdownDelay %q: want a duration such as \"5s\"", serverConfig.ShutdownDelay)
-				os.Exit(1)
-			}
-		}
-
-		portStr, err := flags.GetString("port")
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			os.Exit(1)
-		}
-
-		if portStr == "" {
-			portStr = serverConfig.Port
-		}
-
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			os.Exit(1)
-		}
-		certFile := serverConfig.CertFile
-		keyFile := serverConfig.KeyFile
-		storageType := serverConfig.StorageType
-
-		certFileEmpty := certFile == ""
-		keyFileEmpty := keyFile == ""
-		if certFileEmpty != keyFileEmpty {
-			logger.ErrorCtx(ctx).Msg("certFile must be used in conjunction with keyFile")
-			os.Exit(1)
-		}
-
-		logger.InfoCtx(ctx).Str("port", portStr).Str("certFile", certFile).Str("keyFile", keyFile).Str("storage", storageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
-
-		if len(serverConfig.StorageOptions) > 0 {
-			logger.DebugCtx(ctx).Any("options", redactOptions(serverConfig.StorageOptions)).Msg("storage options")
-		}
-
-		stg, err := openStorage(serverConfig)
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			os.Exit(1)
-		}
-		defer stg.Close(ctx)
-
-		if serverConfig.Inheritable {
-			stg, err = storage.NewInheritableStorage(stg)
-			if err != nil {
-				logger.ErrorCtx(ctx).Msg(err.Error())
-				os.Exit(1)
-			}
-		}
-
-		// Create the root chamber unless it exists; servers starting together
-		// against shared storage create it once.
-		root, err := json.Marshal(&realm.Chamber{Rules: map[string]*realm.Flag{}})
-		if err != nil {
-			logger.ErrorCtx(ctx).Msgf("failed to marshal root entry during startup: %s", err.Error())
-			os.Exit(1)
-		}
-		if err := storage.Update(ctx, stg, []string{"/"}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
-			if cur["/"] != nil {
-				return nil, nil
-			}
-			logger.DebugCtx(ctx).Msg("initializing root entry in storage")
-			return []storage.Op{{Key: "/", Value: root}}, nil
-		}); err != nil {
-			logger.ErrorCtx(ctx).Msgf("failed to initialize root entry during startup: %s", err.Error())
-			os.Exit(1)
-		}
-
-		if serverConfig.Auth == nil {
-			logger.WarnCtx(ctx).Msg("AUTHENTICATION IS DISABLED: anyone who can reach this server can read and change every chamber. Add an \"auth\" block to the server config to require sign-in and API keys.")
-		}
-
-		draining := make(chan struct{})
-		handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout, Auth: serverConfig.Auth, Draining: draining})
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			os.Exit(1)
-		}
-
-		// Requests run under baseCtx, which shutdown cancels: watch streams
-		// never go idle on their own, so Shutdown would otherwise wait for them
-		// until the process is killed.
-		baseCtx, cancelBase := context.WithCancel(ctx)
-		defer cancelBase()
-		server := &http.Server{
-			Addr:              fmt.Sprintf(":%d", port),
-			Handler:           handler,
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       2 * time.Minute,
-			MaxHeaderBytes:    64 << 10,
-			BaseContext:       func(net.Listener) context.Context { return baseCtx },
-		}
-		server.RegisterOnShutdown(cancelBase)
-
-		served := make(chan error, 1)
-		go func() {
-			logger.InfoCtx(ctx).Msg(fmt.Sprintf("Listening on port %s", portStr))
-			if certFileEmpty {
-				served <- server.ListenAndServe()
-			} else {
-				served <- server.ListenAndServeTLS(certFile, keyFile)
-			}
-		}()
-
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-		select {
-		case err := <-served:
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			_ = stg.Close(ctx)
-			os.Exit(1)
-		case sig := <-sigChan:
-			logger.InfoCtx(ctx).Str("signal", sig.String()).Dur("delay", shutdownDelay).Msg("shutting down")
-		}
-
-		// Fail readiness first, and keep serving while load balancers notice.
-		close(draining)
-		if shutdownDelay > 0 {
-			time.Sleep(shutdownDelay)
-		}
-		shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("server did not shut down cleanly")
-		}
+		return nil
 	},
+}
+
+// emptyChamber is the JSON of a chamber with no flags.
+var emptyChamber = []byte(`{"rules":{}}`)
+
+// runServer serves until a shutdown signal, returning startup and serving
+// errors so deferred cleanup and the telemetry flush in Execute still run.
+func runServer(cmd *cobra.Command) error {
+	ctx := cmd.Context()
+	flags := cmd.Flags()
+	debug, _ := flags.GetBool("debug")
+	devMode, _ := flags.GetBool("dev")
+	configPath, _ := flags.GetString("config")
+	logger := logging.Ctx(ctx)
+
+	realmConfig := NewDefaultServerConfig()
+	if !devMode {
+		if configPath == "" {
+			return errors.New("config must be specified")
+		}
+		var err error
+		if realmConfig, err = parseConfig(configPath); err != nil {
+			return err
+		}
+	}
+	serverConfig := realmConfig.Server
+
+	if serverConfig.LogLevel != "" && !debug {
+		level, err := zerolog.ParseLevel(serverConfig.LogLevel)
+		if err != nil {
+			return fmt.Errorf("invalid logLevel %q", serverConfig.LogLevel)
+		}
+		zerolog.SetGlobalLevel(level)
+	}
+
+	var shutdownDelay time.Duration
+	if serverConfig.ShutdownDelay != "" {
+		var err error
+		if shutdownDelay, err = time.ParseDuration(serverConfig.ShutdownDelay); err != nil || shutdownDelay < 0 {
+			return fmt.Errorf("invalid shutdownDelay %q: want a duration such as \"5s\"", serverConfig.ShutdownDelay)
+		}
+	}
+
+	portStr, _ := flags.GetString("port")
+	if portStr == "" {
+		portStr = serverConfig.Port
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return err
+	}
+
+	if (serverConfig.CertFile == "") != (serverConfig.KeyFile == "") {
+		return errors.New("certFile must be used in conjunction with keyFile")
+	}
+
+	logger.InfoCtx(ctx).Str("port", portStr).Str("certFile", serverConfig.CertFile).Str("keyFile", serverConfig.KeyFile).Str("storage", serverConfig.StorageType).Bool("inheritable", serverConfig.Inheritable).Bool("debug", debug).Msg("server options")
+
+	if len(serverConfig.StorageOptions) > 0 {
+		logger.DebugCtx(ctx).Any("options", redactOptions(serverConfig.StorageOptions)).Msg("storage options")
+	}
+
+	stg, err := openStorage(serverConfig)
+	if err != nil {
+		return err
+	}
+	defer stg.Close(ctx)
+
+	if serverConfig.Inheritable {
+		if stg, err = storage.NewInheritableStorage(stg); err != nil {
+			return err
+		}
+	}
+
+	// Create the root chamber unless it exists; servers starting together
+	// against shared storage create it once.
+	if err := storage.Update(ctx, stg, []string{"/"}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
+		if cur["/"] != nil {
+			return nil, nil
+		}
+		logger.DebugCtx(ctx).Msg("initializing root entry in storage")
+		return []storage.Op{{Key: "/", Value: emptyChamber}}, nil
+	}); err != nil {
+		return fmt.Errorf("failed to initialize root entry during startup: %w", err)
+	}
+
+	if serverConfig.Auth == nil {
+		logger.WarnCtx(ctx).Msg("AUTHENTICATION IS DISABLED: anyone who can reach this server can read and change every chamber. Add an \"auth\" block to the server config to require sign-in and API keys.")
+	}
+
+	draining := make(chan struct{})
+	handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout, Auth: serverConfig.Auth, Draining: draining})
+	if err != nil {
+		return err
+	}
+
+	// Requests run under baseCtx, which shutdown cancels: watch streams
+	// never go idle on their own, so Shutdown would otherwise wait for them
+	// until the process is killed.
+	baseCtx, cancelBase := context.WithCancel(ctx)
+	defer cancelBase()
+	server := &http.Server{
+		Addr:              fmt.Sprintf(":%d", port),
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+		BaseContext:       func(net.Listener) context.Context { return baseCtx },
+	}
+	server.RegisterOnShutdown(cancelBase)
+
+	served := make(chan error, 1)
+	go func() {
+		logger.InfoCtx(ctx).Msgf("Listening on port %s", portStr)
+		if serverConfig.CertFile == "" {
+			served <- server.ListenAndServe()
+		} else {
+			served <- server.ListenAndServeTLS(serverConfig.CertFile, serverConfig.KeyFile)
+		}
+	}()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	select {
+	case err := <-served:
+		return err
+	case sig := <-sigChan:
+		logger.InfoCtx(ctx).Str("signal", sig.String()).Dur("delay", shutdownDelay).Msg("shutting down")
+	}
+
+	// Fail readiness first, and keep serving while load balancers notice.
+	close(draining)
+	time.Sleep(shutdownDelay)
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("server did not shut down cleanly")
+	}
+	return nil
 }
 
 // shutdownTimeout bounds how long in-flight requests may finish after a
