@@ -71,3 +71,30 @@ func TestListImmediateChildren(t *testing.T) {
 		})
 	}
 }
+
+// TestPutStoresValueVerbatim checks that every backend returns exactly the
+// bytes it was given, which ETags (hashes of the stored bytes) rely on.
+func TestPutStoresValueVerbatim(t *testing.T) {
+	ctx := context.Background()
+	values := []string{
+		`{"rules":{}}`,
+		`{"rules":{"a":{"type":"string","value":"<b>&</b>"}}}`,
+		"{\n  \"pretty\": true\n}",
+	}
+	for name, s := range backends(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, v := range values {
+				if err := s.Put(ctx, StorageEntry{Key: "/verbatim/", Value: []byte(v)}); err != nil {
+					t.Fatalf("put: %v", err)
+				}
+				e, err := s.Get(ctx, "/verbatim/")
+				if err != nil {
+					t.Fatalf("get: %v", err)
+				}
+				if string(e.Value) != v {
+					t.Errorf("Get returned %q, want %q", e.Value, v)
+				}
+			}
+		})
+	}
+}

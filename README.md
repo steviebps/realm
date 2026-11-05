@@ -208,8 +208,8 @@ Server settings:
 
 | `storage` | Options | Notes |
 |---|---|---|
-| `file` | `path` | JSON files on disk, in the directory `path`. |
-| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database. |
+| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so `realm keys` can run beside the server. |
+| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory. Data is lost when the server stops. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
 | `s3` | `bucket`, `region`, `prefix`, `endpoint`, `force_path_style` | Amazon S3 or an S3-compatible service. Uses the standard AWS credential chain. |

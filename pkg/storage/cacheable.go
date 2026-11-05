@@ -22,6 +22,7 @@ type CacheableStorage struct {
 
 var (
 	_ Storage = (*CacheableStorage)(nil)
+	_ Locker  = (*CacheableStorage)(nil)
 )
 
 // NewCacheableStorage returns a write-through cacheable storage.
@@ -45,6 +46,10 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 	source := conf["source"]
 	if source == "" {
 		return nil, fmt.Errorf("'source' option for cacheable must be set")
+	}
+	if cache == "boltdb" && source == "boltdb" {
+		// both would open the same database file, which bbolt locks
+		return nil, fmt.Errorf("cacheable cannot use boltdb as both cache and source")
 	}
 
 	sourceCreator, err := sourcable(source)
@@ -177,6 +182,15 @@ func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, e
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 	return c.source.List(ctx, prefix)
+}
+
+// LockUpdate takes the source's lock when it has one, so Updates through the
+// cache are serialized with other processes using the source.
+func (c *CacheableStorage) LockUpdate(ctx context.Context, keys []string) (func(), error) {
+	if l, ok := c.source.(Locker); ok {
+		return l.LockUpdate(ctx, keys)
+	}
+	return func() {}, nil
 }
 
 func (c *CacheableStorage) Close(ctx context.Context) error {

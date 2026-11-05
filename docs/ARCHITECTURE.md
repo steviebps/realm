@@ -167,7 +167,13 @@ All read-modify-write sequences go through `storage.Update` (or
 catalog, and API keys. On a `Transactional` backend, `Update` version-checks
 the keys it read and retries with jittered backoff on conflict, so replicas
 need no shared lock. On other backends it holds a process-wide lock instead,
-which is why those backends are single-replica.
+which is why those backends are single-replica. A backend can also implement
+**`Locker`** to extend that lock to other processes: `file` takes an exclusive
+lock file (`.realm-lock`, `flock` or `LockFileEx`) for the update, so a server
+and `realm keys` sharing the directory cannot lose each other's writes. `file`
+also writes each entry to a temporary file and renames it into place, so
+readers never see a partial entry. `boltdb` gives up after 1 second when
+another process holds the database's lock.
 
 The `postgres` backend keeps every entry in one table (`realm_entries`: key,
 value as bytes, revision), so its keys are the same as every other backend's.

@@ -20,6 +20,12 @@ func newInheritableTestServer(t *testing.T) *httptest.Server {
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
+	return newInheritableTestServerOn(t, stg)
+}
+
+// newInheritableTestServerOn serves an inheriting handler over stg.
+func newInheritableTestServerOn(t *testing.T, stg storage.Storage) *httptest.Server {
+	t.Helper()
 	inh, err := storage.NewInheritableStorage(stg)
 	if err != nil {
 		t.Fatalf("inheritable: %v", err)
@@ -62,7 +68,21 @@ func do(t *testing.T, method, url, body string, headers map[string]string) (*htt
 const flagBody = `{"rules":{"beta":{"type":"boolean","value":%s}}}`
 
 func TestChamberOptimisticConcurrency(t *testing.T) {
-	srv := newInheritableTestServer(t)
+	// the on-disk backends are included because ETags hash the stored bytes,
+	// so a backend that changes them breaks If-Match with its own ETags
+	for _, name := range []string{"bigcache", "file", "boltdb"} {
+		t.Run(name, func(t *testing.T) {
+			stg, err := storage.StorageOptions[name](map[string]string{"path": t.TempDir()})
+			if err != nil {
+				t.Fatalf("storage: %v", err)
+			}
+			t.Cleanup(func() { _ = stg.Close(context.Background()) })
+			testChamberOptimisticConcurrency(t, newInheritableTestServerOn(t, stg))
+		})
+	}
+}
+
+func testChamberOptimisticConcurrency(t *testing.T, srv *httptest.Server) {
 	url := srv.URL + "/v1/chambers/app/"
 
 	// If-None-Match: * creates only when absent.
