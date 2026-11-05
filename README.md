@@ -476,8 +476,9 @@ curl -N 'http://localhost:8080/v1/chambers/root?watch=true'
 
 ## Use the TypeScript SDK
 
-[`sdk/typescript`](sdk/typescript) has two clients. The package is not on npm
-yet; add it as a `file:` dependency from this repository.
+[`sdk/typescript`](sdk/typescript) has two clients. Install it with
+`npm install @steviebps/realm-sdk`; it is released with realm, at the same
+version.
 
 | Client | Use it in | API key | Where flags are evaluated |
 |---|---|---|---|
@@ -485,7 +486,7 @@ yet; add it as a `file:` dependency from this repository.
 | `BrowserClient` | browsers | `evaluate` | on the server, so the rules stay private |
 
 ```ts
-import { BrowserClient } from 'realm-sdk';
+import { BrowserClient } from '@steviebps/realm-sdk';
 
 const flags = new BrowserClient({
   address: 'https://realm.example.com',
@@ -511,7 +512,7 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
 
 ### Use the BrowserClient in React
 
-`realm-sdk/react` has a provider and hooks for a `BrowserClient`.
+`@steviebps/realm-sdk/react` has a provider and hooks for a `BrowserClient`.
 
 1. Make the client and wrap the app in a `RealmProvider`. The provider starts
    the client, and evaluates again when `context` changes, for example when a
@@ -519,8 +520,8 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
 
    ```tsx
    // App.tsx
-   import { BrowserClient } from 'realm-sdk';
-   import { RealmProvider } from 'realm-sdk/react';
+   import { BrowserClient } from '@steviebps/realm-sdk';
+   import { RealmProvider } from '@steviebps/realm-sdk/react';
 
    const flags = new BrowserClient({
      address: 'https://realm.example.com',
@@ -541,7 +542,7 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
 
    ```tsx
    // Checkout.tsx
-   import { useBoolFlag } from 'realm-sdk/react';
+   import { useBoolFlag } from '@steviebps/realm-sdk/react';
 
    export function Checkout() {
      const newCheckout = useBoolFlag('new-checkout', false);

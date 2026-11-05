@@ -1,15 +1,13 @@
 name: docker
 
-# Builds the realm image for linux/amd64 and linux/arm64 and publishes it to
-# GitHub Container Registry (ghcr.io/<owner>/realm):
-#   - release tags (v1.2.3) → 1.2.3, 1.2, latest
-#   - pushes to master      → edge
-# Pull requests build the image without publishing it.
+# Builds the realm image for linux/amd64 and linux/arm64. Pushes to master
+# publish it to GitHub Container Registry as ghcr.io/<owner>/realm:edge; pull
+# requests build it without publishing. Release images (1.2.3, 1.2, latest)
+# are published by release.yml.
 
 on:
   push:
     branches: [master]
-    tags: ["v*"]
   pull_request:
     paths:
       - Dockerfile
@@ -31,13 +29,13 @@ jobs:
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -45,16 +43,14 @@ jobs:
 
       - name: Image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/realm
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=edge,branch=master
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -63,5 +59,5 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
-          # Only master and tags write the shared cache, so PRs do not evict it.
+          # Only master writes the shared cache, so PRs do not evict it.
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}

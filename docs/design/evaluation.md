@@ -79,11 +79,11 @@ other route sends CORS headers.
 
 `sdk/typescript` is one package with no runtime dependencies. It runs
 anywhere with `fetch` and streaming response bodies: Node 18+, Bun, Deno,
-browsers, and edge runtimes. It is not published to npm yet; depend on it
-through a workspace or `file:` link.
+browsers, and edge runtimes. It is published to npm as
+`@steviebps/realm-sdk` with every realm release.
 
 ```ts
-import { ServerClient, BrowserClient } from 'realm-sdk';
+import { ServerClient, BrowserClient } from '@steviebps/realm-sdk';
 
 // Backend: a read key, evaluates locally, like the Go SDK.
 const realm = new ServerClient({
@@ -109,7 +109,7 @@ flags.subscribe(() => render());
 await flags.identify({ key: otherUser }); // re-evaluates for a new context
 ```
 
-`realm-sdk/react` wraps a `BrowserClient` for React 18+: a `RealmProvider`
+`@steviebps/realm-sdk/react` wraps a `BrowserClient` for React 18+: a `RealmProvider`
 that starts the client and re-identifies when its `context` prop changes by
 value, and hooks (`useBoolFlag`, `useJsonFlag`, `useRealmStatus`, …) built
 on `useSyncExternalStore`. React is an optional peer dependency, so the main
@@ -144,7 +144,6 @@ evaluation changes.
 
 ## Not yet built
 
-- Publishing to npm.
 - A per-key allowlist of flags for evaluate keys (they see every flag's value
   beneath their path).
 - Cross-replica fanout with backends other than `postgres`: there, like
