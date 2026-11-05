@@ -39,6 +39,12 @@ test-race: ## Run all tests with the race detector (CI gate)
 sdk-test: ## Typecheck and test the TypeScript SDK
 	cd sdk/typescript && npm ci && npm run typecheck && npm test && npm run build
 
+.PHONY: e2e
+e2e: ## Run scripts/e2e.sh against a freshly built server
+	go build -o $(BINARY) .
+	cd sdk/typescript && npm ci
+	./scripts/e2e.sh ./$(BINARY)
+
 .PHONY: bench
 bench: ## Run benchmarks
 	go test -run '^$$' -bench . -benchmem ./...
