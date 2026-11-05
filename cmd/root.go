@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -33,7 +34,7 @@ const telemetryFlushTimeout = 5 * time.Second
 
 func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
-	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file")
+	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file (or set $"+ConfigEnv+"; default: "+strings.Join(DefaultConfigPaths(), ", ")+")")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
 	rootCmd.PersistentFlags().Bool("stdouttraces", false, "use stdout for trace exporter")
 	rootCmd.PersistentFlags().Bool("notraces", false, "disable tracing")

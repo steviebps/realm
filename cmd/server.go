@@ -25,12 +25,6 @@ var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Starts realm server",
 	Long:  "Starts realm server",
-	PreRun: func(cmd *cobra.Command, args []string) {
-		devMode, _ := cmd.Flags().GetBool("dev")
-		if !devMode {
-			_ = cmd.MarkFlagRequired("config")
-		}
-	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		if err := runServer(cmd); err != nil {
@@ -54,18 +48,19 @@ func runServer(cmd *cobra.Command) error {
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
 	devMode, _ := flags.GetBool("dev")
-	configPath, _ := flags.GetString("config")
 	logger := logging.Ctx(ctx)
 
 	realmConfig := NewDefaultServerConfig()
 	if !devMode {
-		if configPath == "" {
-			return errors.New("config must be specified")
-		}
+		var configPath string
 		var err error
-		if realmConfig, err = parseConfig(configPath); err != nil {
+		if realmConfig, configPath, err = loadConfig(cmd); err != nil {
 			return err
 		}
+		if configPath == "" {
+			return fmt.Errorf("%w (or use --dev)", errNoConfig())
+		}
+		logger.InfoCtx(ctx).Str("config", configPath).Msg("using config file")
 	}
 	serverConfig := realmConfig.Server
 

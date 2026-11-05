@@ -14,7 +14,8 @@ import (
 var keysCmd = &cobra.Command{
 	Use:   "keys",
 	Short: "Manage API keys",
-	Long: `Manage API keys directly in the storage named by --config.
+	Long: `Manage API keys directly in the storage named by the server's config file
+(--config, $REALM_CONFIG, or a default location).
 
 Keys are also managed by administrators in the UI. A running server notices
 keys created here immediately and keys revoked here within 30 seconds. BoltDB
@@ -76,16 +77,16 @@ var keysRevokeCmd = &cobra.Command{
 }
 
 // withKeyStore returns a RunE that runs fn against the key store in the
-// storage named by --config, closing that storage afterwards.
+// storage named by the server's config file (see findConfig), closing that
+// storage afterwards.
 func withKeyStore(fn func(cmd *cobra.Command, args []string, keys *auth.KeyStore) error) func(*cobra.Command, []string) error {
 	return func(cmd *cobra.Command, args []string) error {
-		configPath, _ := cmd.Flags().GetString("config")
-		if configPath == "" {
-			return errors.New("--config must name the server's config file")
-		}
-		config, err := parseConfig(configPath)
+		config, configPath, err := loadConfig(cmd)
 		if err != nil {
 			return err
+		}
+		if configPath == "" {
+			return errNoConfig()
 		}
 		if config.Server.StorageType == "bigcache" {
 			return errors.New("bigcache storage is in memory; manage keys in the UI instead")
