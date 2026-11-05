@@ -208,7 +208,7 @@ Server settings:
 
 | `storage` | Options | Notes |
 |---|---|---|
-| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so `realm keys` can run beside the server. |
+| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so `realm keys bootstrap` can run beside the server. |
 | `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory. Data is lost when the server stops. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
@@ -546,41 +546,52 @@ Authentication has two parts:
   the role `viewer`, `editor`, or `admin`.
 - **API keys** for applications and automation. An `evaluate` key is for
   browsers: it can only evaluate flags, so you can put it in front-end code. A
-  `read` key is for server SDKs. A `write` key is for automation. Keep `read`
-  and `write` keys secret: the server refuses them on requests from browsers.
-  A key gives access to its path and to all chambers below it.
+  `read` key is for server SDKs. A `write` key is for automation. An `admin`
+  key can also create, list, and revoke keys. Keep every key except
+  `evaluate` keys secret: the server refuses them on requests from browsers.
+  A key gives access to its path and to all chambers and keys below it.
 
 For the `auth` config block, refer to [docs/design/auth.md](docs/design/auth.md).
 
-### Make the first API key
+### Manage API keys
 
-Administrators manage keys in the web UI (**API keys** in the header menu). To
-make a key without the UI, use `realm keys`. This command writes directly to the
-storage in the server config. It needs no running server and no sign-in.
-
-1. If the server uses `boltdb`, stop the server. A running server locks the database.
-2. Make a key:
-
-   ```bash
-   realm keys create --config realm.json --name checkout --access read --path /prod/
-   ```
-
-3. Copy the token from the output. realm shows the token one time only and
-   keeps only a hash of it.
-
-Other key commands:
+Administrators manage keys in the web UI (**API keys** in the header menu).
+Scripts and the CLI use the server's API with an `admin` key:
 
 ```bash
-realm keys list   --config realm.json
-realm keys revoke --config realm.json <id>
+export REALM_TOKEN=realm_…   # an admin key
+realm keys create --address https://realm.example.com --name checkout --access read --path /prod/
+realm keys list   --address https://realm.example.com
+realm keys revoke --address https://realm.example.com <id>
 ```
 
-A running server accepts a new key immediately. It stops accepting a revoked
-key in 30 seconds or less.
+`create` prints the new key's token. realm shows it one time only and keeps
+only a hash of it. An admin key manages only the keys at or beneath its own
+path, so a `/prod/` admin key cannot see or change `/staging/` keys. The server
+that handles a change applies it immediately; other replicas stop accepting a
+revoked key within 30 seconds.
+
+### Make the first API key
+
+Without the UI, nobody has an admin key yet. `realm keys bootstrap` makes one
+by writing directly to the storage in the server config. It needs no running
+server and no sign-in.
+
+1. Stop the server, or run this before its first start. A running server
+   locks `boltdb` storage, and with a `cacheable` backend it can take minutes
+   to see the key. (With `postgres` or `file`, servers may keep running.)
+2. Make an admin key for the whole realm:
+
+   ```bash
+   realm keys bootstrap --config realm.json --name ops
+   ```
+
+3. Copy the token from the output, and use it to make every other key through
+   the API. Run `bootstrap` again only to recover if every admin key is lost.
 
 > [!NOTE]
-> `realm keys` does not work with the `bigcache` backend, because its data is
-> in the memory of the server.
+> `realm keys bootstrap` does not work with the `bigcache` backend, because its
+> data is in the memory of the server.
 
 ### Use an API key
 

@@ -92,7 +92,7 @@ export type Me = {
   providers: Provider[];
 };
 
-export type KeyAccess = 'evaluate' | 'read' | 'write';
+export type KeyAccess = 'evaluate' | 'read' | 'write' | 'admin';
 
 export type ApiKey = {
   id: string;

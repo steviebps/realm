@@ -84,14 +84,15 @@ type NewKeyRequest struct {
 	Path   string `json:"path"`
 }
 
-// validate checks the request and normalizes its path.
-func (r *NewKeyRequest) validate() error {
+// Validate checks the request and normalizes its path, so callers can
+// authorize the path a key will have before creating it.
+func (r *NewKeyRequest) Validate() error {
 	r.Name = strings.TrimSpace(r.Name)
 	if r.Name == "" || len(r.Name) > 64 {
 		return errors.New("name must be between 1 and 64 characters")
 	}
 	if !r.Access.valid() {
-		return fmt.Errorf("access must be %q, %q, or %q", AccessEvaluate, AccessRead, AccessWrite)
+		return fmt.Errorf("access must be %q, %q, %q, or %q", AccessEvaluate, AccessRead, AccessWrite, AccessAdmin)
 	}
 	if r.Path == "" {
 		r.Path = "/"
@@ -110,7 +111,7 @@ func (r *NewKeyRequest) validate() error {
 // recoverable afterwards. An invalid request returns an error wrapping
 // ErrInvalidKeyRequest.
 func (s *KeyStore) Create(ctx context.Context, req NewKeyRequest, createdBy string) (Key, string, error) {
-	if err := req.validate(); err != nil {
+	if err := req.Validate(); err != nil {
 		return Key{}, "", fmt.Errorf("%w: %w", ErrInvalidKeyRequest, err)
 	}
 	id, err := randomHex(8)
@@ -163,8 +164,19 @@ func (s *KeyStore) List(ctx context.Context) ([]Key, error) {
 
 // Revoke deletes the key with the given ID.
 func (s *KeyStore) Revoke(ctx context.Context, id string) error {
+	return s.revoke(ctx, id, func(Key) bool { return true })
+}
+
+// RevokeFor deletes the key with the given ID if p may manage keys at its
+// path. A key outside p's scope is reported as not found, as if it did not
+// exist, so callers cannot probe for keys they may not see.
+func (s *KeyStore) RevokeFor(ctx context.Context, id string, p *Principal) error {
+	return s.revoke(ctx, id, func(k Key) bool { return p.CanManageKeys(k.Path) })
+}
+
+func (s *KeyStore) revoke(ctx context.Context, id string, allowed func(Key) bool) error {
 	return s.update(ctx, func(keys map[string]Key) error {
-		if _, ok := keys[id]; !ok {
+		if k, ok := keys[id]; !ok || !allowed(k) {
 			return &storage.NotFoundError{Key: "key " + id}
 		}
 		delete(keys, id)

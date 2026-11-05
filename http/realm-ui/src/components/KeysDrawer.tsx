@@ -58,7 +58,8 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
         <p className="text-sm text-gray-500 dark:text-gray-400">
           Browsers use an <strong>evaluate</strong> key, which only reveals the values a user receives, so it is safe to
           ship in front-end code. Backend services read flags with a <strong>read</strong> key; automation that changes
-          flags needs a <strong>write</strong> key. A key only works for chambers at or beneath its path.
+          flags needs a <strong>write</strong> key. An <strong>admin</strong> key can also create and revoke keys, for
+          scripts such as <code>realm keys</code>. A key only works for chambers and keys at or beneath its path.
         </p>
 
         {created && (
@@ -98,6 +99,7 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
                 <option value="evaluate">evaluate</option>
                 <option value="read">read</option>
                 <option value="write">write</option>
+                <option value="admin">admin</option>
               </Select>
             </div>
             <div>
@@ -124,7 +126,17 @@ export const KeysDrawer = ({ path, open, onClose }: Props) => {
               <div className="min-w-0 text-sm">
                 <div className="flex items-center gap-2 font-medium">
                   <span className="truncate">{key.name}</span>
-                  <Badge color={key.access === 'write' ? 'warning' : key.access === 'evaluate' ? 'gray' : 'info'}>
+                  <Badge
+                    color={
+                      key.access === 'admin'
+                        ? 'failure'
+                        : key.access === 'write'
+                          ? 'warning'
+                          : key.access === 'evaluate'
+                            ? 'gray'
+                            : 'info'
+                    }
+                  >
                     {key.access}
                   </Badge>
                   <code className="text-xs text-gray-500">{key.path}</code>

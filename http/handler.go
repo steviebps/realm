@@ -123,7 +123,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	mux.Handle("/v1/auth/me", handleMe(authn))
 	if authn != nil {
 		mux.Handle("/v1/auth/", authn.Handler())
-		keys := requireAdmin(handleKeys(authn.Keys()))
+		keys := requireKeyManager(handleKeys(authn.Keys()))
 		mux.Handle("/v1/keys", keys)
 		mux.Handle("/v1/keys/", keys)
 	}

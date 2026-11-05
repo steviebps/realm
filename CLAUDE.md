@@ -81,10 +81,10 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   stored under the reserved `/_realm/` prefix in the raw storage beneath the
   `inheritable` wrapper.
 - **Principal** (`auth/`) — the caller of a request: an API key (`Access`
-  evaluate/read/write, `Path` scope), a signed-in user (`Role`), or `auth.Anonymous`
+  evaluate/read/write/admin, `Path` scope; admin keys manage keys within it), a signed-in user (`Role`), or `auth.Anonymous`
   when the server has no `auth` config. Handlers read it with
   `auth.FromContext(ctx)` and check `CanEvaluate(path)` / `CanRead(path)` /
-  `CanWrite(path)` / `CanReadCatalog()` / `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted
+  `CanWrite(path)` / `CanReadCatalog()` / `CanManageKeys(path)` / `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted
   cookies; roles are recomputed from config on every request.
 
 ## Architecture map

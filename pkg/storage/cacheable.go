@@ -115,7 +115,12 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	entry, err = c.source.Get(ctx, logicalPath)
 	if err != nil {
 		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
-		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("source error")
+		// a missing entry is an answer, not a failure of the source
+		if errors.As(err, new(*NotFoundError)) {
+			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("not found in source")
+		} else {
+			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("source error")
+		}
 		return nil, err
 	}
 
