@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +14,18 @@ import (
 	"github.com/steviebps/realm/pkg/storage"
 )
 
+// runPut runs "realm client put app" against the server at addr, discarding
+// its output. Cobra keeps flag values between runs, so callers pass --file ""
+// to clear an earlier --file.
+func runPut(t *testing.T, addr string, args ...string) error {
+	t.Helper()
+	rootCmd.SetOut(io.Discard)
+	rootCmd.SetErr(io.Discard)
+	rootCmd.SetArgs(append([]string{"client", "put", "app", "--address", addr, "--notraces"}, args...))
+	t.Cleanup(func() { rootCmd.SetArgs(nil) })
+	return rootCmd.Execute()
+}
+
 func TestClientPutReportsServerErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -21,13 +33,7 @@ func TestClientPutReportsServerErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	var out bytes.Buffer
-	rootCmd.SetOut(&out)
-	rootCmd.SetErr(&out)
-	rootCmd.SetArgs([]string{"client", "put", "app", "--address", srv.URL, "--notraces"})
-	t.Cleanup(func() { rootCmd.SetArgs(nil) })
-
-	err := rootCmd.Execute()
+	err := runPut(t, srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "not allowed to change") {
 		t.Fatalf("expected the server's error, got %v", err)
 	}
@@ -40,6 +46,7 @@ func TestClientPutNeverEmptiesAChamber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = stg.Close(context.Background()) })
 	h, err := realmhttp.NewHandler(context.Background(), realmhttp.HandlerConfig{Storage: stg})
 	if err != nil {
 		t.Fatal(err)
@@ -56,15 +63,7 @@ func TestClientPutNeverEmptiesAChamber(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	run := func(args ...string) error {
-		var out bytes.Buffer
-		rootCmd.SetOut(&out)
-		rootCmd.SetErr(&out)
-		rootCmd.SetArgs(append([]string{"client", "put", "app", "--address", srv.URL, "--notraces"}, args...))
-		return rootCmd.Execute()
-	}
-	t.Cleanup(func() { rootCmd.SetArgs(nil) })
-
+	run := func(args ...string) error { return runPut(t, srv.URL, args...) }
 	stored := func() string {
 		e, err := stg.Get(context.Background(), "/app/")
 		if err != nil {

@@ -27,11 +27,7 @@ var keysCreateCmd = &cobra.Command{
 	Short:        "Create an API key and print its token",
 	SilenceUsage: true,
 	Args:         cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		keys, err := keyStore(cmd)
-		if err != nil {
-			return err
-		}
+	RunE: withKeyStore(func(cmd *cobra.Command, args []string, keys *auth.KeyStore) error {
 		flags := cmd.Flags()
 		name, _ := flags.GetString("name")
 		access, _ := flags.GetString("access")
@@ -44,7 +40,7 @@ var keysCreateCmd = &cobra.Command{
 		cmd.PrintErrf("created %s key %q (%s) for %s — the token is shown only once:\n", key.Access, key.Name, key.ID, key.Path)
 		_, err = fmt.Fprintln(cmd.OutOrStdout(), token)
 		return err
-	},
+	}),
 }
 
 var keysListCmd = &cobra.Command{
@@ -52,11 +48,7 @@ var keysListCmd = &cobra.Command{
 	Short:        "List API keys",
 	SilenceUsage: true,
 	Args:         cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		keys, err := keyStore(cmd)
-		if err != nil {
-			return err
-		}
+	RunE: withKeyStore(func(cmd *cobra.Command, args []string, keys *auth.KeyStore) error {
 		list, err := keys.List(cmd.Context())
 		if err != nil {
 			return err
@@ -67,7 +59,7 @@ var keysListCmd = &cobra.Command{
 			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", k.ID, k.Name, k.Access, k.Path, k.CreatedAt.Format("2006-01-02 15:04"), k.CreatedBy)
 		}
 		return w.Flush()
-	},
+	}),
 }
 
 var keysRevokeCmd = &cobra.Command{
@@ -75,37 +67,37 @@ var keysRevokeCmd = &cobra.Command{
 	Short:        "Revoke an API key",
 	SilenceUsage: true,
 	Args:         cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		keys, err := keyStore(cmd)
-		if err != nil {
-			return err
-		}
+	RunE: withKeyStore(func(cmd *cobra.Command, args []string, keys *auth.KeyStore) error {
 		if err := keys.Revoke(cmd.Context(), args[0]); err != nil {
 			return err
 		}
 		cmd.PrintErrf("revoked key %s\n", args[0])
 		return nil
-	},
+	}),
 }
 
-// keyStore opens the key store in the storage named by the server's config
-// file (see findConfig).
-func keyStore(cmd *cobra.Command) (*auth.KeyStore, error) {
-	config, configPath, err := loadConfig(cmd)
-	if err != nil {
-		return nil, err
+// withKeyStore returns a RunE that runs fn against the key store in the
+// storage named by the server's config file (see findConfig), closing that
+// storage afterwards.
+func withKeyStore(fn func(cmd *cobra.Command, args []string, keys *auth.KeyStore) error) func(*cobra.Command, []string) error {
+	return func(cmd *cobra.Command, args []string) error {
+		config, configPath, err := loadConfig(cmd)
+		if err != nil {
+			return err
+		}
+		if configPath == "" {
+			return errNoConfig()
+		}
+		if config.Server.StorageType == "bigcache" {
+			return errors.New("bigcache storage is in memory; manage keys in the UI instead")
+		}
+		strg, err := openStorage(config.Server)
+		if err != nil {
+			return err
+		}
+		defer strg.Close(cmd.Context())
+		return fn(cmd, args, auth.NewKeyStore(strg))
 	}
-	if configPath == "" {
-		return nil, errNoConfig()
-	}
-	if config.Server.StorageType == "bigcache" {
-		return nil, errors.New("bigcache storage is in memory; manage keys in the UI instead")
-	}
-	strg, err := openStorage(config.Server)
-	if err != nil {
-		return nil, err
-	}
-	return auth.NewKeyStore(strg), nil
 }
 
 func init() {

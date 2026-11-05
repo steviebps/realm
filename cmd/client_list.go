@@ -1,16 +1,7 @@
 package cmd
 
 import (
-	"errors"
-	"fmt"
-	"strings"
-
 	"github.com/spf13/cobra"
-	"github.com/steviebps/realm/api"
-	"github.com/steviebps/realm/helper/logging"
-	"github.com/steviebps/realm/pkg/storage"
-	"github.com/steviebps/realm/utils"
-	"go.opentelemetry.io/otel"
 )
 
 // clientList represents the client list command
@@ -19,53 +10,9 @@ var clientList = &cobra.Command{
 	Short:        "list chambers",
 	Long:         "list chambers at the specified path",
 	SilenceUsage: true,
-	Args: func(cmd *cobra.Command, args []string) error {
-		if err := cobra.ExactArgs(1)(cmd, args); err != nil {
-			cmd.SilenceUsage = false
-			return err
-		}
-		if err := storage.ValidatePath(args[0]); err != nil {
-			return fmt.Errorf("invalid path specified: %s, %w", args[0], err)
-		}
-
-		return nil
-	},
+	Args:         chamberPathArg,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		tracer := otel.Tracer("github.com/steviebps/realm")
-		ctx, span := tracer.Start(cmd.Context(), "cmd client get")
-		defer span.End()
-		logger := logging.Ctx(ctx)
-
-		c, err := newClient(cmd)
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			return err
-		}
-
-		res, err := c.PerformRequest(ctx, "GET", strings.TrimPrefix(args[0], "/")+"?list=true", nil)
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			return err
-		}
-		defer res.Body.Close()
-
-		var httpRes api.HTTPErrorAndDataResponse
-		if err := utils.ReadInterfaceWith(res.Body, &httpRes); err != nil {
-			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not read response for listing: %q", args[0]))
-			return err
-		}
-
-		if len(httpRes.Errors) > 0 {
-			logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not list %q: %s", args[0], httpRes.Errors))
-			return errors.New(strings.Join(httpRes.Errors, "; "))
-		}
-
-		err = utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true)
-		if err != nil {
-			logger.ErrorCtx(ctx).Msg(err.Error())
-			return err
-		}
-		return nil
+		return runChamberRequest(cmd, chamberRequest{verb: "list", method: "GET", path: args[0], query: "list=true", print: true})
 	},
 }
 
