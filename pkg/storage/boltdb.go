@@ -3,14 +3,17 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/steviebps/realm/helper/logging"
 	bolt "go.etcd.io/bbolt"
+	berrors "go.etcd.io/bbolt/errors"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -25,6 +28,10 @@ var (
 	_ Storage = (*BoltStorage)(nil)
 )
 
+// boltLockTimeout bounds how long opening the database waits for another
+// process (usually a running server) to release its exclusive lock.
+const boltLockTimeout = time.Second
+
 // NewBoltStorage creates a new BoltDB storage backend
 func NewBoltStorage(conf map[string]string) (Storage, error) {
 	var err error
@@ -33,8 +40,12 @@ func NewBoltStorage(conf map[string]string) (Storage, error) {
 		return nil, fmt.Errorf("'path' must be set")
 	}
 
-	db, err := bolt.Open(filepath.Join(path, "realm.db"), 0600, nil)
+	file := filepath.Join(path, "realm.db")
+	db, err := bolt.Open(file, 0600, &bolt.Options{Timeout: boltLockTimeout})
 	if err != nil {
+		if errors.Is(err, berrors.ErrTimeout) {
+			return nil, fmt.Errorf("%s is locked by another process, such as a running realm server; only one process can open it: %w", file, err)
+		}
 		return nil, err
 	}
 
