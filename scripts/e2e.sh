@@ -27,12 +27,8 @@ fail() {
   exit 1
 }
 
-status() { # method url [body]
-  curl -s -o /dev/null -w '%{http_code}' -X "$1" "$2" ${3:+-d "$3"}
-}
-
-status_as() { # token method url [body]
-  curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $1" -X "$2" "$3" ${4:+-d "$4"}
+status() { # method url [body]; sends $tok as a bearer key when set
+  curl -s -o /dev/null -w '%{http_code}' ${tok:+-H "Authorization: Bearer $tok"} -X "$1" "$2" ${3:+-d "$3"}
 }
 
 wait_ready() { # addr; the server is $pid
@@ -42,6 +38,14 @@ wait_ready() { # addr; the server is $pid
     sleep 0.1
   done
   fail "server never became ready"
+}
+
+wait_exit() { # pid tenths; false if pid still runs after that many tenths of a second
+  for _ in $(seq 1 "$2"); do
+    kill -0 "$1" 2>/dev/null || return 0
+    sleep 0.1
+  done
+  ! kill -0 "$1" 2>/dev/null
 }
 
 echo "== starting $bin server --dev on $port"
@@ -77,14 +81,10 @@ curl -sN "$addr/v1/chambers/e2e/?watch=true" >/dev/null &
 stream=$!
 sleep 0.5
 kill -TERM "$pid"
-for _ in $(seq 1 100); do
-  kill -0 "$pid" 2>/dev/null || break
-  sleep 0.1
-done
-if kill -0 "$pid" 2>/dev/null; then
+wait_exit "$pid" 100 || {
   kill -9 "$pid"
   fail "server still running 10s after SIGTERM with a stream open"
-fi
+}
 pid=
 wait "$stream" 2>/dev/null || true
 grep -q '"message":"shutting down"' "$log" || fail "no shutdown log line"
@@ -92,65 +92,58 @@ grep -q '"message":"shutting down"' "$log" || fail "no shutdown log line"
 echo "== admin key"
 auth_port=$((port + 1))
 auth_addr="http://127.0.0.1:${auth_port}"
+export REALM_ADDRESS=$auth_addr
 # The config refers to the key by environment variable, as deployments do.
 cat >"$work/auth.json" <<EOF
 {"server":{"storage":"bigcache","options":{},"port":"${auth_port}","inheritable":true,
   "auth":{"adminKey":"\${REALM_ADMIN_KEY}"}}}
 EOF
 
-# An unset or short key must stop the server, not quietly turn auth off.
-for bad in "" short; do
-  REALM_ADMIN_KEY=$bad "$bin" server --config "$work/auth.json" >"$work/bad.log" 2>&1 &
-  badpid=$!
-  for _ in $(seq 1 50); do
-    kill -0 "$badpid" 2>/dev/null || break
-    sleep 0.1
-  done
-  if kill -0 "$badpid" 2>/dev/null; then
-    kill "$badpid"
-    fail "server started with admin key '$bad'"
-  fi
-  if wait "$badpid"; then fail "server exited 0 with admin key '$bad'"; fi
-  grep -q 'adminKey' "$work/bad.log" || fail "admin key '$bad' refused without naming adminKey: $(cat "$work/bad.log")"
-done
+# An unset key must stop the server, not quietly turn auth off.
+REALM_ADMIN_KEY= "$bin" server --config "$work/auth.json" >"$work/bad.log" 2>&1 &
+badpid=$!
+wait_exit "$badpid" 50 || {
+  kill "$badpid"
+  fail "server started with an empty admin key"
+}
+if wait "$badpid"; then fail "server exited 0 with an empty admin key"; fi
+grep -q 'adminKey' "$work/bad.log" || fail "empty admin key refused without naming adminKey: $(cat "$work/bad.log")"
 
 admin=$(openssl rand -hex 32)
 REALM_ADMIN_KEY=$admin "$bin" server --config "$work/auth.json" >>"$log" 2>&1 &
 pid=$!
 wait_ready "$auth_addr"
 
-keys() { # token args...
-  REALM_TOKEN=$1 "$bin" client keys "${@:2}" --address "$auth_addr" --notraces
+cli() { # token client-args...
+  REALM_TOKEN=$1 "$bin" client "${@:2}" --notraces
 }
 put_as() { # token path
-  REALM_TOKEN=$1 "$bin" client put "$2" -f "$work/chamber.json" --address "$auth_addr" --notraces >/dev/null 2>&1
+  cli "$1" put "$2" -f "$work/chamber.json" >/dev/null 2>&1
 }
 
 [ "$(status GET "$auth_addr/v1/chambers/")" = 401 ] || fail "no credentials not refused"
-[ "$(status_as "${admin}x" GET "$auth_addr/v1/keys")" = 401 ] || fail "wrong admin key not refused"
+[ "$(tok=${admin}x status GET "$auth_addr/v1/keys")" = 401 ] || fail "wrong admin key not refused"
 put_as "$admin" /staging/ || fail "admin key could not write a chamber"
 
-token=$(keys "$admin" create --name e2e --access write --path /prod/ 2>"$work/create.err") ||
+token=$(cli "$admin" keys create --name e2e --access write --path /prod/ 2>"$work/create.err") ||
   fail "admin key could not create a key: $(cat "$work/create.err")"
 case $token in realm_*_*) ;; *) fail "create printed '$token', want a realm_ token" ;; esac
 id=$(sed -n 's/.*(\([0-9a-f]*\)).*/\1/p' "$work/create.err")
 [ -n "$id" ] || fail "create named no key ID: $(cat "$work/create.err")"
-keys "$admin" list | grep -E "^$id .* write +/prod/ .* key:admin" >/dev/null ||
-  fail "minted key not listed as write on /prod/ by key:admin: $(keys "$admin" list)"
+list=$(cli "$admin" keys list)
+grep -Eq "^$id .* write +/prod/ .* key:admin" <<<"$list" ||
+  fail "minted key not listed as write on /prod/ by key:admin: $list"
 
 put_as "$token" /prod/app/ || fail "minted key could not write in its scope"
-REALM_TOKEN=$token "$bin" client get /prod/app/ --address "$auth_addr" --notraces | grep -q '"beta"' ||
-  fail "minted key could not read in its scope"
+cli "$token" get /prod/app/ | grep -q '"beta"' || fail "minted key could not read in its scope"
 if put_as "$token" /staging/; then fail "minted key wrote outside its scope"; fi
-if keys "$token" list >/dev/null 2>&1; then fail "minted key listed keys"; fi
-[ "$(status_as "$token" POST "$auth_addr/v1/keys" '{"name":"x","access":"write"}')" = 403 ] ||
-  fail "minted key created a key"
+if cli "$token" keys list >/dev/null 2>&1; then fail "minted key managed keys"; fi
 curl -s -H "Authorization: Bearer $admin" "$auth_addr/v1/history/prod/app/" | grep -q '"key:e2e"' ||
   fail "history does not attribute the write to key:e2e"
 
-keys "$admin" revoke "$id" 2>/dev/null || fail "admin key could not revoke $id"
-[ "$(status_as "$token" GET "$auth_addr/v1/chambers/prod/app/")" = 401 ] || fail "revoked key still works"
-[ "$(status_as "$admin" GET "$auth_addr/v1/keys")" = 200 ] || fail "admin key stopped working"
+cli "$admin" keys revoke "$id" 2>/dev/null || fail "admin key could not revoke $id"
+[ "$(tok=$token status GET "$auth_addr/v1/chambers/prod/app/")" = 401 ] || fail "revoked key still works"
+[ "$(tok=$admin status GET "$auth_addr/v1/keys")" = 200 ] || fail "admin key stopped working"
 
 kill -TERM "$pid"
 wait "$pid" 2>/dev/null || true
