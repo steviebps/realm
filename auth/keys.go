@@ -25,8 +25,8 @@ const TokenPrefix = "realm_"
 // prefix. Only hashes of the secrets are kept.
 const keysKey = storage.ReservedPrefix + "keys/"
 
-// keyCacheTTL bounds how long a key revoked by another process (such as the
-// `realm keys` CLI) keeps working in a running server.
+// keyCacheTTL bounds how long a key revoked through another server sharing
+// the storage keeps working in this one.
 const keyCacheTTL = 30 * time.Second
 
 // keyRefreshInterval limits how often unknown key IDs trigger a reload, so

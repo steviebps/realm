@@ -19,8 +19,8 @@ import (
 )
 
 // FileStorage keeps each entry in its own file beneath a directory. Writes
-// replace files atomically, so other processes reading the directory (such as
-// `realm keys` while a server runs) never see a partial entry, and Updates
+// replace files atomically, so other processes reading the directory never see a
+// partial entry, and Updates
 // are serialized across processes with a lock file (see LockUpdate).
 type FileStorage struct {
 	sync.RWMutex
@@ -269,8 +269,8 @@ func (f *FileStorage) Close(ctx context.Context) error {
 
 // LockUpdate takes an exclusive lock on the whole store, shared with every
 // process that opens the same directory, and returns a function that releases
-// it. Updates hold it while they read and write, so a server and `realm keys`
-// run at the same time cannot overwrite each other's changes.
+// it. Updates hold it while they read and write, so processes sharing the
+// directory cannot overwrite each other's changes.
 func (f *FileStorage) LockUpdate(ctx context.Context, _ []string) (func(), error) {
 	f.updateMu.Lock()
 	unlock, err := f.lockFile(ctx)

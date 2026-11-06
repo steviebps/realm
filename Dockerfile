@@ -6,6 +6,12 @@
 #   docker run -p 8080:8080 realm server --dev
 #   docker run -p 8080:8080 -v ./realm.json:/etc/realm/realm.json:ro realm
 #
+# To require authentication without setting up sign-in, declare an admin key
+# in the config ("auth": {"adminKey": "${REALM_ADMIN_KEY}"}), pass it in with
+# -e REALM_ADMIN_KEY, and make API keys through the running server:
+#
+#   REALM_TOKEN=$REALM_ADMIN_KEY realm client keys create --name sdk --access read
+#
 # The build stages run on the build machine's platform and cross-compile for
 # TARGETARCH, so multi-arch builds need no emulation.
 

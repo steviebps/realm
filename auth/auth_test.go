@@ -62,6 +62,7 @@ func TestPrincipalPermissions(t *testing.T) {
 		{"editor", editor, "/prod/", true, true, false, true},
 		{"admin", admin, "/prod/", true, true, true, true},
 		{"anonymous", Anonymous, "/prod/", true, true, true, true},
+		{"admin key", &adminKeyPrincipal, "/prod/", true, true, true, true},
 		{"nil", none, "/prod/", false, false, false, false},
 	}
 	for _, tt := range tests {
@@ -157,6 +158,12 @@ func TestConfigValidate(t *testing.T) {
 		{"relative url", func(c *Config) { c.ExternalURL = "/realm" }, "externalURL"},
 		{"bad ttl", func(c *Config) { c.SessionTTL = "-1h" }, "sessionTTL"},
 		{"no providers", func(c *Config) { c.Providers = nil }, "providers"},
+		{"admin key", func(c *Config) { c.AdminKey = testSecret }, ""},
+		{"admin key from env", func(c *Config) { c.AdminKey = "${REALM_TEST_SECRET}" }, ""},
+		{"short admin key", func(c *Config) { c.AdminKey = "short" }, "adminKey"},
+		{"missing env admin key", func(c *Config) { c.AdminKey = "${REALM_TEST_UNSET}" }, "adminKey"},
+		{"admin key without providers", func(c *Config) { *c = Config{AdminKey: testSecret} }, ""},
+		{"providers need a session secret", func(c *Config) { c.AdminKey = testSecret; c.SessionSecret = "" }, "sessionSecret"},
 		{"duplicate provider", func(c *Config) { c.Providers = append(c.Providers, c.Providers[0]) }, "duplicate"},
 		{"unknown type", func(c *Config) { c.Providers[0].Type = "saml" }, "unknown type"},
 		{"oidc without issuer", func(c *Config) { c.Providers[0].Issuer = "" }, "issuer"},
@@ -438,8 +445,10 @@ func TestCrossOriginWritesAreRefused(t *testing.T) {
 }
 
 func TestBearerTokens(t *testing.T) {
+	const adminKey = "admin-0123456789abcdef0123456789abcdef"
 	a, _ := realmServer(t, func(c *Config) {
 		c.Providers = []ProviderConfig{{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "secret"}}
+		c.AdminKey = adminKey
 	})
 	_, token, err := a.Keys().Create(context.Background(), NewKeyRequest{Name: "ci", Access: AccessWrite, Path: "/prod/"}, "t")
 	if err != nil {
@@ -451,6 +460,8 @@ func TestBearerTokens(t *testing.T) {
 		want    string
 	}{
 		{"Bearer " + token, nil, "key:ci"},
+		{"Bearer " + adminKey, nil, "key:admin"},
+		{"Bearer " + adminKey + "x", ErrInvalidKey, ""},
 		{"Bearer realm_bogus_token", ErrInvalidKey, ""},
 		{"Basic " + token, ErrInvalidKey, ""},
 		{"", nil, ""},
@@ -722,5 +733,52 @@ func TestGitHubOrgsExpire(t *testing.T) {
 				t.Errorf("role = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestAdminKeyOnly covers a server with an admin key and no sign-in
+// providers: the admin key administers, stored keys work, and session
+// cookies are ignored rather than opened.
+func TestAdminKeyOnly(t *testing.T) {
+	const adminKey = "admin-0123456789abcdef0123456789abcdef"
+	a, err := New(Config{AdminKey: adminKey}, newStorage(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Providers(); len(got) != 0 {
+		t.Fatalf("providers = %v, want none", got)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/v1/keys", nil)
+	r.Header.Set("Authorization", "Bearer "+adminKey)
+	p, err := a.Authenticate(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.IsAdmin() || !p.CanWrite("/prod/") || !p.CanReadCatalog() || !p.IsSecretKey() || p.Kind != KindAdminKey {
+		t.Fatalf("admin key principal = %+v, want an administrator", p)
+	}
+
+	_, token, err := a.Keys().Create(context.Background(), NewKeyRequest{Name: "svc", Access: AccessRead}, p.Actor())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = httptest.NewRequest(http.MethodGet, "/v1/chambers/", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	if p, err := a.Authenticate(r); err != nil || p.Kind != KindKey || p.IsAdmin() {
+		t.Fatalf("stored key: principal = %+v, err = %v; want a non-admin key", p, err)
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "/v1/chambers/", nil)
+	r.AddCookie(&http.Cookie{Name: SessionCookie, Value: "anything"})
+	if p, err := a.Authenticate(r); p != nil || err != nil {
+		t.Fatalf("session cookie: principal = %+v, err = %v; want neither", p, err)
+	}
+
+	// logout must not touch the missing external URL
+	w := httptest.NewRecorder()
+	a.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, LogoutPath, nil))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("logout status = %d", w.Code)
 	}
 }
