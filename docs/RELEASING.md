@@ -7,11 +7,11 @@ One tag releases everything, at one version:
 | Binaries for Linux, macOS, Windows, and a GitHub release with a changelog | [Releases](https://github.com/steviebps/realm/releases) | GoReleaser (`.goreleaser.yml`) |
 | Homebrew cask | `steviebps/homebrew-realm` | GoReleaser |
 | Container image (`linux/amd64`, `linux/arm64`), with provenance and an SBOM | `ghcr.io/steviebps/realm` | `docker/build-push-action` |
-| TypeScript SDK, with npm provenance | [`@steviebps/realm-sdk`](https://www.npmjs.com/package/@steviebps/realm-sdk) | `npm publish` |
+| TypeScript SDK, with npm provenance | [`@steviebps/realm-sdk`](https://www.npmjs.com/package/@steviebps/realm-sdk) | `npm publish`, once enabled (see [npm](#npm)) |
 
 Pushing a tag such as `v0.3.0` runs `.github/workflows/release.yml`. It runs
 every CI check again on the tagged commit (`ci.yml`), and only if they pass
-does it publish the three artifacts above, in parallel.
+does it publish the artifacts above, in parallel.
 
 ## Versions
 
@@ -67,23 +67,38 @@ patch version instead of moving the tag.
   write** permission. Save it as the repository secret
   `HOMEBREW_TAP_TOKEN`. Set a calendar reminder for its expiry. The old
   `PUBLISH_TOKEN` secret is no longer used and can be deleted.
-- **npm trusted publishing.** npm only lets you add a trusted publisher to a
-  package that already exists, so publish the first version from your
-  machine. Use a version that can't collide with a future tag, such as
-  `0.0.1`:
-
-  ```bash
-  cd sdk/typescript && npm ci && npm version 0.0.1 --no-git-tag-version
-  npm publish --access public
-  git checkout package.json package-lock.json
-  ```
-
-  Then, on npmjs.com, open the package's settings, add a trusted publisher
-  for GitHub Actions with repository `steviebps/realm` and workflow
-  `release.yml`, and disallow token publishing. After that, releases need no
-  npm token.
 - **GHCR.** The image is pushed with the workflow's own token. After the
   first push, set the package's visibility to public in its settings if it
   isn't already.
 - **Required check.** In branch protection for `master`, require the `ci-ok`
   status check. It passes only when every CI job passed.
+
+## npm
+
+The `npm` job is skipped until the repository variable `NPM_PUBLISH` is
+`true`, so releases can ship the binaries and the image before the package
+is set up on npm. To turn it on:
+
+1. **Publish the first version from your machine.** npm only lets you add a
+   trusted publisher to a package that already exists. Use a version that
+   can't collide with a future tag, such as `0.0.1`:
+
+   ```bash
+   cd sdk/typescript && npm ci && npm version 0.0.1 --no-git-tag-version
+   npm publish --access public
+   git checkout package.json package-lock.json
+   ```
+
+2. **Add the trusted publisher, shortly before the next tag.** On
+   npmjs.com, open the package's settings, add a trusted publisher for
+   GitHub Actions with repository `steviebps/realm` and workflow
+   `release.yml`, and disallow token publishing. npm expires a trusted
+   publisher that hasn't published within 48 hours of being added, so do
+   this when you are about to release, and add it again if it lapses.
+3. **Enable the job.** Under Settings → Secrets and variables → Actions →
+   Variables, add the repository variable `NPM_PUBLISH` with the value
+   `true`.
+
+Releases then need no npm token. Versions released while the job was
+skipped are not on npm; the next tag publishes the SDK at that tag's
+version.
