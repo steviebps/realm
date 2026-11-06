@@ -9,4 +9,4 @@ cd ../..
 
 go build -ldflags "-s -w" -tags=ui &&
 
-./realm server --notraces -c ./configs/realm.json 2> ./server.log
+./realm server -c ./configs/realm.json 2> ./server.log

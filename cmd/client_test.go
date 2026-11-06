@@ -21,7 +21,7 @@ func runPut(t *testing.T, addr string, args ...string) error {
 	t.Helper()
 	rootCmd.SetOut(io.Discard)
 	rootCmd.SetErr(io.Discard)
-	rootCmd.SetArgs(append([]string{"client", "put", "app", "--address", addr, "--notraces"}, args...))
+	rootCmd.SetArgs(append([]string{"client", "put", "app", "--address", addr}, args...))
 	t.Cleanup(func() { rootCmd.SetArgs(nil) })
 	return rootCmd.Execute()
 }

@@ -298,11 +298,13 @@ docker run -p 8080:8080 \
 - **Logs** are one JSON object per line on standard error. On a terminal they
   are human-readable instead; set `REALM_LOG_FORMAT` to `json` or `console` to
   choose.
-- **Telemetry** is exported over OTLP/HTTP and configured by the standard
-  `OTEL_*` variables: `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME`
-  (default `realm`), `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER`.
-  `OTEL_SDK_DISABLED=true` or `--notraces` turns it off. Every request except
-  probes and streams gets a span, and the server records
+- **Telemetry** (traces and metrics) is off by default. Turn it on with
+  `--traces=otlp` (or `REALM_TRACES=otlp`) to export over OTLP/HTTP, or
+  `--traces=stdout` to print traces. The exporter is configured by the
+  standard `OTEL_*` variables: `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_SERVICE_NAME` (default `realm`), `OTEL_RESOURCE_ATTRIBUTES`,
+  `OTEL_TRACES_SAMPLER`; `OTEL_SDK_DISABLED=true` overrides `--traces`. Every
+  request except probes and streams gets a span, and the server records
   `realm.server.streams.active` and `realm.postgres.feed.reconnects`.
 - **Streams.** Each server holds at most 10,000 streams; beyond that, new
   streams get 503 and clients retry with backoff. Streams close after about 20
@@ -631,8 +633,7 @@ realm client get /prod/checkout/
 | `-a`, `--address` | The address of the realm server (`realm client`). Default: `$REALM_ADDRESS`, then `client.address` in the config file. |
 | `--token` | The API key (`realm client`). |
 | `-d`, `--debug` | Run in debug mode. |
-| `--stdouttraces` | Write traces to stdout. |
-| `--notraces` | Disable tracing. |
+| `--traces` | Export traces and metrics: `off` (default), `otlp`, or `stdout`. Default: `$REALM_TRACES`, then `off`. |
 
 `realm server` also accepts `--dev` (in-memory storage, no config file) and
 `--port`.
@@ -645,6 +646,7 @@ realm client get /prod/checkout/
 | `REALM_ADDRESS` | The server address for `realm client`, when `--address` is not given. |
 | `REALM_TOKEN` | The API key for `realm client`, when `--token` is not given. |
 | `REALM_LOG_FORMAT` | `json` or `console` log output. |
+| `REALM_TRACES` | `off`, `otlp`, or `stdout` telemetry export, when `--traces` is not given. |
 
 ## Documentation
 

@@ -209,8 +209,9 @@ then `realm/realm.json` in the user config directory, then
 ## Observability
 
 OpenTelemetry is set up in `trace/otel.go` (traces + metrics, OTLP/stdout
-exporters), configured by the standard `OTEL_*` environment variables, which
-override the default `service.name` of `realm`. The server wraps its whole
+exporters). It is off unless `--traces` / `$REALM_TRACES` selects `otlp` or
+`stdout` (`cmd/root.go`); the exporter is configured by the standard `OTEL_*`
+environment variables, which override the default `service.name` of `realm`. The server wraps its whole
 handler chain in one `otelhttp` span per request (named by route, so refused
 requests are traced too); probes and watch streams are not traced. Logging
 goes through `helper/logging` — a zerolog `TracedLogger` accessed as
