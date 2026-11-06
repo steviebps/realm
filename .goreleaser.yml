@@ -14,6 +14,26 @@ builds:
       - -s -w -X github.com/steviebps/realm/cmd.Version={{ .Version }}
     tags:
       - ui
+# Sign the macOS binaries with a Developer ID certificate and notarize them,
+# so Gatekeeper runs them without a trip to System Settings. On when the
+# repository variable MACOS_NOTARIZE is "true"; the release then fails rather
+# than ship unsigned if a secret is missing. See docs/RELEASING.md.
+notarize:
+  macos:
+    - enabled: '{{ eq (envOrDefault "MACOS_NOTARIZE" "") "true" }}'
+      sign:
+        # base64 of the Developer ID Application .p12
+        certificate: "{{ .Env.MACOS_SIGN_P12 }}"
+        password: "{{ .Env.MACOS_SIGN_PASSWORD }}"
+      notarize:
+        # an App Store Connect API key: base64 of the .p8, its key ID, and
+        # the issuer ID
+        issuer_id: "{{ .Env.MACOS_NOTARY_ISSUER_ID }}"
+        key_id: "{{ .Env.MACOS_NOTARY_KEY_ID }}"
+        key: "{{ .Env.MACOS_NOTARY_KEY }}"
+        # fail the release if Apple rejects the binaries
+        wait: true
+        timeout: 20m
 archives:
   - 
     name_template: >-

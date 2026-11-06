@@ -4,7 +4,7 @@ One tag releases everything, at one version:
 
 | Artifact | Where | Published by |
 |---|---|---|
-| Binaries for Linux, macOS, Windows, and a GitHub release with a changelog | [Releases](https://github.com/steviebps/realm/releases) | GoReleaser (`.goreleaser.yml`) |
+| Binaries for Linux, macOS, Windows (macOS ones signed and notarized, once set up: see [macOS signing](#macos-signing)), and a GitHub release with a changelog | [Releases](https://github.com/steviebps/realm/releases) | GoReleaser (`.goreleaser.yml`) |
 | Homebrew cask | `steviebps/homebrew-realm` | GoReleaser |
 | Container image (`linux/amd64`, `linux/arm64`), with provenance and an SBOM | `ghcr.io/steviebps/realm` | `docker/build-push-action` |
 | TypeScript SDK, with npm provenance | [`@steviebps/realm-sdk`](https://www.npmjs.com/package/@steviebps/realm-sdk) | `npm publish`, once enabled (see [npm](#npm)) |
@@ -70,8 +70,70 @@ patch version instead of moving the tag.
 - **GHCR.** The image is pushed with the workflow's own token. After the
   first push, set the package's visibility to public in its settings if it
   isn't already.
+- **macOS signing.** See [macOS signing](#macos-signing).
 - **Required check.** In branch protection for `master`, require the `ci-ok`
   status check. It passes only when every CI job passed.
+
+## macOS signing
+
+Unsigned macOS binaries are blocked by Gatekeeper: after a Homebrew install
+or a browser download, macOS refuses to run `realm` until the user allows it
+in System Settings → Privacy & Security. GoReleaser signs the macOS binaries
+with a Developer ID certificate and notarizes them with Apple (from the
+Linux runner; no Mac needed in CI) when the repository variable
+`MACOS_NOTARIZE` is `true`. With it on, a missing secret or a rejection by
+Apple fails the release instead of shipping unsigned binaries. To turn it
+on:
+
+1. **Join the [Apple Developer Program](https://developer.apple.com/programs/)**
+   ($99 a year). An individual membership works; the certificate then
+   carries your name.
+2. **Create a Developer ID Application certificate.** Only the account
+   holder can.
+   1. In Keychain Access, choose Certificate Assistant → Request a
+      Certificate From a Certificate Authority, enter your email, and save
+      the request to disk.
+   2. On [developer.apple.com](https://developer.apple.com/account/resources/certificates/list),
+      add a certificate of type **Developer ID Application** and upload the
+      request.
+   3. Download the certificate and open it to add it to your keychain.
+   4. In Keychain Access → My Certificates, right-click
+      "Developer ID Application: …" and export it as a `.p12` file with a
+      password.
+3. **Create an App Store Connect API key** for notarization. In
+   [App Store Connect](https://appstoreconnect.apple.com/access/integrations/api),
+   under Users and Access → Integrations → App Store Connect API, generate a
+   team key with the **Developer** role. Download the `AuthKey_<key ID>.p8`
+   (Apple lets you download it once) and note the key ID and the issuer ID
+   shown above the list.
+4. **Save the secrets and turn it on:**
+
+   ```bash
+   base64 -i developer-id.p12 | gh secret set MACOS_SIGN_P12
+   gh secret set MACOS_SIGN_PASSWORD   # prompts for the .p12 password
+   base64 -i AuthKey_<key ID>.p8 | gh secret set MACOS_NOTARY_KEY
+   gh secret set MACOS_NOTARY_KEY_ID --body <key ID>
+   gh secret set MACOS_NOTARY_ISSUER_ID --body <issuer ID>
+   gh variable set MACOS_NOTARIZE --body true
+   ```
+
+   Then delete the `.p12` and `.p8` files, or keep them only in a password
+   manager.
+5. **Check it with a prerelease.** Tag a `-rc.1`, download the macOS archive
+   from the GitHub release in a browser, and unpack it. Then:
+
+   ```bash
+   codesign -dvv realm 2>&1 | grep Authority   # Developer ID Application: …
+   spctl -a -vv -t install realm              # accepted, source=Notarized Developer ID
+   ```
+
+   and `./realm --version` runs without a prompt. A command-line binary
+   can't carry its notarization ticket, so macOS checks with Apple online
+   the first time it runs.
+
+The certificate is valid for five years, and the API key doesn't expire.
+If the membership lapses, binaries already released keep working, but new
+releases fail until it is renewed or `MACOS_NOTARIZE` is turned off.
 
 ## npm
 
