@@ -192,8 +192,23 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 		}
 		return err
 	}
+	f.pruneEmptyDirs(path)
 
 	return nil
+}
+
+// pruneEmptyDirs removes dir and then each parent directory that is left
+// empty, up to (not including) the storage root, so a deleted chamber with
+// nothing below it no longer lists as a folder. It stops at the first
+// directory that is not empty; failures are ignored, since an empty directory
+// left behind is harmless.
+func (f *FileStorage) pruneEmptyDirs(dir string) {
+	root := filepath.Clean(f.path)
+	for dir = filepath.Clean(dir); dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)); dir = filepath.Dir(dir) {
+		if err := os.Remove(dir); err != nil {
+			return
+		}
+	}
 }
 
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {

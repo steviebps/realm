@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -419,8 +420,44 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 			commit(http.StatusCreated)
 			return
 
-		case PatchOperation, DeleteOperation:
+		case PatchOperation:
 			commit(http.StatusOK)
+			return
+
+		case DeleteOperation:
+			recursive, err := queryBool(r, "recursive")
+			if err != nil {
+				fail(http.StatusBadRequest, err)
+				return
+			}
+			if !recursive {
+				commit(http.StatusOK)
+				return
+			}
+			if req.Path == "/" {
+				fail(http.StatusBadRequest, errors.New("refusing to recursively delete every chamber; delete the chambers below / instead"))
+				return
+			}
+			deleted, err := deleteChamberTree(ctx, meta, r, req.Path)
+			var pf *preconditionError
+			var nf *storage.NotFoundError
+			switch {
+			case errors.As(err, &pf):
+				if pf.current != "" {
+					w.Header().Set("ETag", pf.current)
+				}
+				handleError(ctx, w, http.StatusPreconditionFailed, createResponseWithErrors(nil, []string{"the chamber was changed by someone else; reload and try again"}))
+			case errors.As(err, &nf):
+				fail(http.StatusNotFound, nf)
+			case errors.Is(err, storage.ErrConflict):
+				fail(http.StatusConflict, errors.New("the chambers are being changed by others; try again"))
+			case err != nil:
+				fail(http.StatusInternalServerError, err)
+			default:
+				// subscribers at or below the path are all signaled
+				notify(req.Path)
+				handleOkJSON(ctx, w, deleteResult{Deleted: deleted})
+			}
 			return
 
 		case ListOperation:
@@ -514,6 +551,103 @@ func writeChamber(ctx context.Context, meta *metaStore, r *http.Request, req *Ag
 		return append([]storage.Op{{Key: req.Path, Value: value}}, history...), nil
 	})
 	return etag, err
+}
+
+// deleteResult is the response body of a recursive delete.
+type deleteResult struct {
+	// Deleted lists the chambers removed, sorted.
+	Deleted []string `json:"deleted"`
+}
+
+// queryBool parses the boolean query parameter name, which is false when
+// absent.
+func queryBool(r *http.Request, name string) (bool, error) {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return false, nil
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return false, fmt.Errorf("query parameter %q must be a boolean", name)
+	}
+	return b, nil
+}
+
+// chamberTree returns root and every path below it that holds or leads to a
+// chamber, as stored (without inheritance). Paths are canonical.
+func chamberTree(ctx context.Context, strg storage.Storage, root string) ([]string, error) {
+	paths := []string{root}
+	for i := 0; i < len(paths); i++ {
+		names, err := strg.List(ctx, paths[i])
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		for _, name := range names {
+			// backends name a child "a" or "a/", and the file backend lists
+			// a chamber's own entry as "."
+			name = strings.TrimSuffix(name, "/")
+			if name == "" || name == "." || isReservedName(name) {
+				continue
+			}
+			paths = append(paths, paths[i]+name+"/")
+		}
+	}
+	return paths, nil
+}
+
+// deleteChamberTree deletes the chamber at root and every chamber below it in
+// one Update, recording each deletion in that chamber's history, and returns
+// the deleted paths. Conditional headers are checked against root's chamber.
+// It returns a NotFoundError when there is no chamber at or below root.
+//
+// The tree is listed before the Update, so a chamber created below root
+// concurrently may survive; deleting again removes it.
+func deleteChamberTree(ctx context.Context, meta *metaStore, r *http.Request, root string) ([]string, error) {
+	paths, err := chamberTree(ctx, meta.strg, root)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, 2*len(paths))
+	for _, p := range paths {
+		keys = append(keys, p, historyIndexKey(p))
+	}
+
+	var deleted []string
+	err = storage.Update(ctx, meta.strg, keys, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
+		current := ""
+		if stored := cur[root]; stored != nil {
+			current = etagOf(stored.Value)
+		}
+		if preconditionFailed(r, current) {
+			return nil, &preconditionError{current: current}
+		}
+
+		deleted = deleted[:0]
+		var ops []storage.Op
+		actor := auth.FromContext(ctx).Actor()
+		now := time.Now().UTC()
+		for _, p := range paths {
+			if cur[p] == nil {
+				continue // a path that only leads to chambers below it
+			}
+			history, err := historyOps(cur[historyIndexKey(p)], p, Revision{Time: now, Actor: actor, Operation: DeleteOperation})
+			if err != nil {
+				return nil, err
+			}
+			ops = append(ops, storage.Op{Key: p})
+			ops = append(ops, history...)
+			deleted = append(deleted, p)
+		}
+		if len(deleted) == 0 {
+			return nil, &storage.NotFoundError{Key: root}
+		}
+		return ops, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(deleted)
+	return deleted, nil
 }
 
 // streamChamber holds an SSE connection open and pushes the chamber at path

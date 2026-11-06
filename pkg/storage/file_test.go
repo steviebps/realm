@@ -147,3 +147,41 @@ func TestCacheableRejectsBoltOverBolt(t *testing.T) {
 		t.Fatal("expected boltdb over boltdb to be rejected")
 	}
 }
+
+// TestFileDeletePrunesEmptyDirs checks that deleting a chamber removes the
+// directories it leaves empty, so the path stops listing as a folder, while
+// directories that still hold chambers are kept.
+func TestFileDeletePrunesEmptyDirs(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewFileStorage(map[string]string{"path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"/a/", "/a/b/c/", "/x/y/"} {
+		if err := s.Put(ctx, StorageEntry{Key: k, Value: []byte(`{}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	steps := []struct {
+		del      string
+		listPath string
+		want     []string
+	}{
+		{del: "/a/b/c/", listPath: "/a/", want: []string{"."}}, // b/ and c/ pruned, a's own entry kept
+		{del: "/x/y/", listPath: "/", want: []string{"a/"}},    // x/ pruned up to the root
+		{del: "/a/", listPath: "/", want: nil},                 // last chamber gone
+	}
+	for _, st := range steps {
+		if err := s.Delete(ctx, st.del); err != nil {
+			t.Fatalf("delete %s: %v", st.del, err)
+		}
+		got, err := s.List(ctx, st.listPath)
+		if err != nil {
+			t.Fatalf("list %s: %v", st.listPath, err)
+		}
+		if !slices.Equal(got, st.want) {
+			t.Errorf("after deleting %s, List(%s) = %v, want %v", st.del, st.listPath, got, st.want)
+		}
+	}
+}
