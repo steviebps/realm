@@ -75,8 +75,6 @@ export type Layer = {
 export type Lineage = {
   /** Whether the server applies inheritance at all. */
   inheritable: boolean;
-  /** Whether chambers below this one inherit its flags. */
-  inheritedByChildren: boolean;
   /** The chamber itself, then each consulted parent, nearest first (missing ones included). */
   layers: Layer[];
   /** Flag key → path of the chamber whose definition is served here; null exactly when `error` is set. */

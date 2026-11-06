@@ -28,9 +28,6 @@ type Lineage struct {
 	// Inheritable reports whether the storage applies inheritance. When it is
 	// false, Layers holds only the chamber itself.
 	Inheritable bool
-	// InheritedByChildren reports whether the chambers below the path
-	// inherit its flags.
-	InheritedByChildren bool
 	// Layers holds the chamber, then each consulted ancestor, nearest first,
 	// including ancestors with no chamber.
 	Layers []Layer

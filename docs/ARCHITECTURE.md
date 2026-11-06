@@ -195,9 +195,10 @@ Two wrappers compose backends:
   (e.g. `bigcache` over `boltdb`). It refuses a `postgres` source: another
   replica's write would leave this replica's cache stale.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
-  `Get`, merges a chamber with its ancestors along the path (every ancestor
-  except the root chamber `/`, which is never inherited) so child chambers
-  inherit parent rules; the nearest definition of a flag wins, whole. This
+  `Get`, merges a chamber with every ancestor along the path, up to and
+  including the root chamber `/`, so child chambers inherit parent rules and
+  flags set at `/` reach every chamber; the nearest definition of a flag
+  wins, whole. A missing ancestor (including `/`) contributes nothing. This
   hierarchy is the current stand-in for "environments / zones". `Get` is built
   from `Layers` (the chamber plus each consulted ancestor, nearest first, in
   `lineage.go`) and `Lineage.Merge`, so the layers view and the merged view

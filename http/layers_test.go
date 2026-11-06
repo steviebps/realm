@@ -17,8 +17,8 @@ import (
 	"github.com/steviebps/realm/pkg/storage"
 )
 
-// layersTree is a sample hierarchy written through the API: / is never
-// inherited, /prod/ is partly overridden below it, and /staging/ is missing.
+// layersTree is a sample hierarchy written through the API: every chamber
+// inherits /, /prod/ is partly overridden below it, and /staging/ is missing.
 var layersTree = []struct{ path, body string }{
 	{"/", `{"rules":{"checkout.newFlow":{"type":"boolean","value":false},"ui.theme":{"type":"string","value":"classic"}}}`},
 	{"/prod/", `{"rules":{"checkout.newFlow":{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":25}}]},"rate.limit":{"type":"number","value":500},"prod.audit":{"type":"boolean","value":true}}}`},
@@ -75,7 +75,7 @@ func TestLayersView(t *testing.T) {
 	}{
 		{
 			name: "ok and missing",
-			lin: storage.Lineage{Inheritable: true, InheritedByChildren: true, Layers: []storage.Layer{
+			lin: storage.Lineage{Inheritable: true, Layers: []storage.Layer{
 				{Path: "/a/b/c/", Chamber: &realm.Chamber{Rules: map[string]*realm.Flag{"x": flag(1)}}},
 				{Path: "/a/b/"},
 				{Path: "/a/", Chamber: &realm.Chamber{Rules: map[string]*realm.Flag{"x": flag(2), "y": flag(3)}}},
@@ -85,7 +85,7 @@ func TestLayersView(t *testing.T) {
 		},
 		{
 			name: "broken view",
-			lin: storage.Lineage{Inheritable: true, InheritedByChildren: true, Layers: []storage.Layer{
+			lin: storage.Lineage{Inheritable: true, Layers: []storage.Layer{
 				{Path: "/a/b/", Chamber: &realm.Chamber{Rules: map[string]*realm.Flag{}}},
 				{Path: "/a/", Err: parseErr},
 			}},
@@ -95,7 +95,7 @@ func TestLayersView(t *testing.T) {
 		},
 		{
 			name: "empty view",
-			lin: storage.Lineage{Inheritable: true, InheritedByChildren: true, Layers: []storage.Layer{
+			lin: storage.Lineage{Inheritable: true, Layers: []storage.Layer{
 				{Path: "/a/b/", Chamber: &realm.Chamber{Rules: map[string]*realm.Flag{}}},
 				{Path: "/a/"},
 			}},
@@ -139,40 +139,36 @@ func TestLayersEndpoint(t *testing.T) {
 		want        int
 		wantLayers  []string
 		wantSources map[string]string
-		wantByKids  bool
-		wantRaw     string // a substring of the compacted data
 	}{
 		{
-			name: "parents nearest first, the root not consulted",
+			name: "parents nearest first, the root last",
 			path: "/prod/us-east/canary/?inherit=layers",
 			want: http.StatusOK,
 			wantLayers: []string{
 				"/prod/us-east/canary/=ok[checkout.newFlow]",
 				"/prod/us-east/=ok[rate.limit region.failover]",
 				"/prod/=ok[checkout.newFlow prod.audit rate.limit]",
+				"/=ok[checkout.newFlow ui.theme]",
 			},
 			wantSources: map[string]string{
 				"checkout.newFlow": "/prod/us-east/canary/", "prod.audit": "/prod/",
 				"rate.limit": "/prod/us-east/", "region.failover": "/prod/us-east/",
+				"ui.theme": "/",
 			},
-			wantByKids: true,
 		},
 		{
 			name:        "missing parent",
 			path:        "/staging/eu/?inherit=layers",
 			want:        http.StatusOK,
-			wantLayers:  []string{"/staging/eu/=ok[ui.theme]", "/staging/=missing[]"},
-			wantSources: map[string]string{"ui.theme": "/staging/eu/"},
-			wantByKids:  true,
+			wantLayers:  []string{"/staging/eu/=ok[ui.theme]", "/staging/=missing[]", "/=ok[checkout.newFlow ui.theme]"},
+			wantSources: map[string]string{"ui.theme": "/staging/eu/", "checkout.newFlow": "/"},
 		},
 		{
-			name:        "empty chamber reports empty sources",
+			name:        "empty chamber inherits the root",
 			path:        "/empty/child/?inherit=layers",
 			want:        http.StatusOK,
-			wantLayers:  []string{"/empty/child/=ok[]", "/empty/=missing[]"},
-			wantSources: map[string]string{},
-			wantByKids:  true,
-			wantRaw:     `"sources":{}`,
+			wantLayers:  []string{"/empty/child/=ok[]", "/empty/=missing[]", "/=ok[checkout.newFlow ui.theme]"},
+			wantSources: map[string]string{"checkout.newFlow": "/", "ui.theme": "/"},
 		},
 		{
 			name:        "root",
@@ -180,7 +176,6 @@ func TestLayersEndpoint(t *testing.T) {
 			want:        http.StatusOK,
 			wantLayers:  []string{"/=ok[checkout.newFlow ui.theme]"},
 			wantSources: map[string]string{"checkout.newFlow": "/", "ui.theme": "/"},
-			wantByKids:  false,
 		},
 		{name: "missing chamber", path: "/nope/?inherit=layers", want: http.StatusNotFound},
 		{name: "reserved path", path: "/_realm/keys/?inherit=layers", want: http.StatusBadRequest},
@@ -196,17 +191,14 @@ func TestLayersEndpoint(t *testing.T) {
 			if status != http.StatusOK {
 				return
 			}
-			if !resp.Inheritable || resp.InheritedByChildren != tt.wantByKids || resp.Error != "" {
-				t.Errorf("inheritable %v, inheritedByChildren %v, error %q", resp.Inheritable, resp.InheritedByChildren, resp.Error)
+			if !resp.Inheritable || resp.Error != "" {
+				t.Errorf("inheritable %v, error %q", resp.Inheritable, resp.Error)
 			}
 			if got := summarize(resp.Layers); !slices.Equal(got, tt.wantLayers) {
 				t.Errorf("layers = %v, want %v", got, tt.wantLayers)
 			}
 			if !maps.Equal(resp.Sources, tt.wantSources) || resp.Sources == nil {
 				t.Errorf("sources = %v, want %v", resp.Sources, tt.wantSources)
-			}
-			if !strings.Contains(raw, tt.wantRaw) {
-				t.Errorf("data %s does not contain %s", raw, tt.wantRaw)
 			}
 		})
 	}
@@ -217,7 +209,7 @@ func TestLayersEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(out.Data, &merged) != nil {
 		t.Fatalf("merged GET: %d %s", resp.StatusCode, out.Data)
 	}
-	if got := slices.Sorted(maps.Keys(merged.Rules)); !slices.Equal(got, []string{"checkout.newFlow", "prod.audit", "rate.limit", "region.failover"}) {
+	if got := slices.Sorted(maps.Keys(merged.Rules)); !slices.Equal(got, []string{"checkout.newFlow", "prod.audit", "rate.limit", "region.failover", "ui.theme"}) {
 		t.Errorf("merged keys = %v", got)
 	}
 	resp, out = do(t, http.MethodGet, base+"/prod/us-east/canary/?inherit=false", "", nil)
@@ -238,8 +230,8 @@ func TestLayersWithoutInheritance(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d (%s)", status, raw)
 	}
-	if resp.Inheritable || resp.InheritedByChildren {
-		t.Errorf("inheritable %v, inheritedByChildren %v, want false", resp.Inheritable, resp.InheritedByChildren)
+	if resp.Inheritable {
+		t.Error("inheritable = true, want false")
 	}
 	if got := summarize(resp.Layers); !slices.Equal(got, []string{"/prod/us-east/canary/=ok[checkout.newFlow]"}) {
 		t.Errorf("layers = %v", got)
@@ -268,7 +260,7 @@ func TestLayersReportUnparsableParent(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d (%s)", status, raw)
 	}
-	if got := summarize(resp.Layers); !slices.Equal(got, []string{"/a/b/=ok[]", "/a/=invalid[]"}) {
+	if got := summarize(resp.Layers); !slices.Equal(got, []string{"/a/b/=ok[]", "/a/=invalid[]", "/=missing[]"}) {
 		t.Errorf("layers = %v", got)
 	}
 	if resp.Sources != nil || !strings.Contains(raw, `"sources":null`) {
@@ -301,6 +293,7 @@ func TestLayersRespectKeyScope(t *testing.T) {
 		}
 		return created.Token
 	}
+	rootRead := mint("read", "/")
 	prodRead := mint("read", "/prod/")
 	canaryRead := mint("read", "/prod/us-east/canary/")
 	prodEvaluate := mint("evaluate", "/prod/")
@@ -312,8 +305,10 @@ func TestLayersRespectKeyScope(t *testing.T) {
 		path   string
 		want   int
 	}{
-		{"key above every parent", nil, prodRead, "/prod/us-east/canary/?inherit=layers", http.StatusOK},
-		{"key at a chamber with no parents", nil, prodRead, "/prod/?inherit=layers", http.StatusOK},
+		{"key at the root reads every parent", nil, rootRead, "/prod/us-east/canary/?inherit=layers", http.StatusOK},
+		{"key at the root chamber, which has no parents", nil, rootRead, "/?inherit=layers", http.StatusOK},
+		// every chamber below the root lists the root as a parent
+		{"key beneath the root", nil, prodRead, "/prod/?inherit=layers", http.StatusForbidden},
 		{"key beneath a parent", nil, canaryRead, "/prod/us-east/canary/?inherit=layers", http.StatusForbidden},
 		{"key beneath a parent keeps the inherited view", nil, canaryRead, "/prod/us-east/canary/", http.StatusOK},
 		{"evaluate key", nil, prodEvaluate, "/prod/us-east/canary/?inherit=layers", http.StatusForbidden},
@@ -336,6 +331,11 @@ func TestLayersRespectKeyScope(t *testing.T) {
 		})
 	}
 
+	// a scoped key's inherited view serves the root's flags like any parent's
+	if status, out := call(t, nil, http.MethodGet, srv.URL+"/v1/chambers/prod/us-east/canary/", "", canaryRead); status != http.StatusOK || !strings.Contains(string(out.Data), "ui.theme") {
+		t.Errorf("inherited view: %d %s, want the root's ui.theme", status, out.Data)
+	}
+
 	// a refused layers request says nothing about what is stored
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/v1/chambers/prod/us-east/canary/?inherit=layers", nil)
 	req.Header.Set("Authorization", "Bearer "+canaryRead)
@@ -345,7 +345,7 @@ func TestLayersRespectKeyScope(t *testing.T) {
 	}
 	b, _ := io.ReadAll(res.Body)
 	res.Body.Close()
-	if strings.Contains(string(b), "rate.limit") || strings.Contains(string(b), "prod.audit") {
+	if strings.Contains(string(b), "rate.limit") || strings.Contains(string(b), "prod.audit") || strings.Contains(string(b), "ui.theme") {
 		t.Errorf("refusal leaks flags: %s", b)
 	}
 }

@@ -16,8 +16,8 @@ import (
 	"github.com/steviebps/realm/utils"
 )
 
-// lineageTree is a sample hierarchy: /prod/ is overridden in places, / is
-// never inherited, and /staging/ does not exist.
+// lineageTree is a sample hierarchy: every chamber inherits /, /prod/ is
+// overridden in places, and /staging/ does not exist.
 var lineageTree = map[string]string{
 	"/":                     `{"rules":{"checkout.newFlow":{"type":"boolean","value":false},"search.provider":{"type":"string","value":"elastic"},"ui.theme":{"type":"string","value":"classic"}}}`,
 	"/prod/":                `{"rules":{"checkout.newFlow":{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":25}}]},"rate.limit":{"type":"number","value":500},"prod.audit":{"type":"boolean","value":true}}}`,
@@ -33,15 +33,20 @@ var lineageTree = map[string]string{
 	"/a/b": `{"rules":{"slashless":{"type":"boolean","value":true}}}`,
 }
 
-func newLineageTree(overrides map[string]string) *mapStorage {
+// newLineageTree returns lineageTree with overrides written and the keys in
+// missing removed.
+func newLineageTree(overrides map[string]string, missing ...string) *mapStorage {
 	entries := maps.Clone(lineageTree)
 	maps.Copy(entries, overrides)
+	for _, k := range missing {
+		delete(entries, k)
+	}
 	return &mapStorage{entries: entries}
 }
 
-// referenceGet is the inherited read as it was before Get was built on
-// Lineage: a top-down walk in which each ancestor inherits from the one above.
-// The tests compare Get with it byte for byte.
+// referenceGet is the inherited read written as the walk Get used before it
+// was built on Lineage: top down from the root chamber, each ancestor
+// inheriting from the one above. The tests compare Get with it byte for byte.
 func referenceGet(ctx context.Context, src Storage, logicalPath string) ([]byte, error) {
 	leafEntry, err := src.Get(ctx, logicalPath)
 	if err != nil {
@@ -51,11 +56,17 @@ func referenceGet(ctx context.Context, src Storage, logicalPath string) ([]byte,
 	if err := json.Unmarshal(leafEntry.Value, leaf); err != nil {
 		return nil, err
 	}
-	if dir := path.Dir(path.Clean(logicalPath)); dir != "/" {
-		cur := "/"
+	if clean := path.Clean(logicalPath); clean != "/" {
+		walk := []string{"/"}
+		if dir := path.Dir(clean); dir != "/" {
+			cur := "/"
+			for _, v := range strings.Split(strings.TrimPrefix(dir, "/"), "/") {
+				cur += utils.EnsureTrailingSlash(v)
+				walk = append(walk, cur)
+			}
+		}
 		c := &realm.Chamber{Rules: map[string]*realm.Flag{}}
-		for _, v := range strings.Split(strings.TrimPrefix(dir, "/"), "/") {
-			cur += utils.EnsureTrailingSlash(v)
+		for _, cur := range walk {
 			entry, err := src.Get(ctx, cur)
 			if err != nil {
 				var nf *NotFoundError
@@ -86,12 +97,14 @@ func TestConsultedAncestors(t *testing.T) {
 		want []string
 	}{
 		{"/", nil},
-		{"/a/", nil},
-		{"/a", nil},
-		{"/a/b/", []string{"/a/"}},
-		{"/a/b", []string{"/a/"}},
-		{"/a/b/c/", []string{"/a/", "/a/b/"}},
-		{"/x/_realm/y/", []string{"/x/", "/x/_realm/"}},
+		{"//", nil},
+		{"/a/", []string{"/"}},
+		{"/a", []string{"/"}},
+		{"/a/b/", []string{"/", "/a/"}},
+		{"/a/b", []string{"/", "/a/"}},
+		{"/a//b/", []string{"/", "/a/"}},
+		{"/a/b/c/", []string{"/", "/a/", "/a/b/"}},
+		{"/x/_realm/y/", []string{"/", "/x/", "/x/_realm/"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -130,20 +143,21 @@ func TestLayers(t *testing.T) {
 		name        string
 		path        string
 		overrides   map[string]string
+		missing     []string
 		failing     map[string]error
 		wantErr     error // from Layers itself
 		wantLayers  []string
 		wantSources map[string]string
-		wantByKids  bool
 		wantMerge   string // substring of Merge's error, when it fails
 	}{
 		{
-			name: "three levels with overrides",
+			name: "three levels with overrides, then the root",
 			path: "/prod/us-east/canary/",
 			wantLayers: []string{
 				"/prod/us-east/canary/=ok[checkout.newFlow]",
 				"/prod/us-east/=ok[rate.limit region.failover search.provider]",
 				"/prod/=ok[checkout.newFlow prod.audit rate.limit]",
+				"/=ok[checkout.newFlow search.provider ui.theme]",
 			},
 			wantSources: map[string]string{
 				"checkout.newFlow": "/prod/us-east/canary/",
@@ -151,89 +165,120 @@ func TestLayers(t *testing.T) {
 				"rate.limit":       "/prod/us-east/",
 				"region.failover":  "/prod/us-east/",
 				"search.provider":  "/prod/us-east/",
+				"ui.theme":         "/",
 			},
-			wantByKids: true,
 		},
 		{
-			name:       "the root is not consulted",
-			path:       "/prod/us-east/",
-			wantLayers: []string{"/prod/us-east/=ok[rate.limit region.failover search.provider]", "/prod/=ok[checkout.newFlow prod.audit rate.limit]"},
+			name: "two levels, then the root",
+			path: "/prod/us-east/",
+			wantLayers: []string{
+				"/prod/us-east/=ok[rate.limit region.failover search.provider]",
+				"/prod/=ok[checkout.newFlow prod.audit rate.limit]",
+				"/=ok[checkout.newFlow search.provider ui.theme]",
+			},
 			wantSources: map[string]string{
 				"checkout.newFlow": "/prod/", "prod.audit": "/prod/", "rate.limit": "/prod/us-east/",
-				"region.failover": "/prod/us-east/", "search.provider": "/prod/us-east/",
+				"region.failover": "/prod/us-east/", "search.provider": "/prod/us-east/", "ui.theme": "/",
 			},
-			wantByKids: true,
 		},
 		{
-			name:        "top-level chamber",
-			path:        "/prod/",
-			wantLayers:  []string{"/prod/=ok[checkout.newFlow prod.audit rate.limit]"},
-			wantSources: map[string]string{"checkout.newFlow": "/prod/", "prod.audit": "/prod/", "rate.limit": "/prod/"},
-			wantByKids:  true,
+			name:       "top-level chamber inherits the root",
+			path:       "/prod/",
+			wantLayers: []string{"/prod/=ok[checkout.newFlow prod.audit rate.limit]", "/=ok[checkout.newFlow search.provider ui.theme]"},
+			wantSources: map[string]string{
+				"checkout.newFlow": "/prod/", "prod.audit": "/prod/", "rate.limit": "/prod/",
+				"search.provider": "/", "ui.theme": "/",
+			},
 		},
 		{
 			name:        "root",
 			path:        "/",
 			wantLayers:  []string{"/=ok[checkout.newFlow search.provider ui.theme]"},
 			wantSources: map[string]string{"checkout.newFlow": "/", "search.provider": "/", "ui.theme": "/"},
-			wantByKids:  false,
 		},
 		{
-			name:        "missing parent",
-			path:        "/staging/eu/",
-			wantLayers:  []string{"/staging/eu/=ok[ui.theme]", "/staging/=missing"},
-			wantSources: map[string]string{"ui.theme": "/staging/eu/"},
-			wantByKids:  true,
+			name:       "missing parent",
+			path:       "/staging/eu/",
+			wantLayers: []string{"/staging/eu/=ok[ui.theme]", "/staging/=missing", "/=ok[checkout.newFlow search.provider ui.theme]"},
+			wantSources: map[string]string{
+				"ui.theme": "/staging/eu/", "checkout.newFlow": "/", "search.provider": "/",
+			},
 		},
 		{
-			name:        "empty chamber under a missing parent",
+			name:        "missing root",
+			path:        "/prod/",
+			missing:     []string{"/"},
+			wantLayers:  []string{"/prod/=ok[checkout.newFlow prod.audit rate.limit]", "/=missing"},
+			wantSources: map[string]string{"checkout.newFlow": "/prod/", "prod.audit": "/prod/", "rate.limit": "/prod/"},
+		},
+		{
+			name:        "empty chamber under a missing parent and an empty root",
 			path:        "/empty/child/",
-			wantLayers:  []string{"/empty/child/=ok[]", "/empty/=missing"},
+			overrides:   map[string]string{"/": `{"rules":{}}`},
+			wantLayers:  []string{"/empty/child/=ok[]", "/empty/=missing", "/=ok[]"},
 			wantSources: map[string]string{},
-			wantByKids:  true,
 		},
 		{
-			name:        "nearest definition wins",
-			path:        "/a/b/c/d/",
-			wantLayers:  []string{"/a/b/c/d/=ok[]", "/a/b/c/=ok[k]", "/a/b/=ok[k]", "/a/=ok[k onlyA]"},
-			wantSources: map[string]string{"k": "/a/b/c/", "onlyA": "/a/"},
-			wantByKids:  true,
+			name:       "nearest definition wins",
+			path:       "/a/b/c/d/",
+			wantLayers: []string{"/a/b/c/d/=ok[]", "/a/b/c/=ok[k]", "/a/b/=ok[k]", "/a/=ok[k onlyA]", "/=ok[checkout.newFlow search.provider ui.theme]"},
+			wantSources: map[string]string{
+				"k": "/a/b/c/", "onlyA": "/a/",
+				"checkout.newFlow": "/", "search.provider": "/", "ui.theme": "/",
+			},
 		},
 		{
-			name:        "slashless path",
-			path:        "/a/b",
-			wantLayers:  []string{"/a/b/=ok[slashless]", "/a/=ok[k onlyA]"},
-			wantSources: map[string]string{"slashless": "/a/b/", "k": "/a/", "onlyA": "/a/"},
-			wantByKids:  true,
+			name:       "slashless path",
+			path:       "/a/b",
+			wantLayers: []string{"/a/b/=ok[slashless]", "/a/=ok[k onlyA]", "/=ok[checkout.newFlow search.provider ui.theme]"},
+			wantSources: map[string]string{
+				"slashless": "/a/b/", "k": "/a/", "onlyA": "/a/",
+				"checkout.newFlow": "/", "search.provider": "/", "ui.theme": "/",
+			},
 		},
 		{
-			name:       "unparsable parent",
-			path:       "/prod/us-east/canary/",
-			overrides:  map[string]string{"/prod/": `{"rules":`},
-			wantLayers: []string{"/prod/us-east/canary/=ok[checkout.newFlow]", "/prod/us-east/=ok[rate.limit region.failover search.provider]", "/prod/=invalid"},
-			wantByKids: true,
-			wantMerge:  "could not parse parent chamber /prod/",
+			name:      "unparsable parent",
+			path:      "/prod/us-east/canary/",
+			overrides: map[string]string{"/prod/": `{"rules":`},
+			wantLayers: []string{
+				"/prod/us-east/canary/=ok[checkout.newFlow]",
+				"/prod/us-east/=ok[rate.limit region.failover search.provider]",
+				"/prod/=invalid",
+				"/=ok[checkout.newFlow search.provider ui.theme]",
+			},
+			wantMerge: "could not parse parent chamber /prod/",
 		},
 		{
 			name:       "the farthest unparsable parent is reported",
 			path:       "/a/b/c/d/",
 			overrides:  map[string]string{"/a/": `{"rules":`, "/a/b/c/": `{"rules":`},
-			wantLayers: []string{"/a/b/c/d/=ok[]", "/a/b/c/=invalid", "/a/b/=ok[k]", "/a/=invalid"},
-			wantByKids: true,
+			wantLayers: []string{"/a/b/c/d/=ok[]", "/a/b/c/=invalid", "/a/b/=ok[k]", "/a/=invalid", "/=ok[checkout.newFlow search.provider ui.theme]"},
 			wantMerge:  "could not parse parent chamber /a/:",
+		},
+		{
+			name:       "an unparsable root breaks every chamber below it",
+			path:       "/a/b/",
+			overrides:  map[string]string{"/": `{"rules":`, "/a/": `{"rules":`},
+			wantLayers: []string{"/a/b/=ok[k]", "/a/=invalid", "/=invalid"},
+			wantMerge:  "could not parse parent chamber /:",
 		},
 		{
 			name:       "unparsable chamber",
 			path:       "/prod/us-east/",
 			overrides:  map[string]string{"/prod/us-east/": `nope`},
-			wantLayers: []string{"/prod/us-east/=invalid", "/prod/=ok[checkout.newFlow prod.audit rate.limit]"},
-			wantByKids: true,
+			wantLayers: []string{"/prod/us-east/=invalid", "/prod/=ok[checkout.newFlow prod.audit rate.limit]", "/=ok[checkout.newFlow search.provider ui.theme]"},
 			wantMerge:  "invalid character",
 		},
 		{
 			name:    "failing parent read",
 			path:    "/prod/us-east/canary/",
 			failing: map[string]error{"/prod/": boom},
+			wantErr: boom,
+		},
+		{
+			name:    "failing root read",
+			path:    "/prod/",
+			failing: map[string]error{"/": boom},
 			wantErr: boom,
 		},
 		{
@@ -245,7 +290,7 @@ func TestLayers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			src := newLineageTree(tt.overrides)
+			src := newLineageTree(tt.overrides, tt.missing...)
 			src.failing = tt.failing
 			inh, _ := NewInheritableStorage(src)
 			lin, err := inh.(Layered).Layers(ctx, tt.path)
@@ -265,9 +310,6 @@ func TestLayers(t *testing.T) {
 			}
 			if !lin.Inheritable {
 				t.Error("Inheritable = false, want true")
-			}
-			if lin.InheritedByChildren != tt.wantByKids {
-				t.Errorf("InheritedByChildren = %v, want %v", lin.InheritedByChildren, tt.wantByKids)
 			}
 			var got []string
 			for _, l := range lin.Layers {
@@ -312,28 +354,34 @@ func TestGetMatchesReference(t *testing.T) {
 		name      string
 		path      string
 		overrides map[string]string
+		missing   []string
 		failing   map[string]error
 		want      string // the merged chamber's rules, when the read succeeds
 	}{
-		{name: "canary", path: "/prod/us-east/canary/", want: `{"checkout.newFlow":{"type":"boolean","value":true},"prod.audit":{"type":"boolean","value":true},"rate.limit":{"type":"number","value":1000},"region.failover":{"type":"boolean","value":true},"search.provider":{"type":"string","value":"opensearch"}}`},
+		{name: "canary", path: "/prod/us-east/canary/", want: `{"checkout.newFlow":{"type":"boolean","value":true},"prod.audit":{"type":"boolean","value":true},"rate.limit":{"type":"number","value":1000},"region.failover":{"type":"boolean","value":true},"search.provider":{"type":"string","value":"opensearch"},"ui.theme":{"type":"string","value":"classic"}}`},
 		{name: "us-east", path: "/prod/us-east/"},
-		{name: "prod", path: "/prod/"},
-		{name: "root", path: "/"},
-		{name: "missing parent", path: "/staging/eu/"},
-		{name: "empty", path: "/empty/child/", want: `{}`},
-		{name: "nearest wins", path: "/a/b/c/d/", want: `{"k":{"type":"number","value":3},"onlyA":{"type":"number","value":1}}`},
+		{name: "prod", path: "/prod/", want: `{"checkout.newFlow":{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":25}}]},"prod.audit":{"type":"boolean","value":true},"rate.limit":{"type":"number","value":500},"search.provider":{"type":"string","value":"elastic"},"ui.theme":{"type":"string","value":"classic"}}`},
+		{name: "root", path: "/", want: `{"checkout.newFlow":{"type":"boolean","value":false},"search.provider":{"type":"string","value":"elastic"},"ui.theme":{"type":"string","value":"classic"}}`},
+		{name: "missing parent", path: "/staging/eu/", want: `{"checkout.newFlow":{"type":"boolean","value":false},"search.provider":{"type":"string","value":"elastic"},"ui.theme":{"type":"string","value":"dark"}}`},
+		{name: "missing root", path: "/prod/", missing: []string{"/"}, want: `{"checkout.newFlow":{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":25}}]},"prod.audit":{"type":"boolean","value":true},"rate.limit":{"type":"number","value":500}}`},
+		{name: "empty chamber inherits the root", path: "/empty/child/", want: `{"checkout.newFlow":{"type":"boolean","value":false},"search.provider":{"type":"string","value":"elastic"},"ui.theme":{"type":"string","value":"classic"}}`},
+		{name: "empty", path: "/empty/child/", overrides: map[string]string{"/": `{"rules":{}}`}, want: `{}`},
+		{name: "nearest wins", path: "/a/b/c/d/", want: `{"checkout.newFlow":{"type":"boolean","value":false},"k":{"type":"number","value":3},"onlyA":{"type":"number","value":1},"search.provider":{"type":"string","value":"elastic"},"ui.theme":{"type":"string","value":"classic"}}`},
 		{name: "slashless", path: "/a/b"},
 		{name: "unparsable parent", path: "/prod/us-east/canary/", overrides: map[string]string{"/prod/": `{"rules":`}},
 		{name: "two unparsable parents", path: "/a/b/c/d/", overrides: map[string]string{"/a/": `{"rules":`, "/a/b/c/": `[]`}},
+		{name: "unparsable root", path: "/a/b/", overrides: map[string]string{"/": `{"rules":`, "/a/": `[]`}},
+		{name: "unparsable root read at the root", path: "/", overrides: map[string]string{"/": `{"rules":`}},
 		{name: "unparsable chamber", path: "/prod/us-east/", overrides: map[string]string{"/prod/us-east/": `nope`}},
 		{name: "failing parent", path: "/prod/us-east/canary/", failing: map[string]error{"/prod/": boom}},
+		{name: "failing root", path: "/prod/", failing: map[string]error{"/": boom}},
 		{name: "missing chamber", path: "/nope/"},
 		{name: "invalid path", path: "/prod/../prod/"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			src := newLineageTree(tt.overrides)
+			src := newLineageTree(tt.overrides, tt.missing...)
 			src.failing = tt.failing
 			inh, _ := NewInheritableStorage(src)
 
@@ -393,7 +441,7 @@ func TestReadLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.Inheritable || plain.InheritedByChildren || len(plain.Layers) != 1 {
+	if plain.Inheritable || len(plain.Layers) != 1 {
 		t.Fatalf("without inheritance: %+v, want one layer and no inheritance", plain)
 	}
 	if got := layerSummary(plain.Layers[0]); got != "/prod/us-east/canary/=ok[checkout.newFlow]" {
@@ -405,7 +453,7 @@ func TestReadLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !layered.Inheritable || len(layered.Layers) != 3 {
+	if !layered.Inheritable || len(layered.Layers) != 4 {
 		t.Errorf("with inheritance: %d layers, inheritable %v", len(layered.Layers), layered.Inheritable)
 	}
 
