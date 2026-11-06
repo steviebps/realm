@@ -37,8 +37,6 @@ type layerView struct {
 type layersResponse struct {
 	// Inheritable reports whether the server applies inheritance.
 	Inheritable bool `json:"inheritable"`
-	// InheritedByChildren reports whether chambers below the path inherit its flags.
-	InheritedByChildren bool `json:"inheritedByChildren"`
 	// Layers holds the chamber itself, then each consulted parent, nearest first.
 	Layers []layerView `json:"layers"`
 	// Sources maps each flag served at the path to the path of the chamber
@@ -52,9 +50,8 @@ type layersResponse struct {
 // layersView describes lin for a layers response.
 func layersView(lin *storage.Lineage) layersResponse {
 	resp := layersResponse{
-		Inheritable:         lin.Inheritable,
-		InheritedByChildren: lin.InheritedByChildren,
-		Layers:              make([]layerView, 0, len(lin.Layers)),
+		Inheritable: lin.Inheritable,
+		Layers:      make([]layerView, 0, len(lin.Layers)),
 	}
 	if sources, err := lin.Sources(); err != nil {
 		resp.Error = err.Error()

@@ -162,9 +162,11 @@ A key works only for chambers at its path or beneath it (`/prod/` covers
 keys or change the catalog.
 
 `GET /v1/chambers/<path>?inherit=layers` lists parent chambers' own flags, so
-it also needs read access to every parent chamber it lists. A key scoped
-beneath a parent gets `403` there; the inherited view
-(`GET /v1/chambers/<path>`) is unchanged.
+it also needs read access to every parent chamber it lists. Every chamber
+below the root lists the root chamber `/`, so a key scoped beneath `/` gets
+`403` there; keys scoped to `/`, the admin key, and signed-in users who can
+read chambers are unaffected. The inherited view (`GET /v1/chambers/<path>`)
+is unchanged: it serves the root's flags like any parent's.
 
 The attribute catalog belongs to the whole realm, not to a chamber, and its
 labels can name every tenant or location. So only `read` and `write` keys

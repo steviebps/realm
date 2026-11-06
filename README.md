@@ -219,7 +219,7 @@ Server settings:
 | `storage` | The storage backend. Refer to [Storage backends](#storage-backends). |
 | `options` | The settings of the storage backend. |
 | `port` | The HTTP port. |
-| `inheritable` | If `true`, child chambers inherit the flags of their parents. |
+| `inheritable` | If `true`, child chambers inherit the flags of their parents, up to the root chamber `/`. |
 | `certFile`, `keyFile` | A TLS certificate and key. If you set both, the server uses HTTPS. |
 | `logLevel` | The minimum level logged: `debug`, `info` (default), `warn`, or `error`. `--debug` overrides it. |
 | `shutdownDelay` | How long to keep serving after `SIGTERM` while `/readyz` reports 503, such as `"5s"`. Gives load balancers time to stop routing to the server. Default: none. |

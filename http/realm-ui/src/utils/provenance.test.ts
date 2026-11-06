@@ -8,11 +8,11 @@ import { ancestorsOf, provenance } from './provenance.ts';
 
 const bool = (value: boolean) => ({ type: 'boolean' as const, value });
 const num = (value: number) => ({ type: 'number' as const, value });
+const str = (value: string) => ({ type: 'string' as const, value });
 
 /** /prod/us-east/canary/ in the sample tree, as the server reports it. */
 const canary: Lineage = {
   inheritable: true,
-  inheritedByChildren: true,
   layers: [
     { path: '/prod/us-east/canary/', status: 'ok', rules: { 'checkout.newFlow': bool(true) } },
     {
@@ -29,12 +29,14 @@ const canary: Lineage = {
         'rate.limit': num(500),
       },
     },
+    { path: '/', status: 'ok', rules: { 'checkout.newFlow': bool(false), 'ui.theme': str('classic') } },
   ],
   sources: {
     'checkout.newFlow': '/prod/us-east/canary/',
     'prod.audit': '/prod/',
     'rate.limit': '/prod/us-east/',
     'region.failover': '/prod/us-east/',
+    'ui.theme': '/',
   },
 };
 
@@ -49,18 +51,21 @@ void test('attributes each flag to the chamber that serves it', () => {
   assert.deepEqual(Object.keys(p.own), ['checkout.newFlow']);
   assert.deepEqual(
     p.own['checkout.newFlow'].overrides.map((d) => d.path),
-    ['/prod/']
+    ['/prod/', '/']
   );
-  assert.deepEqual(Object.keys(p.inherited ?? {}).sort(), ['prod.audit', 'rate.limit', 'region.failover']);
+  assert.deepEqual(Object.keys(p.inherited ?? {}).sort(), ['prod.audit', 'rate.limit', 'region.failover', 'ui.theme']);
+  assert.equal(p.inherited?.['ui.theme'].source, '/');
   assert.equal(p.inherited?.['rate.limit'].source, '/prod/us-east/');
   assert.deepEqual(p.inherited?.['rate.limit'].overrides, [{ path: '/prod/', flag: num(500) }]);
   assert.deepEqual(p.inherited?.['region.failover'].overrides, []);
 });
 
-void test('stacks every ancestor and marks the ones the server does not consult', () => {
+void test('stacks every ancestor, the root last', () => {
   const [usEast, prod, root] = provenance(canary).stack;
   assert.equal(usEast.kind, 'layer');
-  if (usEast.kind !== 'layer' || prod.kind !== 'layer') return;
+  if (usEast.kind !== 'layer' || prod.kind !== 'layer' || root.kind !== 'layer') {
+    assert.fail('every ancestor is a layer');
+  }
   assert.equal(usEast.distance, 1);
   assert.deepEqual(
     usEast.served.map((s) => s.name),
@@ -77,16 +82,21 @@ void test('stacks every ancestor and marks the ones the server does not consult'
     { name: 'checkout.newFlow', by: '/prod/us-east/canary/' },
     { name: 'rate.limit', by: '/prod/us-east/' },
   ]);
-  assert.deepEqual(root, { kind: 'notInherited', path: '/', distance: 3 });
+  assert.equal(root.distance, 3);
+  assert.deepEqual(
+    root.served.map((s) => s.name),
+    ['ui.theme']
+  );
+  assert.deepEqual(root.overridden, [{ name: 'checkout.newFlow', by: '/prod/us-east/canary/' }]);
 });
 
 void test('a missing parent is a layer with nothing in it', () => {
   const p = provenance({
     inheritable: true,
-    inheritedByChildren: true,
     layers: [
       { path: '/staging/eu/', status: 'ok', rules: { 'ui.theme': { type: 'string', value: 'dark' } } },
       { path: '/staging/', status: 'missing' },
+      { path: '/', status: 'ok', rules: {} },
     ],
     sources: { 'ui.theme': '/staging/eu/' },
   });
@@ -95,7 +105,7 @@ void test('a missing parent is a layer with nothing in it', () => {
     p.stack.map((e) => [e.kind, e.path]),
     [
       ['layer', '/staging/'],
-      ['notInherited', '/'],
+      ['layer', '/'],
     ]
   );
   const [staging] = p.stack;
@@ -105,7 +115,12 @@ void test('a missing parent is a layer with nothing in it', () => {
 void test('a broken view attributes nothing', () => {
   const p = provenance({
     ...canary,
-    layers: [canary.layers[0], canary.layers[1], { path: '/prod/', status: 'invalid', error: 'could not parse' }],
+    layers: [
+      canary.layers[0],
+      canary.layers[1],
+      { path: '/prod/', status: 'invalid', error: 'could not parse' },
+      canary.layers[3],
+    ],
     sources: null,
     error: 'could not parse parent chamber /prod/',
   });
@@ -121,10 +136,10 @@ void test('a broken view attributes nothing', () => {
 void test('an empty chamber is not broken', () => {
   const p = provenance({
     inheritable: true,
-    inheritedByChildren: true,
     layers: [
       { path: '/empty/child/', status: 'ok' },
       { path: '/empty/', status: 'missing' },
+      { path: '/', status: 'ok' },
     ],
     sources: {},
   });
@@ -135,7 +150,6 @@ void test('an empty chamber is not broken', () => {
 void test('without inheritance every ancestor is not inherited', () => {
   const p = provenance({
     inheritable: false,
-    inheritedByChildren: false,
     layers: [canary.layers[0]],
     sources: { 'checkout.newFlow': '/prod/us-east/canary/' },
   });
@@ -149,7 +163,6 @@ void test('without inheritance every ancestor is not inherited', () => {
 void test('the root has no ancestors', () => {
   const p = provenance({
     inheritable: true,
-    inheritedByChildren: false,
     layers: [{ path: '/', status: 'ok', rules: { a: bool(true) } }],
     sources: { a: '/' },
   });
@@ -160,7 +173,6 @@ void test('the root has no ancestors', () => {
 void test('flag keys never match Object.prototype members', () => {
   const p = provenance({
     inheritable: true,
-    inheritedByChildren: true,
     layers: [
       { path: '/a/b/', status: 'ok', rules: { constructor: bool(true) } },
       { path: '/a/', status: 'ok', rules: { toString: bool(false) } },

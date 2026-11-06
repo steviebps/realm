@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
-import { HiClock, HiExclamation, HiOutlineInformationCircle, HiPencil, HiPlus, HiTrash } from 'react-icons/hi';
+import { HiClock, HiExclamation, HiPencil, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
 import { Chamber, Flag, RuleType } from '../models/response';
@@ -167,15 +167,6 @@ export const ChamberView = ({ path }: { path: string }) => {
             <HiClock className="mr-1" /> History
           </Button>
         </div>
-        {lineage?.inheritable && !lineage.inheritedByChildren && (
-          <p className="flex items-start gap-2 text-sm text-gray-600 dark:text-gray-400">
-            <HiOutlineInformationCircle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
-            <span>
-              Flags in <span className="font-mono">{here}</span> are served only at{' '}
-              <span className="font-mono">{here}</span>. Chambers below it don&rsquo;t inherit them.
-            </span>
-          </p>
-        )}
 
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
           {ownNames.length > 0 ? (
