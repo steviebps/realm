@@ -71,10 +71,14 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 		}
 		// Browsers send Origin with every POST, and anyone can copy a key out
 		// of front-end code. Only evaluate keys are safe to publish, so refuse
-		// read and write keys here, while shipping one is still a mistake in
-		// development rather than a leak.
-		if p.Kind == auth.KindKey && p.Access != auth.AccessEvaluate && r.Header.Get("Origin") != "" {
-			forbidden(w, r, fmt.Sprintf("%s keys must not be used in browsers, where anyone can copy them; use an evaluate key", p.Access))
+		// read and write keys and the admin key here, while shipping one is
+		// still a mistake in development rather than a leak.
+		if p.IsSecretKey() && r.Header.Get("Origin") != "" {
+			msg := string(p.Access) + " keys must not be used in browsers, where anyone can copy them; use an evaluate key"
+			if p.Kind == auth.KindAdminKey {
+				msg = "the admin key must not be used in browsers, where anyone can copy it; use an evaluate key"
+			}
+			forbidden(w, r, msg)
 			return
 		}
 

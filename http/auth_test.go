@@ -281,3 +281,78 @@ func TestAPIKeys(t *testing.T) {
 		t.Errorf("key list = %d %s", status, out.Data)
 	}
 }
+
+// TestAdminKeyOnly runs a server whose auth has an admin key and no sign-in
+// providers, as a headless container would.
+func TestAdminKeyOnly(t *testing.T) {
+	const adminKey = "admin-0123456789abcdef0123456789abcdef"
+	stg, err := storage.NewBigCacheStorage(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inh, err := storage.NewInheritableStorage(stg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := NewHandler(context.Background(), HandlerConfig{Storage: inh, Auth: &auth.Config{AdminKey: adminKey}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	status, out := call(t, nil, http.MethodGet, srv.URL+"/v1/auth/me", "", "")
+	if status != http.StatusOK || !strings.Contains(string(out.Data), `"authEnabled":true`) || !strings.Contains(string(out.Data), `"providers":[]`) {
+		t.Fatalf("me = %d %s", status, out.Data)
+	}
+	if status, _ := call(t, nil, http.MethodGet, srv.URL+"/v1/chambers/", "", ""); status != http.StatusUnauthorized {
+		t.Errorf("no credentials = %d, want 401", status)
+	}
+	if status, _ := call(t, nil, http.MethodGet, srv.URL+"/v1/auth/login/test", "", ""); status != http.StatusNotFound {
+		t.Errorf("sign-in = %d, want 404", status)
+	}
+
+	status, out = call(t, nil, http.MethodPost, srv.URL+"/v1/keys", `{"name":"ci","access":"write","path":"/prod/"}`, adminKey)
+	var created createdKey
+	if status != http.StatusCreated || json.Unmarshal(out.Data, &created) != nil {
+		t.Fatalf("admin key creates a key: %d %s %v", status, out.Data, out.Errors)
+	}
+	if created.Key.CreatedBy != "key:admin" {
+		t.Errorf("createdBy = %q, want key:admin", created.Key.CreatedBy)
+	}
+
+	tests := []struct {
+		name, method, path, body, token string
+		want                            int
+	}{
+		{"admin key writes chambers", http.MethodPost, "/v1/chambers/staging/", chamberBody, adminKey, http.StatusCreated},
+		{"admin key edits the catalog", http.MethodPost, "/v1/catalog/region", `{"values":{}}`, adminKey, http.StatusNoContent},
+		{"admin key lists keys", http.MethodGet, "/v1/keys", "", adminKey, http.StatusOK},
+		{"created key writes in scope", http.MethodPost, "/v1/chambers/prod/app/", chamberBody, created.Token, http.StatusCreated},
+		{"created key cannot manage keys", http.MethodPost, "/v1/keys", `{"name":"x","access":"read"}`, created.Token, http.StatusForbidden},
+		{"wrong admin key", http.MethodGet, "/v1/keys", "", adminKey + "x", http.StatusUnauthorized},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if status, out := call(t, nil, tt.method, srv.URL+tt.path, tt.body, tt.token); status != tt.want {
+				t.Errorf("%d %v, want %d", status, out.Errors, tt.want)
+			}
+		})
+	}
+	if got := lastActor(t, nil, srv.URL+"/v1/history/staging/", adminKey); got != "key:admin" {
+		t.Errorf("history actor = %q, want key:admin", got)
+	}
+
+	// the admin key is a secret: browsers may not use it, even to evaluate
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/evaluate/staging/", strings.NewReader(`{"key":"u1"}`))
+	req.Header.Set("Authorization", "Bearer "+adminKey)
+	req.Header.Set("Origin", "https://app.example")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusForbidden {
+		t.Errorf("admin key from a browser = %d, want 403", res.StatusCode)
+	}
+}

@@ -20,7 +20,12 @@ const DefaultGitHubOrgsTTL = time.Hour
 // Config enables authentication on the server. Without it every request is
 // allowed. Secrets may reference environment variables as ${NAME}.
 //
+// It needs sign-in providers, an admin key, or both. Without providers
+// nobody can sign in to the UI and only API keys authenticate, so
+// externalURL, sessionSecret, and access are not needed.
+//
 //	"auth": {
+//	  "adminKey": "${REALM_ADMIN_KEY}",
 //	  "externalURL": "https://realm.example.com",
 //	  "sessionSecret": "${REALM_SESSION_SECRET}",
 //	  "access": {
@@ -36,12 +41,21 @@ const DefaultGitHubOrgsTTL = time.Hour
 //	  ]
 //	}
 type Config struct {
+	// AdminKey, if set, is an API key with administrator rights, presented
+	// as a bearer token like any other. It is declared here rather than
+	// stored, so headless installs have a first credential: it may read and
+	// change every chamber, edit the catalog, and create and revoke the
+	// stored keys. It must be at least 32 characters (for example the output
+	// of `openssl rand -hex 32`) and is usually an environment reference.
+	// Change it and restart the server to rotate it.
+	AdminKey string `json:"adminKey,omitempty"`
 	// ExternalURL is the address users reach the server at; sign-in
-	// callbacks are registered with providers under it.
-	ExternalURL string `json:"externalURL"`
+	// callbacks are registered with providers under it. Required with
+	// providers.
+	ExternalURL string `json:"externalURL,omitempty"`
 	// SessionSecret signs and encrypts session cookies. It must be at least
-	// 32 characters and shared by every replica.
-	SessionSecret string `json:"sessionSecret"`
+	// 32 characters and shared by every replica. Required with providers.
+	SessionSecret string `json:"sessionSecret,omitempty"`
 	// SessionTTL is a Go duration such as "12h"; DefaultSessionTTL if empty.
 	SessionTTL string `json:"sessionTTL,omitempty"`
 	// GitHubOrgsTTL is a Go duration bounding how long the GitHub
@@ -52,6 +66,8 @@ type Config struct {
 	Access        AccessConfig     `json:"access"`
 	Providers     []ProviderConfig `json:"providers"`
 
+	// adminKeyHash is the SHA-256 of AdminKey, or "" without one.
+	adminKeyHash  string
 	sessionTTL    time.Duration
 	githubOrgsTTL time.Duration
 	external      *url.URL
@@ -113,6 +129,23 @@ const (
 // validate checks the configuration, expands environment references in
 // secrets, and fills defaults.
 func (c *Config) validate() error {
+	if c.AdminKey != "" {
+		// A reference to an unset variable expands to "", which must not
+		// quietly turn the admin key off.
+		key := os.ExpandEnv(c.AdminKey)
+		if len(key) < 32 {
+			return fmt.Errorf("auth.adminKey must be at least 32 characters (it is %d after expanding %q)", len(key), c.AdminKey)
+		}
+		c.adminKeyHash = hashSecret(key)
+		c.AdminKey = ""
+	}
+	if len(c.Providers) == 0 {
+		if c.adminKeyHash == "" {
+			return errors.New("auth needs at least one sign-in provider (auth.providers) or an auth.adminKey")
+		}
+		return nil
+	}
+
 	var err error
 	if c.external, err = url.Parse(strings.TrimSuffix(c.ExternalURL, "/")); err != nil || c.external.Host == "" ||
 		(c.external.Scheme != "https" && c.external.Scheme != "http") {
@@ -131,9 +164,6 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	if len(c.Providers) == 0 {
-		return errors.New("auth.providers must list at least one sign-in provider")
-	}
 	names := map[string]bool{}
 	c.domainOwners = map[string][]string{}
 	for i := range c.Providers {

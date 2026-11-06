@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"html"
@@ -33,8 +34,10 @@ var ErrCrossOrigin = errors.New("cross-origin request refused")
 
 // Authenticator identifies the caller of each request.
 type Authenticator struct {
-	cfg       *Config
-	keys      *KeyStore
+	cfg  *Config
+	keys *KeyStore
+	// sealer protects session and login cookies; nil without providers,
+	// when nobody can sign in.
 	sealer    *sealer
 	providers map[string]provider
 }
@@ -45,11 +48,13 @@ func New(cfg Config, strg storage.Storage) (*Authenticator, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
-	s, err := newSealer(cfg.SessionSecret)
-	if err != nil {
-		return nil, err
+	a := &Authenticator{cfg: &cfg, keys: NewKeyStore(strg), providers: map[string]provider{}}
+	if len(cfg.Providers) > 0 {
+		var err error
+		if a.sealer, err = newSealer(cfg.SessionSecret); err != nil {
+			return nil, err
+		}
 	}
-	a := &Authenticator{cfg: &cfg, keys: NewKeyStore(strg), sealer: s, providers: map[string]provider{}}
 	client := &http.Client{Timeout: 15 * time.Second}
 	for i := range cfg.Providers {
 		p := &cfg.Providers[i]
@@ -100,22 +105,31 @@ type loginState struct {
 	Expires  int64  `json:"exp"`
 }
 
-// Authenticate returns the caller of r: an API key presented as a bearer
-// token, or a user's session cookie. It returns nil without error when the
-// request carries no credentials, and an error when they are invalid.
+// Authenticate returns the caller of r: the admin key or an API key
+// presented as a bearer token, or a user's session cookie. It returns nil
+// without error when the request carries no credentials, and an error when
+// they are invalid.
 func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	if h := r.Header.Get("Authorization"); h != "" {
 		token, ok := strings.CutPrefix(h, "Bearer ")
 		if !ok {
 			return nil, ErrInvalidKey
 		}
-		key, err := a.keys.Verify(r.Context(), strings.TrimSpace(token))
+		token = strings.TrimSpace(token)
+		if a.isAdminKey(token) {
+			p := adminKeyPrincipal
+			return &p, nil
+		}
+		key, err := a.keys.Verify(r.Context(), token)
 		if err != nil {
 			return nil, err
 		}
 		return key.Principal(), nil
 	}
 
+	if a.sealer == nil {
+		return nil, nil
+	}
 	cookie, err := r.Cookie(SessionCookie)
 	if err != nil {
 		return nil, nil
@@ -142,6 +156,11 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 		return nil, nil
 	}
 	return &Principal{Kind: KindUser, ID: s.Email, Name: s.Name, Provider: s.Provider, Role: role}, nil
+}
+
+// isAdminKey reports whether token is the admin key declared in the config.
+func (a *Authenticator) isAdminKey(token string) bool {
+	return a.cfg.adminKeyHash != "" && subtle.ConstantTimeCompare([]byte(hashSecret(token)), []byte(a.cfg.adminKeyHash)) == 1
 }
 
 func safeMethod(m string) bool {
@@ -175,7 +194,7 @@ func (a *Authenticator) redirectURL(provider string) string {
 }
 
 func (a *Authenticator) secureCookies() bool {
-	return a.cfg.external.Scheme == "https"
+	return a.cfg.external != nil && a.cfg.external.Scheme == "https"
 }
 
 func (a *Authenticator) setCookie(w http.ResponseWriter, name, value, path string, maxAge int) {

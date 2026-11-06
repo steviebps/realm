@@ -11,7 +11,11 @@ export const SignIn = ({ providers }: { providers: Provider[] }) => (
       <div className="flex flex-col items-center gap-2 text-center">
         <RealmMark className="h-10 w-10 text-primary-700 dark:text-primary-400" />
         <h1 className="text-xl font-semibold">Sign in to realm</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400">Use your work account to view and change flags.</p>
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          {providers.length > 0
+            ? 'Use your work account to view and change flags.'
+            : 'Sign-in is not configured on this server. Use the API with an API key instead.'}
+        </p>
       </div>
       <div className="flex flex-col gap-2">
         {providers.map((p) => (

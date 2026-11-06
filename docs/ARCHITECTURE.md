@@ -169,8 +169,8 @@ the keys it read and retries with jittered backoff on conflict, so replicas
 need no shared lock. On other backends it holds a process-wide lock instead,
 which is why those backends are single-replica. A backend can also implement
 **`Locker`** to extend that lock to other processes: `file` takes an exclusive
-lock file (`.realm-lock`, `flock` or `LockFileEx`) for the update, so a server
-and `realm keys` sharing the directory cannot lose each other's writes. `file`
+lock file (`.realm-lock`, `flock` or `LockFileEx`) for the update, so processes
+sharing the directory cannot lose each other's writes. `file`
 also writes each entry to a temporary file and renames it into place, so
 readers never see a partial entry. `boltdb` gives up after 1 second when
 another process holds the database's lock.

@@ -123,8 +123,11 @@ func runServer(cmd *cobra.Command) error {
 		return fmt.Errorf("failed to initialize root entry during startup: %w", err)
 	}
 
-	if serverConfig.Auth == nil {
+	switch {
+	case serverConfig.Auth == nil:
 		logger.WarnCtx(ctx).Msg("AUTHENTICATION IS DISABLED: anyone who can reach this server can read and change every chamber. Add an \"auth\" block to the server config to require sign-in and API keys.")
+	case len(serverConfig.Auth.Providers) == 0:
+		logger.InfoCtx(ctx).Msg("no sign-in providers are configured: only API keys authenticate, and nobody can sign in to the UI")
 	}
 
 	draining := make(chan struct{})

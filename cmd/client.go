@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -93,15 +94,20 @@ type chamberRequest struct {
 	verb   string
 	method string
 	// path is the chamber path; query, if set, is appended to the request.
-	path   string
-	query  string
-	body   []byte
-	header http.Header
+	path string
+	// endpoint, if set, is the server path requested instead of the chamber
+	// at path, such as "/v1/keys"; path then only names it in messages.
+	endpoint string
+	query    string
+	body     []byte
+	header   http.Header
 	// statusErr, if set, may turn a response status into an error before the
 	// body is read.
 	statusErr func(status int) error
 	// print writes the response's data to standard output.
 	print bool
+	// handle, if set, receives the response's data instead.
+	handle func(data json.RawMessage) error
 }
 
 // runChamberRequest performs r against the server named by cmd's flags,
@@ -124,10 +130,18 @@ func runChamberRequest(cmd *cobra.Command, r chamberRequest) error {
 		body = bytes.NewReader(r.body)
 	}
 	target := r.path
+	if r.endpoint != "" {
+		target = r.endpoint
+	}
 	if r.query != "" {
 		target += "?" + r.query
 	}
-	req, err := c.NewRequest(ctx, r.method, target, body)
+	var req *http.Request
+	if r.endpoint != "" {
+		req, err = c.NewAPIRequest(ctx, r.method, target, body)
+	} else {
+		req, err = c.NewRequest(ctx, r.method, target, body)
+	}
 	if err != nil {
 		return fail(err)
 	}
@@ -151,6 +165,9 @@ func runChamberRequest(cmd *cobra.Command, r chamberRequest) error {
 	if len(httpRes.Errors) > 0 {
 		logger.ErrorCtx(ctx).Msgf("could not %s %q: %s", r.verb, r.path, httpRes.Errors)
 		return errors.New(strings.Join(httpRes.Errors, "; "))
+	}
+	if r.handle != nil {
+		return r.handle(httpRes.Data)
 	}
 	if r.print {
 		if err := utils.WriteInterfaceWith(cmd.OutOrStdout(), httpRes.Data, true); err != nil {
