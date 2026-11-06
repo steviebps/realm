@@ -1,19 +1,21 @@
+import { useState } from 'react';
 import { Alert, Badge, Button } from 'flowbite-react';
 import { HiLockClosed } from 'react-icons/hi';
-import { Catalog, Flag, Lineage } from '../models/response';
+import { Catalog, Flag } from '../models/response';
 import { Provenance, Served, StackEntry } from '../utils/provenance';
 import { plural } from '../utils/strings';
-import { FlagRow, FlagTable, PathLink, Sep } from './FlagTable';
+import { ChamberRef, FlagRow, FlagTable, Mono, PathLink, Sep } from './FlagTable';
+
+type LayerEntry = Extract<StackEntry, { kind: 'layer' }>;
 
 type Props = {
   /** The path of the chamber being viewed. */
   here: string;
-  lineage: Lineage | null;
+  /** Null when the lineage could not be loaded. */
   prov: Provenance | null;
   /** Why the lineage could not be loaded. */
   loadError: string | null;
-  retrying: boolean;
-  onRetry: () => void;
+  onRetry: () => Promise<unknown>;
   catalog: Catalog;
   /** Starts overriding an inherited flag in this chamber; omitted for users who cannot edit. */
   onOverride?: (name: string, flag: Flag) => void;
@@ -21,14 +23,16 @@ type Props = {
 
 const distanceLabel = (distance: number) => (distance === 1 ? 'parent' : `${distance} levels up`);
 
+/** A parent chamber gets a card when it serves flags here (never when the view is broken: then nothing is served). */
+const isCard = (entry: StackEntry): entry is LayerEntry => entry.kind === 'layer' && entry.served.length > 0;
+
 /** Flag keys in monospace, separated by commas, each with the chamber that overrides it. */
 const OverriddenList = ({ items, here }: { items: { name: string; by: string }[]; here: string }) => (
   <>
     {items.map(({ name, by }, i) => (
       <span key={name}>
         {i > 0 && ', '}
-        <code className="font-mono [overflow-wrap:anywhere]">{name}</code> (by{' '}
-        {by === here ? 'this chamber' : <span className="font-mono [overflow-wrap:anywhere]">{by}</span>})
+        <Mono>{name}</Mono> (by <ChamberRef path={by} here={here} />)
       </span>
     ))}
   </>
@@ -77,7 +81,7 @@ const LayerCard = ({
   catalog,
   onOverride,
 }: {
-  entry: Extract<StackEntry, { kind: 'layer' }>;
+  entry: LayerEntry;
   here: string;
   catalog: Catalog;
   onOverride?: Props['onOverride'];
@@ -99,9 +103,8 @@ const LayerCard = ({
       </div>
       {onOverride && (
         <p className="text-xs text-gray-600 dark:text-gray-400">
-          Copies this definition into <span className="font-mono [overflow-wrap:anywhere]">{here}</span> for editing.
-          After you save, changes to <span className="font-mono [overflow-wrap:anywhere]">{served.name}</span> in{' '}
-          <span className="font-mono [overflow-wrap:anywhere]">{served.source}</span> no longer reach this chamber.
+          Copies this definition into <Mono>{here}</Mono> for editing. After you save, changes to{' '}
+          <Mono>{served.name}</Mono> in <Mono>{served.source}</Mono> no longer reach this chamber.
         </p>
       )}
     </div>
@@ -141,18 +144,33 @@ const LayerCard = ({
   );
 };
 
+/** Retries loading the lineage, disabled while it runs. */
+const RetryButton = ({ onRetry }: { onRetry: Props['onRetry'] }) => {
+  const [retrying, setRetrying] = useState(false);
+  return (
+    <Button
+      size="xs"
+      color="light"
+      disabled={retrying}
+      onClick={() => {
+        setRetrying(true);
+        void onRetry().finally(() => setRetrying(false));
+      }}
+    >
+      Retry
+    </Button>
+  );
+};
+
 /**
  * The flags a chamber inherits, read only, grouped by the parent chamber that
  * serves each one, nearest first, with a line for each ancestor that
  * contributes nothing and why.
  */
-export const InheritedSection = ({ here, lineage, prov, loadError, retrying, onRetry, catalog, onOverride }: Props) => {
-  const inheriting = lineage?.inheritable === true;
-  const inherited = inheriting ? prov?.inherited : null;
-  const count = inherited ? Object.keys(inherited).length : null;
-  const broken = lineage?.error !== undefined;
-  const cards =
-    inheriting && !broken ? (prov?.stack ?? []).filter((e) => e.kind === 'layer' && e.served.length > 0) : [];
+export const InheritedSection = ({ here, prov, loadError, onRetry, catalog, onOverride }: Props) => {
+  const inheriting = prov?.inheritable === true;
+  const broken = prov?.inherited === null;
+  const count = inheriting && prov.inherited ? Object.keys(prov.inherited).length : null;
 
   return (
     <section aria-labelledby="inherited-heading" className="flex flex-col gap-3">
@@ -161,7 +179,7 @@ export const InheritedSection = ({ here, lineage, prov, loadError, retrying, onR
           <span>
             Inherited {count !== null && <span className="font-normal text-gray-600 dark:text-gray-400">{count}</span>}
           </span>
-          {cards.length > 0 && (
+          {prov?.stack.some(isCard) && (
             <Badge
               color="gray"
               size="xs"
@@ -181,7 +199,7 @@ export const InheritedSection = ({ here, lineage, prov, loadError, retrying, onR
               : 'Nothing is inherited here.'}
           </p>
         )}
-        {lineage && !inheriting && (
+        {prov && !inheriting && (
           <p className="text-sm text-gray-600 dark:text-gray-400">
             This server doesn&rsquo;t apply inheritance, so this chamber serves only its own flags. Flags in parent
             chambers are not served here.
@@ -193,17 +211,15 @@ export const InheritedSection = ({ here, lineage, prov, loadError, retrying, onR
         <Alert color="warning">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span>Couldn&rsquo;t load the parent chambers: {loadError}</span>
-            <Button size="xs" color="light" disabled={retrying} onClick={onRetry}>
-              Retry
-            </Button>
+            <RetryButton onRetry={onRetry} />
           </div>
         </Alert>
       )}
 
-      {inheriting && prov && (
+      {inheriting && (
         <ol aria-label="Parent chambers, nearest first" className="flex flex-col gap-3">
           {prov.stack.map((entry) =>
-            entry.kind === 'layer' && !broken && entry.status === 'ok' && entry.served.length > 0 ? (
+            isCard(entry) ? (
               <LayerCard key={entry.path} entry={entry} here={here} catalog={catalog} onOverride={onOverride} />
             ) : (
               <StackLine key={entry.path} entry={entry} here={here} broken={broken} />

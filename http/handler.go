@@ -389,7 +389,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 			// ?inherit=layers returns the chamber and each parent chamber its
 			// inherited view is built from, nearest first (see layers.go).
 			if r.URL.Query().Get("inherit") == "layers" {
-				serveLayers(w, r, strg, p, req.Path)
+				serveLayers(w, r, strg, p, req.Path, fail)
 				return
 			}
 			if isWatchRequest(r) {

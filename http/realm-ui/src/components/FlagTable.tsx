@@ -3,7 +3,7 @@ import { Badge } from 'flowbite-react';
 import { HiChevronRight } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
 import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
-import { describeDefinition, formatValue } from '../utils/describe';
+import { describeDefinition, formatValue, same } from '../utils/describe';
 import { Served } from '../utils/provenance';
 import { scheduleEnded } from '../utils/schedule';
 import { plural, trimSuffix } from '../utils/strings';
@@ -14,8 +14,6 @@ const ROW = 'sm:col-span-4 sm:grid sm:grid-cols-subgrid sm:items-center';
 /** The focus ring links use across the UI. */
 const FOCUS_RING = 'rounded focus-visible:outline-2 focus-visible:outline-primary-500';
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-
 /** A visual separator that screen readers read as a pause instead of a symbol. */
 export const Sep = ({ symbol = '·' }: { symbol?: string }) => (
   <>
@@ -24,6 +22,15 @@ export const Sep = ({ symbol = '·' }: { symbol?: string }) => (
   </>
 );
 
+/** A chamber path or flag key in monospace, wrapping anywhere so long ones never overflow. */
+export const Mono = ({ children }: { children: React.ReactNode }) => (
+  <span className="font-mono [overflow-wrap:anywhere]">{children}</span>
+);
+
+/** A chamber named in a sentence: "this chamber" when it is the one being viewed, else its path. */
+export const ChamberRef = ({ path, here }: { path: string; here: string }) =>
+  path === here ? 'this chamber' : <Mono>{path}</Mono>;
+
 /** A link to the chamber at path, shown as the path in monospace. */
 export const PathLink = ({ path, children }: { path: string; children?: React.ReactNode }) => (
   <Link
@@ -31,7 +38,7 @@ export const PathLink = ({ path, children }: { path: string; children?: React.Re
     className={`text-primary-700 hover:underline dark:text-primary-300 ${FOCUS_RING}`}
   >
     {children}
-    <span className="font-mono [overflow-wrap:anywhere]">{path}</span>
+    <Mono>{path}</Mono>
   </Link>
 );
 
@@ -112,7 +119,7 @@ const InsteadOf = ({ served }: { served: Served }) => {
   if (same(now, was)) {
     return (
       <span title={`Changes to it in ${path} no longer reach this chamber.`}>
-        same as <span className="font-mono [overflow-wrap:anywhere]">{path}</span>&rsquo;s definition
+        same as <Mono>{path}</Mono>&rsquo;s definition
       </span>
     );
   }
@@ -146,12 +153,7 @@ const DefinitionChain = ({ served, here, catalog }: { served: Served; here: stri
             </span>
             <div className="flex flex-col">
               <span>
-                Overridden by{' '}
-                {servedHere ? (
-                  'this chamber'
-                ) : (
-                  <span className="font-mono [overflow-wrap:anywhere]">{served.source}</span>
-                )}
+                Overridden by <ChamberRef path={served.source} here={here} />
               </span>
               {describeDefinition(flag, catalog).map((line) => (
                 <span key={line} className="text-gray-600 dark:text-gray-400">
@@ -234,7 +236,7 @@ export const FlagRow = ({
                 className="inline-flex align-middle font-medium hover:bg-primary-100 dark:hover:bg-primary-900"
                 title={`Replaces ${overridden}'s definition entirely: its default and all of its rules.`}
               >
-                Overrides <span className="font-mono [overflow-wrap:anywhere]">{overridden}</span>
+                Overrides <Mono>{overridden}</Mono>
               </Badge>
             )}
           </div>
@@ -273,24 +275,28 @@ export const FlagRow = ({
           {actions}
         </div>
       </div>
+      {/* The row stays for aria-controls; its contents are built only when opened. */}
       <div role="row" id={panelId} hidden={!open} className={ROW}>
-        <div role="cell" aria-colspan={4} className="px-4 pb-4 sm:col-span-4">
-          <div className="ml-1.5 flex flex-col gap-3 border-l-2 border-gray-300 pl-4 text-sm text-gray-700 dark:border-gray-600 dark:text-gray-300">
-            <div className="flex flex-col">
-              {describeDefinition(flag, catalog).map((line) => (
-                <span key={line}>{line}</span>
-              ))}
+        {open && (
+          <div role="cell" aria-colspan={4} className="px-4 pb-4 sm:col-span-4">
+            <div className="ml-1.5 flex flex-col gap-3 border-l-2 border-gray-300 pl-4 text-sm text-gray-700 dark:border-gray-600 dark:text-gray-300">
+              <div className="flex flex-col">
+                {describeDefinition(flag, catalog).map((line) => (
+                  <span key={line}>{line}</span>
+                ))}
+              </div>
+              {served && served.overrides.length > 0 && (
+                <DefinitionChain served={served} here={here} catalog={catalog} />
+              )}
+              {served && served.source === here && overridden && (
+                <p>
+                  If you delete it here, this chamber serves <Mono>{overridden}</Mono>&rsquo;s definition again.
+                </p>
+              )}
+              {detailActions}
             </div>
-            {served && served.overrides.length > 0 && <DefinitionChain served={served} here={here} catalog={catalog} />}
-            {served && served.source === here && overridden && (
-              <p>
-                If you delete it here, this chamber serves{' '}
-                <span className="font-mono [overflow-wrap:anywhere]">{overridden}</span>&rsquo;s definition again.
-              </p>
-            )}
-            {detailActions}
           </div>
-        </div>
+        )}
       </div>
     </>
   );

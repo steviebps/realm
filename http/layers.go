@@ -10,7 +10,6 @@ import (
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -77,36 +76,36 @@ func layersView(lin *storage.Lineage) layersResponse {
 	return resp
 }
 
-// serveLayers serves GET /v1/chambers/<path>?inherit=layers. The caller has
-// already checked that p may read path and that path is not reserved.
-func serveLayers(w http.ResponseWriter, r *http.Request, strg storage.Storage, p *auth.Principal, path string) {
+// serveLayers serves GET /v1/chambers/<path>?inherit=layers, responding to
+// errors with fail. The caller has already checked that p may read path and
+// that path is not reserved.
+func serveLayers(w http.ResponseWriter, r *http.Request, strg storage.Storage, p *auth.Principal, path string, fail func(int, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.String("realm.server.inherit", "layers"))
 
-	badRequest := func(err error) {
-		handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
-	}
 	if isWatchRequest(r) {
-		badRequest(errors.New("inherit=layers cannot be combined with watch=true"))
+		fail(http.StatusBadRequest, errors.New("inherit=layers cannot be combined with watch=true"))
 		return
 	}
+	// a client mistake, not a storage failure
 	if err := storage.ValidatePath(path); err != nil {
-		badRequest(err)
+		fail(http.StatusBadRequest, err)
 		return
 	}
 
 	lin, err := storage.ReadLineage(ctx, strg, path)
-	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		var nf *storage.NotFoundError
-		if errors.As(err, &nf) {
-			handleError(ctx, w, http.StatusNotFound, createResponseWithErrors(nil, []string{nf.Error()}))
-			return
-		}
+	var nf *storage.NotFoundError
+	switch {
+	case errors.As(err, &nf):
+		fail(http.StatusNotFound, nf)
+		return
+	case err != nil:
+		// the cause is logged, not sent: it can name storage internals
+		span.RecordError(err)
 		logger.ErrorCtx(ctx).Err(err).Str("path", path).Msg("could not read the chamber's parents")
-		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{"could not read the chamber's parent chambers"}))
+		fail(http.StatusInternalServerError, errors.New("could not read the chamber's parent chambers"))
 		return
 	}
 

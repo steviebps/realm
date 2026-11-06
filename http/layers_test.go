@@ -230,15 +230,7 @@ func TestLayersEndpoint(t *testing.T) {
 }
 
 func TestLayersWithoutInheritance(t *testing.T) {
-	stg, err := storage.NewBigCacheStorage(map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := NewHandler(context.Background(), HandlerConfig{Storage: stg})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := httptest.NewServer(h)
+	srv := httptest.NewServer(newTestHandler(t))
 	t.Cleanup(srv.Close)
 	seedLayersTree(t, nil, srv.URL)
 

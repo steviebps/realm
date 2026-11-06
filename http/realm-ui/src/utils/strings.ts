@@ -14,3 +14,6 @@ export const trimSuffix = (str: string, suffix: string) => {
 
 /** "1 rule", "2 rules". */
 export const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** The message of an error, or the thrown value as text. */
+export const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));

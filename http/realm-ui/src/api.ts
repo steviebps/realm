@@ -11,6 +11,7 @@ import {
   Revision,
 } from './models/response';
 import { encodePath, ensureTrailingSlash } from './utils/path';
+import { messageOf } from './utils/strings';
 
 const ACTOR_KEY = 'realm.actor';
 
@@ -94,8 +95,6 @@ export type LoadedChamber = {
 };
 
 const OLDER_SERVER = "This server doesn't report where inherited flags come from. Update it to see parent chambers.";
-
-const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /**
  * Loads the lineage of the chamber at path. It never throws: a failure is

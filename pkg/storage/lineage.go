@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"maps"
 	"path"
 
 	realm "github.com/steviebps/realm/pkg"
@@ -78,30 +77,22 @@ func (l *Lineage) merge(sources map[string]string) (*realm.Chamber, error) {
 		}
 	}
 
-	self := l.Layers[0]
+	// Layers are nearest first, so each flag comes from the first layer that
+	// defines it, whole: the chamber's own flags, then each ancestor's.
 	merged := &realm.Chamber{Rules: map[string]*realm.Flag{}}
-	if self.Chamber != nil && self.Chamber.Rules != nil {
-		merged.Rules = maps.Clone(self.Chamber.Rules)
-	}
-	record := func(from *realm.Chamber, at string) {
-		if sources == nil {
-			return
-		}
-		// merged and sources hold the same keys, so a key not yet in
-		// sources was just inherited from this layer.
-		for key := range from.Rules {
-			if _, ok := sources[key]; !ok {
-				sources[key] = at
-			}
-		}
-	}
-	record(merged, self.Path)
-	for _, layer := range l.Layers[1:] {
+	for _, layer := range l.Layers {
 		if layer.Chamber == nil {
 			continue
 		}
-		merged.InheritFrom(layer.Chamber)
-		record(layer.Chamber, layer.Path)
+		for key, flag := range layer.Chamber.Rules {
+			if _, ok := merged.Rules[key]; ok {
+				continue
+			}
+			merged.Rules[key] = flag
+			if sources != nil {
+				sources[key] = layer.Path
+			}
+		}
 	}
 	return merged, nil
 }
@@ -112,9 +103,6 @@ func (l *Lineage) merge(sources map[string]string) (*realm.Chamber, error) {
 func ReadLineage(ctx context.Context, s Storage, logicalPath string) (*Lineage, error) {
 	if layered, ok := s.(Layered); ok {
 		return layered.Layers(ctx, logicalPath)
-	}
-	if err := ValidatePath(logicalPath); err != nil {
-		return nil, err
 	}
 	entry, err := s.Get(ctx, logicalPath)
 	if err != nil {

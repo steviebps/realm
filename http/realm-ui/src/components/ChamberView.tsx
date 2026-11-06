@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
 import { HiClock, HiExclamation, HiOutlineInformationCircle, HiPencil, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +8,8 @@ import { diffChambers } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
 import { defaultValueFor } from '../utils/flags';
-import { ancestorsOf, provenance } from '../utils/provenance';
+import { ancestorsOf, get, provenance } from '../utils/provenance';
+import { messageOf } from '../utils/strings';
 import { HistoryDrawer } from './HistoryDrawer';
 import { FlagRow, FlagTable } from './FlagTable';
 import { InheritedSection } from './InheritedSection';
@@ -41,12 +42,10 @@ const attributesIn = (flags: Flag[]) =>
     (f.targeting ?? []).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
   );
 
-const messageOf = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 export const ChamberView = ({ path }: { path: string }) => {
   const queryClient = useQueryClient();
   const { canEdit } = useSession();
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['chamber', path],
     queryFn: () => getChamber(path),
   });
@@ -57,6 +56,11 @@ export const ChamberView = ({ path }: { path: string }) => {
   const [restoreError, setRestoreError] = useState<string | undefined>();
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<RuleType>('boolean');
+  // lineage is only set once its shape is checked, so layers[0] exists. Memoized so that typing in the
+  // form doesn't hand every flag row new provenance objects.
+  const lineage = data?.lineage ?? null;
+  const prov = useMemo(() => (lineage ? provenance(lineage) : null), [lineage]);
+  const override = useCallback((name: string, flag: Flag) => setEditing({ name, flag, isNew: true }), []);
 
   if (isLoading) return <Spinner aria-label="Loading chamber" size="lg" />;
   if (error instanceof Error) return <p className="text-red-700 dark:text-red-400">{error.message}</p>;
@@ -70,9 +74,6 @@ export const ChamberView = ({ path }: { path: string }) => {
 
   const own = data.own;
   const ownNames = Object.keys(own.rules).sort();
-  const { lineage } = data;
-  // lineage is only set once its shape is checked, so layers[0] exists.
-  const prov = lineage ? provenance(lineage) : null;
   const here = lineage?.layers[0].path ?? path;
   const inheritedFlags = Object.values(prov?.inherited ?? {}).map((s) => s.flag);
   const attributes = Array.from(
@@ -85,7 +86,7 @@ export const ChamberView = ({ path }: { path: string }) => {
     )
   ).sort();
   const typed = newName.trim();
-  const typedInherited = typed in own.rules ? undefined : prov?.inherited?.[typed];
+  const typedInherited = typed in own.rules ? undefined : get(prov?.inherited, typed);
 
   const propose = (title: string, apply: Proposal['apply']) => {
     setProposal({ title, apply, base: data, after: apply(structuredClone(own)), saving: false });
@@ -284,13 +285,11 @@ export const ChamberView = ({ path }: { path: string }) => {
       {ancestorsOf(here).length > 0 && (
         <InheritedSection
           here={here}
-          lineage={lineage}
           prov={prov}
           loadError={data.lineageError}
-          retrying={isFetching}
-          onRetry={() => void refetch()}
+          onRetry={refetch}
           catalog={catalog}
-          onOverride={canEdit ? (name, flag) => setEditing({ name, flag, isNew: true }) : undefined}
+          onOverride={canEdit ? override : undefined}
         />
       )}
 

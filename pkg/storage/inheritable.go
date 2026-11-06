@@ -77,12 +77,15 @@ func (s *InheritableStorage) Layers(ctx context.Context, logicalPath string) (*L
 		recordError(span, err)
 		return nil, err
 	}
+	// probe with a hypothetical child so the rule lives only in consultedAncestors
+	self := lin.Layers[0].Path
+	lin.InheritedByChildren = slices.Contains(consultedAncestors(self+"_/"), self)
 	span.SetAttributes(attribute.Int("realm.inheritable.layers", len(lin.Layers)))
 	return lin, nil
 }
 
 // consultedAncestors returns the ancestors of logicalPath whose flags its
-// inherited view includes, nearest first. Every ancestor is consulted except
+// inherited view includes, farthest first. Every ancestor is consulted except
 // the root chamber "/", which is never inherited.
 func consultedAncestors(logicalPath string) []string {
 	dir := path.Dir(path.Clean(logicalPath))
@@ -95,12 +98,12 @@ func consultedAncestors(logicalPath string) []string {
 		cur += utils.EnsureTrailingSlash(v)
 		ancestors = append(ancestors, cur)
 	}
-	slices.Reverse(ancestors)
 	return ancestors
 }
 
 // lineage reads the chamber at logicalPath and each ancestor its inherited
-// view consults. Ancestors are read farthest first; one that does not exist
+// view consults; InheritedByChildren is left for Layers. Ancestors are read
+// farthest first; one that does not exist
 // is recorded without a chamber, and one that fails to read aborts the read
 // so that its flags are never silently dropped. A chamber that cannot be
 // parsed is recorded with its error, which Lineage.Merge reports.
@@ -115,19 +118,15 @@ func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*
 		return nil, err
 	}
 
-	self := canonicalChamberPath(logicalPath)
-	ancestors := consultedAncestors(logicalPath)
-	layers := make([]Layer, 1+len(ancestors))
-	layers[0] = parseLayer(self, leafEntry.Value)
-	for i := len(ancestors) - 1; i >= 0; i-- {
-		p := ancestors[i]
+	layers := []Layer{parseLayer(canonicalChamberPath(logicalPath), leafEntry.Value)}
+	for _, p := range consultedAncestors(logicalPath) {
 		entry, err := s.source.Get(ctx, p)
 		if err != nil {
 			// an ancestor that does not exist contributes nothing, but a
 			// failed read must not silently drop the rules it holds
 			var nfError *NotFoundError
 			if errors.As(err, &nfError) {
-				layers[i+1] = Layer{Path: p}
+				layers = append(layers, Layer{Path: p})
 				continue
 			}
 			return nil, err
@@ -138,19 +137,16 @@ func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*
 			// included) from every chamber below it
 			layer.Err = fmt.Errorf("could not parse parent chamber %s: %w", p, layer.Err)
 		}
-		layers[i+1] = layer
+		layers = append(layers, layer)
 	}
+	// read farthest first, as the walk always has; lineages are nearest first
+	slices.Reverse(layers[1:])
 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return &Lineage{
-		Inheritable: true,
-		// probe with a hypothetical child so the rule lives only in consultedAncestors
-		InheritedByChildren: slices.Contains(consultedAncestors(self+"_/"), self),
-		Layers:              layers,
-	}, nil
+	return &Lineage{Inheritable: true, Layers: layers}, nil
 }
 
 // Put puts the entry at the specified logical path, creating or overwriting it

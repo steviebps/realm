@@ -27,18 +27,18 @@ export type StackEntry =
   | { kind: 'notInherited'; path: string; distance: number };
 
 export type Provenance = {
+  /** Whether the server applies inheritance at all. */
+  inheritable: boolean;
   /** Flags served from the chamber itself. */
   own: Record<string, Served>;
-  /** Flags served from parent chambers; null when the inherited view cannot be built. */
+  /** Flags served from parent chambers; null exactly when the inherited view cannot be built. */
   inherited: Record<string, Served> | null;
   /** Every ancestor of the chamber, nearest first. */
   stack: StackEntry[];
 };
 
-const depth = (path: string) => path.split('/').filter(Boolean).length;
-
 /** record[key] when record has its own key: a flag named "constructor" must not find Object.prototype's. */
-const get = <T>(record: Record<string, T> | null | undefined, key: string): T | undefined =>
+export const get = <T>(record: Record<string, T> | null | undefined, key: string): T | undefined =>
   record && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 
 /**
@@ -62,16 +62,17 @@ export const ancestorsOf = (path: string): string[] => {
  */
 export const provenance = (lineage: Lineage): Provenance => {
   const { layers } = lineage;
-  const self = layers[0];
   const broken = lineage.error !== undefined;
-  const sources = broken ? null : (lineage.sources ?? {});
+  // a broken view attributes nothing
+  const sources = broken ? {} : (lineage.sources ?? {});
+  const indexOf = new Map(layers.map((l, i) => [l.path, i]));
 
   const own: Record<string, Served> = {};
   const inherited: Record<string, Served> = {};
-  for (const [name, source] of Object.entries(sources ?? {})) {
-    const i = layers.findIndex((l) => l.path === source);
-    const flag = get(layers[i]?.rules, name);
-    if (!flag) continue;
+  for (const [name, source] of Object.entries(sources)) {
+    const i = indexOf.get(source);
+    const flag = i === undefined ? undefined : get(layers[i].rules, name);
+    if (i === undefined || !flag) continue;
     const overrides = layers.slice(i + 1).flatMap((l) => {
       const definition = get(l.rules, name);
       return definition ? [{ path: l.path, flag: definition }] : [];
@@ -81,9 +82,11 @@ export const provenance = (lineage: Lineage): Provenance => {
     else inherited[name] = served;
   }
 
-  const stack = ancestorsOf(self.path).map((path): StackEntry => {
-    const distance = depth(self.path) - depth(path);
-    const layer = layers.slice(1).find((l) => l.path === path);
+  // ancestorsOf is nearest first, so the index says how many levels up
+  const stack = ancestorsOf(layers[0].path).map((path, i): StackEntry => {
+    const distance = i + 1;
+    const at = indexOf.get(path);
+    const layer = at === undefined ? undefined : layers[at];
     if (!layer) return { kind: 'notInherited', path, distance };
     const keys = Object.keys(layer.rules ?? {}).sort();
     return {
@@ -94,8 +97,8 @@ export const provenance = (lineage: Lineage): Provenance => {
       error: layer.error,
       defined: keys.length,
       served: keys.flatMap((k) => {
-        const served = get(sources, k) === path ? get(inherited, k) : undefined;
-        return served ? [served] : [];
+        const served = get(inherited, k);
+        return served?.source === path ? [served] : [];
       }),
       overridden: keys.flatMap((k) => {
         const by = get(sources, k);
@@ -104,5 +107,5 @@ export const provenance = (lineage: Lineage): Provenance => {
     };
   });
 
-  return { own, inherited: broken ? null : inherited, stack };
+  return { inheritable: lineage.inheritable, own, inherited: broken ? null : inherited, stack };
 };
