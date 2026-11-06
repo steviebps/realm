@@ -77,3 +77,14 @@ homebrew_casks:
       using: ":homebrew_curl"
     homepage: "https://github.com/steviebps/realm"
     license: "Apache 2.0"
+    # Until the binaries are signed and notarized (MACOS_NOTARIZE above),
+    # Gatekeeper blocks the quarantined binary Homebrew installs; clear the
+    # quarantine flag so it runs. Signed releases leave the flag alone.
+    hooks:
+      post:
+        install_steps: |
+          {{- if ne (envOrDefault "MACOS_NOTARIZE" "") "true" }}
+          if OS.mac?
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/realm"]
+          end
+          {{- end }}

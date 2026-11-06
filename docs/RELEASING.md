@@ -82,8 +82,13 @@ in System Settings → Privacy & Security. GoReleaser signs the macOS binaries
 with a Developer ID certificate and notarizes them with Apple (from the
 Linux runner; no Mac needed in CI) when the repository variable
 `MACOS_NOTARIZE` is `true`. With it on, a missing secret or a rejection by
-Apple fails the release instead of shipping unsigned binaries. To turn it
-on:
+Apple fails the release instead of shipping unsigned binaries.
+
+Until then, the Homebrew cask removes the quarantine flag from the binary
+after installing it (a `postflight_steps` block, run by Homebrew 7 or
+later), so Homebrew users aren't blocked. Binaries downloaded from the
+GitHub release still are. Releases made with `MACOS_NOTARIZE` on leave
+that block empty. To turn signing on:
 
 1. **Join the [Apple Developer Program](https://developer.apple.com/programs/)**
    ($99 a year). An individual membership works; the certificate then
