@@ -345,7 +345,8 @@ realm client list /                  # list the chambers below a path
 realm client get /prod/checkout/     # show one chamber as JSON
 realm client put /prod/checkout/     # make an empty chamber (fails if it exists)
 realm client put /prod/checkout/ -f checkout.json  # create or replace from a file ("-" for stdin)
-realm client delete /prod/checkout/  # delete a chamber
+realm client delete /prod/checkout/  # delete a chamber (the chambers below it are kept)
+realm client delete -r /prod/        # delete a chamber and every chamber below it
 ```
 
 > [!NOTE]
@@ -363,7 +364,8 @@ realm client delete /prod/checkout/  # delete a chamber
 | `GET /v1/chambers/<path>?watch=true` | Streams the chamber as server-sent events. |
 | `POST /v1/chambers/<path>` | Creates or replaces the chamber. |
 | `PATCH /v1/chambers/<path>` | Merges the body into the chamber. |
-| `DELETE /v1/chambers/<path>` | Deletes the chamber. |
+| `DELETE /v1/chambers/<path>` | Deletes the chamber. The chambers below it are kept. |
+| `DELETE /v1/chambers/<path>?recursive=true` | Deletes the chamber and every chamber below it in one change, and returns the deleted paths. Refused for `/`. |
 | `GET /v1/history/<path>` | Returns the change history of the chamber. |
 | `POST /v1/evaluate/<path>` | Evaluates every flag for the context in the body. Returns only the values. |
 | `POST /v1/evaluate/<path>?watch=true` | Streams the evaluated values as server-sent events. |
