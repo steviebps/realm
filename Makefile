@@ -19,6 +19,10 @@ build: ## Build the binary (UI not embedded)
 ui: ## Build the React UI (produces $(UI_DIR)/dist)
 	cd $(UI_DIR) && npm ci && npm run build
 
+.PHONY: ui-test
+ui-test: ## Lint and test the React UI (tests need Node 22.18 or later)
+	cd $(UI_DIR) && npm ci && npm run lint && npm test
+
 .PHONY: build-ui
 build-ui: ui ## Build the UI, then the binary with the UI embedded
 	go build -ldflags "-s -w" -tags=ui -o $(BINARY) .

@@ -41,12 +41,19 @@ export type FlagChange = {
   lines: { kind: 'add' | 'remove' | 'info'; text: string }[];
 };
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** Whether two JSON values are equal; server JSON has a stable key order. */
+export const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 const describeFlag = (flag: Flag, catalog: Catalog) => [
   `Default: ${formatValue(flag.value)}`,
   ...(flag.targeting ?? []).map((r, i) => `Rule ${i + 1}: ${describeRule(r, catalog)}`),
 ];
+
+/** A flag's definition in plain language: what every context gets, or its default and each rule. */
+export const describeDefinition = (flag: Flag, catalog: Catalog): string[] =>
+  flag.targeting?.length
+    ? describeFlag(flag, catalog)
+    : [`No targeting: every context gets ${formatValue(flag.value)}.`];
 
 /**
  * Computes a human-readable diff between two chambers, flag by flag, so an

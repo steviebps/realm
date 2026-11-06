@@ -5,11 +5,13 @@ import {
   ChamberResponse,
   CreatedKey,
   KeyAccess,
+  Lineage,
   ListResponse,
   Me,
   Revision,
 } from './models/response';
 import { encodePath, ensureTrailingSlash } from './utils/path';
+import { messageOf } from './utils/strings';
 
 const ACTOR_KEY = 'realm.actor';
 
@@ -85,27 +87,42 @@ export const listChambers = async (path: string): Promise<string[]> => {
 export type LoadedChamber = {
   /** The chamber as stored at this path; this is what gets edited. */
   own: Chamber | null;
-  /** The chamber including rules inherited from parent chambers. */
-  merged: Chamber | null;
   etag: string | null;
+  /** The chamber and the parent chambers it inherits from, or null when they could not be loaded. */
+  lineage: Lineage | null;
+  /** Why the lineage could not be loaded. */
+  lineageError: string | null;
+};
+
+const OLDER_SERVER = "This server doesn't report where inherited flags come from. Update it to see parent chambers.";
+
+/**
+ * Loads the lineage of the chamber at path. It never throws: a failure is
+ * returned as a message, so that the chamber stays editable without it.
+ */
+const getLineage = async (path: string): Promise<Pick<LoadedChamber, 'lineage' | 'lineageError'>> => {
+  try {
+    const lineage = await dataFrom<Lineage | undefined>(await fetch(chamberURL(path, '?inherit=layers')));
+    // A server that predates ?inherit=layers answers with the inherited chamber instead.
+    if (typeof lineage?.inheritable !== 'boolean' || !Array.isArray(lineage.layers) || lineage.layers.length === 0) {
+      return { lineage: null, lineageError: OLDER_SERVER };
+    }
+    return { lineage, lineageError: null };
+  } catch (err) {
+    return { lineage: null, lineageError: messageOf(err) };
+  }
 };
 
 export const getChamber = async (path: string): Promise<LoadedChamber> => {
-  // The root chamber has no parents, so its inherited view is identical.
-  const isRoot = ensureTrailingSlash(path) === '/';
-  const [ownRes, mergedRes] = await Promise.all([
-    fetch(chamberURL(path, '?inherit=false')),
-    isRoot ? null : fetch(chamberURL(path)),
-  ]);
+  const [ownRes, lineage] = await Promise.all([fetch(chamberURL(path, '?inherit=false')), getLineage(path)]);
   if (ownRes.status === 404) {
-    return { own: null, merged: null, etag: null };
+    return { own: null, etag: null, lineage: null, lineageError: null };
   }
   if (!ownRes.ok) {
     throw await errorFrom(ownRes);
   }
   const own = (await ownRes.json()) as ChamberResponse;
-  const merged = mergedRes?.ok ? ((await mergedRes.json()) as ChamberResponse) : own;
-  return { own: own.data ?? null, merged: merged.data ?? null, etag: ownRes.headers.get('ETag') };
+  return { own: own.data ?? null, etag: ownRes.headers.get('ETag'), ...lineage };
 };
 
 // The server records an unset actor as anonymous.

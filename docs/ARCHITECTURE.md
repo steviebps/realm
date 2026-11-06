@@ -81,7 +81,11 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
 - **`http/handler.go` + `http/agent.go`** — map HTTP methods to operations
   (`GET`→get/list, `POST`→put, `PATCH`→patch-merge via `OverwriteFrom`,
   `DELETE`→delete). `GET ?inherit=false` returns the chamber as stored,
-  without inherited flags (editors use this).
+  without inherited flags (editors use this). `GET ?inherit=layers`
+  (`http/layers.go`) returns the lineage the inherited view is built from
+  (`storage.Layered`): the chamber, each parent chamber it consults, and which
+  of them serves each flag; the UI uses it to show where each flag comes from
+  and which flags override a parent's.
 - **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as
   stored at its path (the inherited view carries none); writes honor `If-Match` / `If-None-Match: *` and return `412` on
   mismatch, checked under a per-path lock (`http/meta.go`). Every write is
@@ -191,10 +195,14 @@ Two wrappers compose backends:
   (e.g. `bigcache` over `boltdb`). It refuses a `postgres` source: another
   replica's write would leave this replica's cache stale.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
-  `Get`, merges a chamber with all of its ancestors along the path so child
-  chambers inherit parent rules. This hierarchy is the current stand-in for
-  "environments / zones". It implements `Unwrap()` so the server can reach the
-  raw storage for ETags, history, and the catalog.
+  `Get`, merges a chamber with its ancestors along the path (every ancestor
+  except the root chamber `/`, which is never inherited) so child chambers
+  inherit parent rules; the nearest definition of a flag wins, whole. This
+  hierarchy is the current stand-in for "environments / zones". `Get` is built
+  from `Layers` (the chamber plus each consulted ancestor, nearest first, in
+  `lineage.go`) and `Lineage.Merge`, so the layers view and the merged view
+  cannot disagree. It implements `Unwrap()` so the server can reach the raw
+  storage for ETags, history, and the catalog.
 
 Recommended production setups: `postgres` for several replicas, or
 `cacheable` (`bigcache` over `s3`) as a single replica. SDKs evaluate in
