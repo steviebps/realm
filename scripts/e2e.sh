@@ -69,6 +69,10 @@ echo "== HTTP API"
 code=$(status GET "$addr/v1/chambers/%252F_realm%252Fkeys?inherit=false")
 [ "$code" = 400 ] || [ "$code" = 404 ] || fail "reserved path reachable: $code"
 curl -s -X POST "$addr/v1/evaluate/e2e/" -d '{"key":"vip"}' | grep -Eq '"value": ?true' || fail "evaluate"
+"$bin" client put /e2e-layers/child/ --address "$addr" >/dev/null
+layers=$(curl -s "$addr/v1/chambers/e2e-layers/child/?inherit=layers")
+echo "$layers" | grep -Eq '"status": ?"missing"' && echo "$layers" | grep -Eq '"sources": ?\{\}' ||
+  fail "inherit=layers: $layers"
 
 echo "== Go SDK"
 (cd "$root" && REALM_E2E_ADDRESS="$addr" go test -count=1 -run '^TestE2E' ./pkg/)

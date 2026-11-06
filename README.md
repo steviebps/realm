@@ -360,6 +360,7 @@ realm client delete -r /prod/        # delete a chamber and every chamber below 
 |---|---|
 | `GET /v1/chambers/<path>` | Returns the chamber, with the flags that it inherits. |
 | `GET /v1/chambers/<path>?inherit=false` | Returns the chamber as stored, with an `ETag`. |
+| `GET /v1/chambers/<path>?inherit=layers` | Returns the chamber and each parent chamber its inherited view consults, nearest first, and which chamber serves each flag. Needs read access to each of those parent chambers. |
 | `GET /v1/chambers/<path>?list=true` | Lists the chambers below the path. |
 | `GET /v1/chambers/<path>?watch=true` | Streams the chamber as server-sent events. |
 | `POST /v1/chambers/<path>` | Creates or replaces the chamber. |

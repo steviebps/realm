@@ -141,11 +141,12 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: http/realm-ui/package-lock.json
-      - name: Lint, typecheck, and build the UI
+      - name: Lint, test, typecheck, and build the UI
         working-directory: http/realm-ui
         run: |
           npm ci
           npm run lint
+          npm test
           npm run build
       - uses: actions/setup-go@v7
         with:

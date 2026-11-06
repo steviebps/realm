@@ -48,6 +48,12 @@ const describeFlag = (flag: Flag, catalog: Catalog) => [
   ...(flag.targeting ?? []).map((r, i) => `Rule ${i + 1}: ${describeRule(r, catalog)}`),
 ];
 
+/** A flag's definition in plain language: what every context gets, or its default and each rule. */
+export const describeDefinition = (flag: Flag, catalog: Catalog): string[] =>
+  flag.targeting?.length
+    ? describeFlag(flag, catalog)
+    : [`No targeting: every context gets ${formatValue(flag.value)}.`];
+
 /**
  * Computes a human-readable diff between two chambers, flag by flag, so an
  * editor can confirm exactly what will change before saving.

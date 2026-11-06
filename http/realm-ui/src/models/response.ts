@@ -53,6 +53,38 @@ export type Flag = {
   targeting?: TargetingRule[];
 };
 
+/**
+ * How a chamber in a lineage was read: `ok` (its rules hold every flag it
+ * defines), `missing` (no chamber at the path; it contributes nothing), or
+ * `invalid` (it cannot be parsed; `error` says why).
+ */
+export type LayerStatus = 'ok' | 'missing' | 'invalid';
+
+/** One chamber that a path's inherited view is built from. */
+export type Layer = {
+  /** Canonical path, with a trailing slash. */
+  path: string;
+  status: LayerStatus;
+  /** Every flag the chamber defines (`ok` only; omitted when it has none). */
+  rules?: Rules;
+  /** Why the chamber cannot be parsed (`invalid` only). */
+  error?: string;
+};
+
+/** The chamber and each parent chamber its inherited view consults, as the server reports them. */
+export type Lineage = {
+  /** Whether the server applies inheritance at all. */
+  inheritable: boolean;
+  /** Whether chambers below this one inherit its flags. */
+  inheritedByChildren: boolean;
+  /** The chamber itself, then each consulted parent, nearest first (missing ones included). */
+  layers: Layer[];
+  /** Flag key → path of the chamber whose definition is served here; null exactly when `error` is set. */
+  sources: Record<string, string> | null;
+  /** Why the inherited view cannot be built, as clients loading this chamber see it. */
+  error?: string;
+};
+
 export type Revision = {
   revision: number;
   time: string;

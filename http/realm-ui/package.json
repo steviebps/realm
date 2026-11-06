@@ -10,6 +10,7 @@
     "build:watch": "tsc && vite build --watch",
     "lint": "eslint src --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint --fix src --report-unused-disable-directives --max-warnings 0",
+    "test": "node --test 'src/**/*.test.ts'",
     "preview": "vite preview"
   },
   "dependencies": {

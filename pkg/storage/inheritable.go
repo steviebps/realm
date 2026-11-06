@@ -3,14 +3,13 @@ package storage
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/steviebps/realm/helper/logging"
-	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -24,6 +23,7 @@ type InheritableStorage struct {
 
 var (
 	_ Storage = (*InheritableStorage)(nil)
+	_ Layered = (*InheritableStorage)(nil)
 )
 
 // NewInheritableStorage returns a InheritableStorage with the source Storage
@@ -42,77 +42,115 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
-	if err := ValidatePath(logicalPath); err != nil {
+	lin, err := s.lineage(ctx, logicalPath)
+	if err != nil {
 		recordError(span, err)
+		return nil, err
+	}
+	merged, err := lin.Merge()
+	if err != nil {
+		recordError(span, err)
+		return nil, err
+	}
+
+	buf := new(bytes.Buffer)
+	if err := utils.WriteInterfaceWith(buf, merged, false); err != nil {
+		recordError(span, err)
+		return nil, err
+	}
+
+	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
+}
+
+// Layers returns the chamber at logicalPath and each ancestor its inherited
+// view consults, nearest first. Get is built from the same lineage, so the
+// two cannot disagree.
+func (s *InheritableStorage) Layers(ctx context.Context, logicalPath string) (*Lineage, error) {
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Layers", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
+	defer span.End()
+
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("layers operation")
+
+	lin, err := s.lineage(ctx, logicalPath)
+	if err != nil {
+		recordError(span, err)
+		return nil, err
+	}
+	span.SetAttributes(attribute.Int("realm.inheritable.layers", len(lin.Layers)))
+	return lin, nil
+}
+
+// consultedAncestors returns the ancestors of logicalPath whose flags its
+// inherited view includes, nearest first. Every ancestor is consulted except
+// the root chamber "/", which is never inherited.
+func consultedAncestors(logicalPath string) []string {
+	dir := path.Dir(path.Clean(logicalPath))
+	if dir == "/" {
+		return nil
+	}
+	var ancestors []string
+	cur := "/"
+	for _, v := range strings.Split(strings.TrimPrefix(dir, "/"), "/") {
+		cur += utils.EnsureTrailingSlash(v)
+		ancestors = append(ancestors, cur)
+	}
+	slices.Reverse(ancestors)
+	return ancestors
+}
+
+// lineage reads the chamber at logicalPath and each ancestor its inherited
+// view consults. Ancestors are read farthest first; one that does not exist
+// is recorded without a chamber, and one that fails to read aborts the read
+// so that its flags are never silently dropped. A chamber that cannot be
+// parsed is recorded with its error, which Lineage.Merge reports.
+func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*Lineage, error) {
+	if err := ValidatePath(logicalPath); err != nil {
 		return nil, err
 	}
 
 	// ensure the last entry of the path exists before retrieving its parents
 	leafEntry, err := s.source.Get(ctx, logicalPath)
 	if err != nil {
-		recordError(span, err)
 		return nil, err
 	}
 
-	leaf := &realm.Chamber{}
-	if err := json.Unmarshal(leafEntry.Value, leaf); err != nil {
-		recordError(span, err)
-		return nil, err
-	}
-
-	clean := path.Clean(logicalPath)
-	dir := path.Dir(clean)
-
-	// does the leaf contain parents?
-	if dir != "/" {
-		cur := "/"
-		pathChunks := strings.Split(strings.TrimPrefix(dir, "/"), "/")
-
-		c := &realm.Chamber{Rules: map[string]*realm.Flag{}}
-		for _, v := range pathChunks {
-			cur += utils.EnsureTrailingSlash(v)
-			entry, err := s.source.Get(ctx, cur)
-			if err != nil {
-				recordError(span, err)
-				// an ancestor that does not exist contributes nothing, but a
-				// failed read must not silently drop the rules it holds
-				var nfError *NotFoundError
-				if errors.As(err, &nfError) {
-					continue
-				}
-				return nil, err
+	self := canonicalChamberPath(logicalPath)
+	ancestors := consultedAncestors(logicalPath)
+	layers := make([]Layer, 1+len(ancestors))
+	layers[0] = parseLayer(self, leafEntry.Value)
+	for i := len(ancestors) - 1; i >= 0; i-- {
+		p := ancestors[i]
+		entry, err := s.source.Get(ctx, p)
+		if err != nil {
+			// an ancestor that does not exist contributes nothing, but a
+			// failed read must not silently drop the rules it holds
+			var nfError *NotFoundError
+			if errors.As(err, &nfError) {
+				layers[i+1] = Layer{Path: p}
+				continue
 			}
-
-			curChamber := &realm.Chamber{Rules: map[string]*realm.Flag{}}
-			if err := json.Unmarshal(entry.Value, curChamber); err != nil {
-				// skipping it would silently drop its flags (kill switches
-				// included) from every chamber below it
-				err = fmt.Errorf("could not parse parent chamber %s: %w", cur, err)
-				recordError(span, err)
-				return nil, err
-			}
-			curChamber.InheritFrom(c)
-			c = curChamber
+			return nil, err
 		}
-
-		// inherit all of the parents
-		leaf.InheritFrom(c)
+		layer := parseLayer(p, entry.Value)
+		if layer.Err != nil {
+			// skipping it would silently drop its flags (kill switches
+			// included) from every chamber below it
+			layer.Err = fmt.Errorf("could not parse parent chamber %s: %w", p, layer.Err)
+		}
+		layers[i+1] = layer
 	}
 
-	select {
-	case <-ctx.Done():
-		recordError(span, ctx.Err())
-		return nil, ctx.Err()
-	default:
-	}
-
-	buf := new(bytes.Buffer)
-	if err := utils.WriteInterfaceWith(buf, leaf, false); err != nil {
-		recordError(span, err)
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
+	return &Lineage{
+		Inheritable: true,
+		// probe with a hypothetical child so the rule lives only in consultedAncestors
+		InheritedByChildren: slices.Contains(consultedAncestors(self+"_/"), self),
+		Layers:              layers,
+	}, nil
 }
 
 // Put puts the entry at the specified logical path, creating or overwriting it

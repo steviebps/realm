@@ -161,6 +161,11 @@ A key works only for chambers at its path or beneath it (`/prod/` covers
 `/prod/` and `/prod/checkout/`, but not `/production/`). Keys cannot manage
 keys or change the catalog.
 
+`GET /v1/chambers/<path>?inherit=layers` lists parent chambers' own flags, so
+it also needs read access to every parent chamber it lists. A key scoped
+beneath a parent gets `403` there; the inherited view
+(`GET /v1/chambers/<path>`) is unchanged.
+
 The attribute catalog belongs to the whole realm, not to a chamber, and its
 labels can name every tenant or location. So only `read` and `write` keys
 scoped to `/` may read it. A key scoped to `/prod/` cannot, even though some
