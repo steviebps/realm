@@ -20,7 +20,7 @@ func runKeys(t *testing.T, addr, token string, args ...string) (string, string, 
 	var stdout, stderr bytes.Buffer
 	rootCmd.SetOut(&stdout)
 	rootCmd.SetErr(&stderr)
-	rootCmd.SetArgs(append(append([]string{"client", "keys"}, args...), "--address", addr, "--token", token, "--notraces"))
+	rootCmd.SetArgs(append(append([]string{"client", "keys"}, args...), "--address", addr, "--token", token))
 	t.Cleanup(func() {
 		rootCmd.SetArgs(nil)
 		_ = rootCmd.PersistentFlags().Set("token", "")
