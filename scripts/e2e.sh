@@ -45,11 +45,11 @@ echo "== CLI"
 cat >"$work/chamber.json" <<'EOF'
 {"rules":{"beta":{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"key","op":"in","values":["vip"]}]}]}}}
 EOF
-"$bin" client put /e2e/ -f "$work/chamber.json" --address "$addr" --notraces >/dev/null
-if "$bin" client put /e2e/ --address "$addr" --notraces >/dev/null 2>&1; then
+"$bin" client put /e2e/ -f "$work/chamber.json" --address "$addr" >/dev/null
+if "$bin" client put /e2e/ --address "$addr" >/dev/null 2>&1; then
   fail "client put without --file replaced an existing chamber"
 fi
-"$bin" client get /e2e/ --address "$addr" --notraces | grep -q '"beta"' || fail "client get"
+"$bin" client get /e2e/ --address "$addr" | grep -q '"beta"' || fail "client get"
 
 echo "== HTTP API"
 [ "$(status POST "$addr/v1/chambers/e2e/" '{"rulez":{}}')" = 400 ] || fail "unknown field accepted"

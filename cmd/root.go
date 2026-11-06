@@ -2,12 +2,14 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/steviebps/realm/helper/logging"
 	realmtrace "github.com/steviebps/realm/trace"
 )
@@ -36,8 +38,54 @@ func init() {
 	rootCmd.SetVersionTemplate(`{{printf "%s\n" .Version}}`)
 	rootCmd.PersistentFlags().StringP("config", "c", "", "realm configuration file (or set $"+ConfigEnv+"; default: "+strings.Join(DefaultConfigPaths(), ", ")+")")
 	rootCmd.PersistentFlags().BoolP("debug", "d", false, "run realm in debug mode")
-	rootCmd.PersistentFlags().Bool("stdouttraces", false, "use stdout for trace exporter")
-	rootCmd.PersistentFlags().Bool("notraces", false, "disable tracing")
+	addTracesFlags(rootCmd.PersistentFlags())
+}
+
+// TracesEnv names the environment variable that chooses the telemetry
+// exporter when --traces is not given.
+const TracesEnv = "REALM_TRACES"
+
+// Telemetry exporters accepted by --traces and $REALM_TRACES.
+const (
+	tracesOff    = "off"
+	tracesOTLP   = "otlp"
+	tracesStdout = "stdout"
+)
+
+// addTracesFlags registers --traces and the deprecated flags it replaces.
+func addTracesFlags(flags *pflag.FlagSet) {
+	flags.String("traces", tracesOff, "export traces and metrics: off, otlp, or stdout (or set $"+TracesEnv+")")
+	// Kept so existing invocations keep working; --traces replaces both.
+	flags.Bool("stdouttraces", false, "use stdout for trace exporter")
+	flags.Bool("notraces", false, "disable tracing")
+	_ = flags.MarkDeprecated("stdouttraces", "use --traces=stdout")
+	_ = flags.MarkDeprecated("notraces", "tracing is off by default")
+}
+
+// tracesMode returns the telemetry exporter to use: --traces, then the
+// deprecated --notraces / --stdouttraces, then $REALM_TRACES, else off.
+// Telemetry is opt-in so that commands never try to reach a collector nobody
+// configured.
+func tracesMode(flags *pflag.FlagSet) (string, error) {
+	mode := tracesOff
+	switch {
+	case flags.Changed("traces"):
+		mode, _ = flags.GetString("traces")
+	case flags.Changed("notraces"):
+		// Off already; --notraces only ever turned telemetry off.
+	case flags.Changed("stdouttraces"):
+		if stdout, _ := flags.GetBool("stdouttraces"); stdout {
+			mode = tracesStdout
+		}
+	case os.Getenv(TracesEnv) != "":
+		mode = os.Getenv(TracesEnv)
+	}
+	switch mode = strings.ToLower(strings.TrimSpace(mode)); mode {
+	case tracesOff, tracesOTLP, tracesStdout:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid traces value %q: want %s, %s, or %s", mode, tracesOff, tracesOTLP, tracesStdout)
+	}
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -70,20 +118,18 @@ func persistentPreRunE(cmd *cobra.Command, args []string) error {
 	logger := logging.Ctx(ctx)
 	flags := cmd.Flags()
 	debug, _ := flags.GetBool("debug")
-	stdoutTraces, _ := flags.GetBool("stdouttraces")
-	noTraces, _ := flags.GetBool("notraces")
 
 	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 	if debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
 
-	// The server exports telemetry unless told not to; other commands only
-	// when a collector is configured, so CLI runs do not log export failures.
-	devMode, _ := flags.GetBool("dev")
-	wanted := cmd == serverCmd || stdoutTraces || os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" || os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") != ""
-	if wanted && !devMode && !noTraces {
-		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, stdoutTraces, Version)
+	traces, err := tracesMode(flags)
+	if err != nil {
+		return err
+	}
+	if traces != tracesOff {
+		shutdownFn, err = realmtrace.SetupOtelInstrumentation(ctx, traces == tracesStdout, Version)
 		if err != nil {
 			return err
 		}
