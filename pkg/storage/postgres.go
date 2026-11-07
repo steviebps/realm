@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,11 +39,19 @@ type PostgresStorage struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// mu guards watchers, the running Watches, which Health and the feed age
+	// metric inspect.
+	mu       sync.Mutex
+	watchers map[*watcher]struct{}
+	// metrics is the registration of the feed age callback, if any.
+	metrics metric.Registration
 }
 
 var (
-	_ Transactional = (*PostgresStorage)(nil)
-	_ Watchable     = (*PostgresStorage)(nil)
+	_ Transactional  = (*PostgresStorage)(nil)
+	_ Watchable      = (*PostgresStorage)(nil)
+	_ HealthReporter = (*PostgresStorage)(nil)
 )
 
 const (
@@ -70,7 +80,31 @@ var (
 	maxWatchRetryInterval = 30 * time.Second
 	// pruneInterval is how often a Watch deletes old change records.
 	pruneInterval = 10 * time.Minute
+	// feedTimeout bounds every round trip on a Watch's connection (LISTEN, a
+	// catch-up, a prune) and every attempt to connect it. A connection that
+	// does not answer in time is treated as dead and replaced, so a database
+	// or network that stops responding without closing the connection cannot
+	// stall the feed.
+	feedTimeout = 10 * time.Second
+	// feedStaleAfter is how long a Watch may go without catching up with the
+	// database before Health reports it.
+	feedStaleAfter = 30 * time.Second
 )
+
+// keepAlive probes idle connections, so the operating system notices a
+// database host that has gone away within about half a minute.
+var keepAlive = net.KeepAliveConfig{Enable: true, Idle: 15 * time.Second, Interval: 5 * time.Second, Count: 3}
+
+// sessionDefaults are settings realm gives its sessions when nothing else has
+// set them (the server's configuration, the database or role, or the
+// connection string). They bound how long a session that died in the middle
+// of a transaction, or a statement waiting on a lock, can hold the locks that
+// every write needs, such as the revision counter.
+var sessionDefaults = [][2]string{
+	{"idle_in_transaction_session_timeout", "30s"},
+	{"lock_timeout", "15s"},
+	{"statement_timeout", "30s"},
+}
 
 const schema = `
 CREATE TABLE IF NOT EXISTS realm_entries (
@@ -87,8 +121,10 @@ CREATE TABLE IF NOT EXISTS realm_revision (
 	id  boolean PRIMARY KEY DEFAULT true CHECK (id),
 	rev bigint NOT NULL
 );
-INSERT INTO realm_revision (id, rev) VALUES (true, 0) ON CONFLICT DO NOTHING;
-`
+` + seedRevision
+
+// seedRevision creates the revision counter's row.
+const seedRevision = `INSERT INTO realm_revision (id, rev) VALUES (true, 0) ON CONFLICT DO NOTHING;`
 
 // NewPostgresStorage creates PostgreSQL-backed storage, creating its tables
 // if needed. Options:
@@ -101,6 +137,11 @@ INSERT INTO realm_revision (id, rev) VALUES (true, 0) ON CONFLICT DO NOTHING;
 // Watching needs one connection that is not behind a transaction-pooling
 // proxy (such as PgBouncer in transaction mode), because LISTEN holds a
 // session.
+//
+// Creating the tables needs the CREATE privilege on the schema; once they
+// exist, a role with SELECT, INSERT, UPDATE, and DELETE on them suffices.
+// Sessions get the timeouts in sessionDefaults unless the server, database,
+// role, or url sets them.
 func NewPostgresStorage(conf map[string]string) (Storage, error) {
 	cfg, err := pgxpool.ParseConfig(conf["url"])
 	if err != nil {
@@ -113,6 +154,10 @@ func NewPostgresStorage(conf map[string]string) (Storage, error) {
 		}
 		cfg.MaxConns = int32(n)
 	}
+	// keep connect_timeout, which ParseConfig gives the dialer it replaces
+	dialer := &net.Dialer{Timeout: cfg.ConnConfig.ConnectTimeout, KeepAliveConfig: keepAlive}
+	cfg.ConnConfig.DialFunc = dialer.DialContext
+	cfg.AfterConnect = applySessionDefaults
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -126,16 +171,57 @@ func NewPostgresStorage(conf map[string]string) (Storage, error) {
 	}
 
 	sctx, scancel := context.WithCancel(context.Background())
-	return &PostgresStorage{
-		pool:   pool,
-		tracer: otel.Tracer("github.com/steviebps/realm"),
-		ctx:    sctx,
-		cancel: scancel,
-	}, nil
+	p := &PostgresStorage{
+		pool:     pool,
+		tracer:   otel.Tracer("github.com/steviebps/realm"),
+		ctx:      sctx,
+		cancel:   scancel,
+		watchers: map[*watcher]struct{}{},
+	}
+	// without a working meter, the feed simply goes unmeasured
+	p.metrics, _ = otel.Meter("github.com/steviebps/realm").RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		if age, ok := p.feedAge(); ok {
+			o.ObserveFloat64(feedAgeGauge, age.Seconds())
+		}
+		return nil
+	}, feedAgeGauge)
+	return p, nil
 }
 
+// applySessionDefaults gives a new connection each of sessionDefaults that
+// nothing else has set. It is best effort: a server that refuses it (one
+// that is only compatible with Postgres, say) runs without the timeouts.
+func applySessionDefaults(ctx context.Context, conn *pgx.Conn) error {
+	names := make([]string, len(sessionDefaults))
+	values := make([]string, len(sessionDefaults))
+	for i, d := range sessionDefaults {
+		names[i], values[i] = d[0], d[1]
+	}
+	_, _ = conn.Exec(ctx, `SELECT set_config(s.name, d.value, false)
+		FROM pg_settings s JOIN unnest($1::text[], $2::text[]) AS d(name, value) ON s.name = d.name
+		WHERE s.source = 'default'`, names, values)
+	return nil
+}
+
+// migrate creates realm's tables. When they already exist, as on every start
+// but the first, it changes no schema, so a role without the CREATE privilege
+// can run realm.
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+	var exist bool
+	if err := pool.QueryRow(ctx, `SELECT to_regclass('realm_entries') IS NOT NULL
+		AND to_regclass('realm_changes') IS NOT NULL
+		AND to_regclass('realm_revision') IS NOT NULL`).Scan(&exist); err != nil {
+		return err
+	}
+	if exist {
+		var seeded bool
+		if err := pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM realm_revision)").Scan(&seeded); err != nil || seeded {
+			return err
+		}
+		_, err := pool.Exec(ctx, seedRevision)
+		return err
+	}
+	return pgx.BeginTxFunc(ctx, pool, readCommitted, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1, $2)", lockClass, migrationLock); err != nil {
 			return err
 		}
@@ -143,6 +229,12 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	})
 }
+
+// readCommitted is the isolation of every transaction: commit relies on its
+// re-reading the revision counter after waiting for the counter's lock, which
+// REPEATABLE READ and SERIALIZABLE (should the database default to them)
+// refuse with serialization failures.
+var readCommitted = pgx.TxOptions{IsoLevel: pgx.ReadCommitted}
 
 // key normalizes a storage key: every key ends in a slash, like the paths the
 // server uses.
@@ -270,7 +362,7 @@ func (p *PostgresStorage) Txn(ctx context.Context, checks []Check, ops []Op) err
 // that writes. When mustExist is set, deleting a key that does not exist
 // returns a NotFoundError (Storage.Delete's contract).
 func (p *PostgresStorage) commit(ctx context.Context, checks []Check, ops []Op, mustExist bool) error {
-	return pgx.BeginFunc(ctx, p.pool, func(tx pgx.Tx) error {
+	return conflictError(pgx.BeginTxFunc(ctx, p.pool, readCommitted, func(tx pgx.Tx) error {
 		// Lock every key involved, in a fixed order so transactions cannot
 		// deadlock. Advisory locks also cover keys that do not exist yet,
 		// which row locks cannot. A batch runs its statements in order.
@@ -326,7 +418,18 @@ func (p *PostgresStorage) commit(ctx context.Context, checks []Check, ops []Op, 
 		batch.Queue("INSERT INTO realm_changes (rev, key) SELECT "+rev+", k FROM unnest($1::text[]) AS k", slices.Compact(slices.Sorted(slices.Values(normalize(opKeys(ops))))))
 		batch.Queue("SELECT pg_notify($1, rev::text) FROM realm_revision", notifyChannel)
 		return tx.SendBatch(ctx, batch).Close()
-	})
+	}))
+}
+
+// conflictError maps the errors with which Postgres aborts one of two
+// transactions that got in each other's way (a serialization failure or a
+// deadlock) to ErrConflict, so that Update retries them.
+func conflictError(err error) error {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && (pe.Code == "40001" || pe.Code == "40P01") {
+		return fmt.Errorf("%w: %w", ErrConflict, err)
+	}
+	return err
 }
 
 func checkKeys(checks []Check) []string {
@@ -356,25 +459,39 @@ func normalize(keys []string) []string {
 // Watch reports every change committed after it is called, by any server
 // sharing the database. Notifications wake it immediately; it also checks
 // every few seconds and after reconnecting, and reports a change to "/" when
-// it cannot tell exactly what changed while it was disconnected.
+// it cannot tell exactly what changed while it was disconnected, or when the
+// database went back to an earlier revision (restored from a backup, or
+// failed over to a replica that missed commits).
 func (p *PostgresStorage) Watch(ctx context.Context) <-chan Change {
 	out := make(chan Change, 64)
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(p.ctx, cancel)
 
 	w := &watcher{p: p, out: out}
+	// a new feed has feedStaleAfter to catch up before Health reports it
+	w.caughtUp.Store(time.Now().UnixNano())
 	// start from the current revision; on failure, the first successful
 	// check reports that anything may have changed
-	if err := p.pool.QueryRow(ctx, "SELECT rev FROM realm_revision").Scan(&w.last); err != nil {
+	qctx, qcancel := context.WithTimeout(ctx, feedTimeout)
+	if err := p.pool.QueryRow(qctx, "SELECT rev FROM realm_revision").Scan(&w.last); err != nil {
 		w.lost = true
 	}
+	qcancel()
 
+	p.mu.Lock()
+	p.watchers[w] = struct{}{}
+	p.mu.Unlock()
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
 		defer close(out)
 		defer stop()
 		defer cancel()
+		defer func() {
+			p.mu.Lock()
+			delete(p.watchers, w)
+			p.mu.Unlock()
+		}()
 		w.run(ctx)
 	}()
 	return out
@@ -387,6 +504,9 @@ type watcher struct {
 	// lost is set when changes may have been missed.
 	lost      bool
 	lastPrune time.Time
+	// caughtUp is when the watcher last caught up with the database (or
+	// started), in Unix nanoseconds.
+	caughtUp atomic.Int64
 }
 
 func (w *watcher) run(ctx context.Context) {
@@ -412,23 +532,40 @@ func (w *watcher) run(ctx context.Context) {
 	}
 }
 
-var feedReconnects, _ = otel.Meter("github.com/steviebps/realm").Int64Counter(
-	"realm.postgres.feed.reconnects",
-	metric.WithDescription("Times the Postgres change feed lost its LISTEN connection."),
-	metric.WithUnit("{reconnect}"))
+var (
+	feedReconnects, _ = otel.Meter("github.com/steviebps/realm").Int64Counter(
+		"realm.postgres.feed.reconnects",
+		metric.WithDescription("Times the Postgres change feed lost its LISTEN connection."),
+		metric.WithUnit("{reconnect}"))
+	feedAgeGauge, _ = otel.Meter("github.com/steviebps/realm").Float64ObservableGauge(
+		"realm.postgres.feed.age",
+		metric.WithDescription("Seconds since the Postgres change feed last caught up with the database; it grows while the feed cannot reach the database."),
+		metric.WithUnit("s"))
+)
 
 // listen holds one LISTEN connection, catching up whenever a notification
-// arrives or the poll interval passes, until the connection fails.
+// arrives or the poll interval passes, until the connection fails or a round
+// trip on it takes longer than feedTimeout.
 func (w *watcher) listen(ctx context.Context) error {
-	pooled, err := w.p.pool.Acquire(ctx)
+	actx, cancel := context.WithTimeout(ctx, feedTimeout)
+	pooled, err := w.p.pool.Acquire(actx)
+	cancel()
 	if err != nil {
 		return err
 	}
 	// the connection carries a LISTEN, so it never returns to the pool
 	conn := pooled.Hijack()
-	defer conn.Close(context.Background())
+	defer func() {
+		// bounded, in case the connection stopped answering
+		cctx, cancel := context.WithTimeout(context.Background(), feedTimeout)
+		defer cancel()
+		_ = conn.Close(cctx)
+	}()
 
-	if _, err := conn.Exec(ctx, "LISTEN "+notifyChannel); err != nil {
+	lctx, cancel := context.WithTimeout(ctx, feedTimeout)
+	_, err = conn.Exec(lctx, "LISTEN "+notifyChannel)
+	cancel()
+	if err != nil {
 		return err
 	}
 	for {
@@ -461,48 +598,97 @@ func (w *watcher) seen(payload string) bool {
 
 // catchUp reports the changes after w.last.
 func (w *watcher) catchUp(ctx context.Context, conn *pgx.Conn) error {
-	// one statement, so the head and the changes come from one snapshot
-	rows, err := conn.Query(ctx, `SELECT h.rev, c.rev, c.key FROM realm_revision h
-		LEFT JOIN LATERAL (SELECT rev, key FROM realm_changes WHERE rev > $1 ORDER BY rev, key LIMIT $2) c ON true`,
-		w.last, maxCatchUp+1)
+	head, changes, err := w.readChanges(ctx, conn)
 	if err != nil {
 		return err
 	}
-	var head uint64
-	var changes []Change
-	var rev *uint64
-	var k *string
-	if _, err := pgx.ForEachRow(rows, []any{&head, &rev, &k}, func() error {
-		if rev != nil {
-			changes = append(changes, Change{Rev: *rev, Key: *k})
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
 
-	if head > w.last {
+	switch {
+	case head < w.last:
+		// The database went back to an earlier revision: it was restored, or
+		// failed over to a replica that missed commits. Its revisions no longer
+		// match the ones reported, so anything may have changed.
+		changes = []Change{{Rev: head, Key: "/"}}
+	case head > w.last:
 		// Revisions are contiguous, so a missing first revision means its
 		// records were pruned; too many to replay are summarized too.
 		if w.lost || len(changes) == 0 || changes[0].Rev != w.last+1 || len(changes) > maxCatchUp {
 			changes = []Change{{Rev: head, Key: "/"}}
 		}
-		for _, c := range changes {
-			select {
-			case w.out <- c:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		w.last = head
+	default:
+		changes = nil
 	}
+	for _, c := range changes {
+		select {
+		case w.out <- c:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	w.last = head
 	w.lost = false
+	w.caughtUp.Store(time.Now().UnixNano())
 
 	if time.Since(w.lastPrune) > pruneInterval && head > changeRetention {
 		w.lastPrune = time.Now()
-		if _, err := conn.Exec(ctx, "DELETE FROM realm_changes WHERE rev <= $1", head-changeRetention); err != nil {
+		pctx, cancel := context.WithTimeout(ctx, feedTimeout)
+		_, err := conn.Exec(pctx, "DELETE FROM realm_changes WHERE rev <= $1", head-changeRetention)
+		cancel()
+		if err != nil {
+			// a connection that stopped answering is replaced; anything else
+			// is retried at the next prune
+			if conn.IsClosed() || pgconn.Timeout(err) {
+				return err
+			}
 			logging.Ctx(ctx).WarnCtx(ctx).Str("error", err.Error()).Msg("could not prune postgres change records")
 		}
+	}
+	return nil
+}
+
+// readChanges returns the head revision and up to maxCatchUp+1 changes after
+// w.last, from one snapshot, within feedTimeout.
+func (w *watcher) readChanges(ctx context.Context, conn *pgx.Conn) (head uint64, changes []Change, err error) {
+	ctx, cancel := context.WithTimeout(ctx, feedTimeout)
+	defer cancel()
+	// one statement, so the head and the changes come from one snapshot
+	rows, err := conn.Query(ctx, `SELECT h.rev, c.rev, c.key FROM realm_revision h
+		LEFT JOIN LATERAL (SELECT rev, key FROM realm_changes WHERE rev > $1 ORDER BY rev, key LIMIT $2) c ON true`,
+		w.last, maxCatchUp+1)
+	if err != nil {
+		return 0, nil, err
+	}
+	var rev *uint64
+	var k *string
+	_, err = pgx.ForEachRow(rows, []any{&head, &rev, &k}, func() error {
+		if rev != nil {
+			changes = append(changes, Change{Rev: *rev, Key: *k})
+		}
+		return nil
+	})
+	return head, changes, err
+}
+
+// feedAge returns how long ago the running Watch furthest behind last caught
+// up with the database; ok is false when no Watch is running.
+func (p *PostgresStorage) feedAge() (age time.Duration, ok bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := time.Now()
+	for w := range p.watchers {
+		if a := now.Sub(time.Unix(0, w.caughtUp.Load())); !ok || a > age {
+			age, ok = a, true
+		}
+	}
+	return age, ok
+}
+
+// Health implements HealthReporter. It fails while a Watch has gone longer
+// than feedStaleAfter without catching up with the database: the server may
+// be missing other servers' changes, and its streams with them.
+func (p *PostgresStorage) Health() error {
+	if age, ok := p.feedAge(); ok && age > feedStaleAfter {
+		return fmt.Errorf("the postgres change feed has not caught up with the database for %v", age.Truncate(time.Second))
 	}
 	return nil
 }
@@ -511,6 +697,9 @@ func (w *watcher) catchUp(ctx context.Context, conn *pgx.Conn) error {
 func (p *PostgresStorage) Close(ctx context.Context) error {
 	p.cancel()
 	p.wg.Wait()
+	if p.metrics != nil {
+		_ = p.metrics.Unregister()
+	}
 	p.pool.Close()
 	return nil
 }

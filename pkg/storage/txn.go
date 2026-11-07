@@ -67,6 +67,41 @@ type Locker interface {
 	LockUpdate(ctx context.Context, keys []string) (unlock func(), err error)
 }
 
+// UpdateReader is implemented by storage whose reads may be served from a
+// copy that lags the stored entries, such as cacheable's cache. Update reads
+// the keys it changes through ReadForUpdate, so a read-modify-write never
+// starts from a stale copy and writes it back.
+type UpdateReader interface {
+	Storage
+	// ReadForUpdate returns the entry at key as stored, bypassing any copy.
+	ReadForUpdate(ctx context.Context, key string) (*StorageEntry, error)
+}
+
+// KeyValidator is implemented by backends that cannot store every key, such
+// as the file backend, whose file system limits the length of names. Update
+// validates the key of every op before applying any, so a key the backend
+// refuses fails the whole update rather than leaving earlier ops applied.
+type KeyValidator interface {
+	Storage
+	// ValidateKey returns an error wrapping ErrInvalidPath when key cannot be
+	// stored.
+	ValidateKey(key string) error
+}
+
+// validateKeys checks the key of every op, when s is a KeyValidator.
+func validateKeys(s Storage, ops []Op) error {
+	v, ok := s.(KeyValidator)
+	if !ok {
+		return nil
+	}
+	for _, op := range ops {
+		if err := v.ValidateKey(op.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // maxUpdateAttempts bounds the retries of an Update that keeps conflicting.
 const maxUpdateAttempts = 10
 
@@ -82,6 +117,8 @@ const maxUpdateAttempts = 10
 // ErrConflict. On other backends Update holds a process-wide lock on the keys,
 // plus the backend's own lock when it is a Locker (which extends the guarantee
 // to other processes on the same machine), and applies the ops one at a time.
+// Either way it reads through UpdateReader when the storage implements it,
+// and checks every op's key with KeyValidator before applying any.
 func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*StorageEntry) ([]Op, error)) error {
 	s = Raw(s)
 	if t, ok := s.(Transactional); ok {
@@ -102,6 +139,9 @@ func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*S
 	}
 	ops, err := fn(current)
 	if err != nil {
+		return err
+	}
+	if err := validateKeys(s, ops); err != nil {
 		return err
 	}
 	for _, op := range ops {
@@ -140,6 +180,9 @@ func updateTransactional(ctx context.Context, t Transactional, keys []string, fn
 		if err != nil || len(ops) == 0 {
 			return err
 		}
+		if err := validateKeys(t, ops); err != nil {
+			return err
+		}
 		// version-check every key that was read, so fn's view still holds
 		checks := make([]Check, 0, len(keys))
 		for _, k := range keys {
@@ -156,11 +199,16 @@ func updateTransactional(ctx context.Context, t Transactional, keys []string, fn
 	return ErrConflict
 }
 
-// readEntries gets each key, mapping missing entries to nil.
+// readEntries reads each key as stored (through UpdateReader when s
+// implements it), mapping missing entries to nil.
 func readEntries(ctx context.Context, s Storage, keys []string) (map[string]*StorageEntry, error) {
+	get := s.Get
+	if r, ok := s.(UpdateReader); ok {
+		get = r.ReadForUpdate
+	}
 	out := make(map[string]*StorageEntry, len(keys))
 	for _, k := range keys {
-		e, err := getOptional(ctx, s, k)
+		e, err := optional(get(ctx, k))
 		if err != nil {
 			return nil, err
 		}

@@ -8,7 +8,7 @@ import { trimPrefix, trimSuffix } from './utils/strings';
 import { SideNav } from './components/side-nav';
 import { ChamberView } from './components/ChamberView';
 import { UNAUTHORIZED_EVENT, createChamber, getActor, getMe, listChambers, setActor, signOut } from './api';
-import { ensureTrailingSlash } from './utils/path';
+import { decodePath, encodePath, ensureTrailingSlash } from './utils/path';
 import { SessionContext, useSession } from './session';
 import { SignIn } from './components/SignIn';
 import { KeysDrawer } from './components/KeysDrawer';
@@ -137,7 +137,10 @@ const Content = () => {
   const [chamberName, setChamberName] = useState('');
   const location = useLocation();
   const navigate = useNavigate();
-  const path = ensureTrailingSlash(location.pathname);
+  // The URL holds each chamber name encoded (see SideNav); path is the
+  // chamber path itself.
+  const pathname = decodePath(location.pathname);
+  const path = ensureTrailingSlash(pathname);
 
   const { data: children = [] } = useQuery({ queryKey: ['list', path], queryFn: () => listChambers(path) });
 
@@ -146,12 +149,12 @@ const Content = () => {
     onSuccess: (_, name) => {
       setChamberName('');
       void queryClient.invalidateQueries({ queryKey: ['list', path] });
-      void navigate(path + trimSuffix(trimPrefix(name.trim(), '/'), '/'));
+      void navigate(encodePath(path + trimSuffix(trimPrefix(name.trim(), '/'), '/')));
     },
   });
 
   const directories = children.filter((c) => c !== '.');
-  const trimmed = trimSuffix(trimPrefix(location.pathname, '/'), '/');
+  const trimmed = trimSuffix(trimPrefix(pathname, '/'), '/');
   const up = trimmed !== '' ? trimmed.split('/') : [];
 
   return (
@@ -236,7 +239,13 @@ const ChamberPath = ({ segments }: { segments: string[] }) => {
                 <span aria-current="page">{segment}</span>
               ) : (
                 <Link
-                  to={'/' + segments.slice(0, index + 1).join('/')}
+                  to={
+                    '/' +
+                    segments
+                      .slice(0, index + 1)
+                      .map(encodeURIComponent)
+                      .join('/')
+                  }
                   className="text-gray-500 hover:text-primary-700 dark:text-gray-400 dark:hover:text-primary-300"
                 >
                   {segment}

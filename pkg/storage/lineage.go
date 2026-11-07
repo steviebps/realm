@@ -108,12 +108,25 @@ func ReadLineage(ctx context.Context, s Storage, logicalPath string) (*Lineage, 
 	return &Lineage{Layers: []Layer{parseLayer(canonicalChamberPath(logicalPath), entry.Value)}}, nil
 }
 
+// ChamberError reports a stored chamber that cannot be parsed. Its message
+// describes the chamber, never the storage it came from, so it is safe to
+// show to callers who may read the chamber.
+type ChamberError struct {
+	// Path is the chamber's path.
+	Path string
+	Err  error
+}
+
+func (e *ChamberError) Error() string { return e.Err.Error() }
+
+func (e *ChamberError) Unwrap() error { return e.Err }
+
 // parseLayer parses a stored chamber into a layer at p; a chamber that cannot
-// be parsed sets the layer's Err.
+// be parsed sets the layer's Err to a ChamberError.
 func parseLayer(p string, value []byte) Layer {
 	c := &realm.Chamber{}
 	if err := json.Unmarshal(value, c); err != nil {
-		return Layer{Path: p, Err: err}
+		return Layer{Path: p, Err: &ChamberError{Path: p, Err: err}}
 	}
 	return Layer{Path: p, Chamber: c}
 }

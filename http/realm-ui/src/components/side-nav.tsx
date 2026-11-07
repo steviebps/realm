@@ -10,7 +10,9 @@ export const SideNav = ({ directories }: { directories: string[] }) => {
         {directories.map((directory) => (
           <li key={directory}>
             <Link
-              to={directory}
+              // Encoded, so a chamber named like a URL ("https:…") or holding
+              // "?" or "#" stays a path below this chamber.
+              to={encodeURIComponent(trimSuffix(directory, '/')) + '/'}
               relative="path"
               className="group flex items-center gap-2 py-1 pr-2 font-mono text-sm text-gray-800 hover:text-primary-700 focus-visible:outline-2 focus-visible:outline-primary-500 dark:text-gray-200 dark:hover:text-primary-300"
             >

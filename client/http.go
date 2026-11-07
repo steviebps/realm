@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/steviebps/realm/helper/logging"
@@ -38,6 +41,40 @@ type HttpClient struct {
 	token      string
 	tracer     trace.Tracer
 	propagator propagation.TextMapPropagator
+	// warnedPlaintext is set once the client has warned that it sends its
+	// token unencrypted.
+	warnedPlaintext atomic.Bool
+}
+
+// userAgent identifies realm's Go client to servers and proxies.
+var userAgent = "realm-go/" + moduleVersion()
+
+// moduleVersion returns the version of the realm module built into this
+// binary, without its "v", or "dev" when it has none (a build from a
+// checkout, say).
+func moduleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	const module = "github.com/steviebps/realm"
+	m := &info.Main
+	if m.Path != module {
+		m = nil
+		for _, dep := range info.Deps {
+			if dep.Path == module {
+				m = dep
+				break
+			}
+		}
+	}
+	if m != nil && m.Replace != nil {
+		m = m.Replace
+	}
+	if m == nil || m.Version == "" || m.Version == "(devel)" {
+		return "dev"
+	}
+	return strings.TrimPrefix(m.Version, "v")
 }
 
 func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
@@ -78,7 +115,7 @@ func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, er
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	c.authorize(req)
+	c.prepare(req)
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
 	return c.streaming.Do(req)
 }
@@ -103,16 +140,35 @@ func (c *HttpClient) Do(r *http.Request) (*http.Response, error) {
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path).Str("host", r.URL.Host).Msg("executing request")
 
-	c.authorize(r)
+	c.prepare(r)
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(r.Header))
 	return c.underlying.Do(r)
 }
 
-// authorize adds the client's API key to r unless r already carries one.
-func (c *HttpClient) authorize(r *http.Request) {
-	if c.token != "" && r.Header.Get("Authorization") == "" {
-		r.Header.Set("Authorization", "Bearer "+c.token)
+// prepare adds realm's User-Agent and the client's API key to r, unless r
+// already carries them. The first time it sends the key unencrypted to a host
+// other than this machine, it warns.
+func (c *HttpClient) prepare(r *http.Request) {
+	if r.Header.Get("User-Agent") == "" {
+		r.Header.Set("User-Agent", userAgent)
 	}
+	if c.token == "" || r.Header.Get("Authorization") != "" {
+		return
+	}
+	if r.URL.Scheme == "http" && !isLoopback(r.URL.Hostname()) && c.warnedPlaintext.CompareAndSwap(false, true) {
+		ctx := r.Context()
+		logging.Ctx(ctx).WarnCtx(ctx).Str("host", r.URL.Host).Msg("sending the realm API key over plain http, where anyone on the network path can read it; use an https address")
+	}
+	r.Header.Set("Authorization", "Bearer "+c.token)
+}
+
+// isLoopback reports whether host names this machine.
+func isLoopback(host string) bool {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (c *HttpClient) PerformRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Response, error) {

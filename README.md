@@ -218,24 +218,25 @@ Server settings:
 |---|---|
 | `storage` | The storage backend. Refer to [Storage backends](#storage-backends). |
 | `options` | The settings of the storage backend. |
-| `port` | The HTTP port. |
+| `port` | The HTTP port. Default: `8080`. |
 | `inheritable` | If `true`, child chambers inherit the flags of their parents, up to the root chamber `/`. |
-| `certFile`, `keyFile` | A TLS certificate and key. If you set both, the server uses HTTPS. |
+| `certFile`, `keyFile` | A TLS certificate and key. If you set both, the server uses HTTPS (TLS 1.2 or later). It checks the files every minute and loads a renewed certificate without a restart, and sends `Strict-Transport-Security`. |
 | `logLevel` | The minimum level logged: `debug`, `info` (default), `warn`, or `error`. `--debug` overrides it. |
 | `shutdownDelay` | How long to keep serving after `SIGTERM` while `/readyz` reports 503, such as `"5s"`. Gives load balancers time to stop routing to the server. Default: none. |
+| `maxStreams` | The most watch streams the server holds open at once. Evaluation streams may take at most three quarters of them, so server SDKs always find room. Default: `10000`. |
 | `auth` | Sign-in and API keys. Refer to [Authentication](#authentication). |
 
 ### Storage backends
 
 | `storage` | Options | Notes |
 |---|---|---|
-| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so other processes can share the directory. |
+| `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so other processes can share the directory. Chamber names may not contain `\` or `:` or end in `.` or a space, which some file systems would read as other names. A chamber's history is kept under one file name that holds its whole path, so chamber paths are limited to about 200 bytes. |
 | `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
-| `bigcache` | `shards`, `life_window`, `clean_window` | In memory. Data is lost when the server stops. |
+| `bigcache` | `shards`, `life_window`, `clean_window` | In memory, for development and tests: data is lost when the server stops, and memory grows with every write. Entries are kept until then, unless you set `life_window` (a duration such as `"24h"`), which deletes each entry that long after it was written. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
 | `s3` | `bucket`, `region`, `prefix`, `endpoint`, `force_path_style` | Amazon S3 or an S3-compatible service. Uses the standard AWS credential chain. |
 | `postgres` | `url`, `max_conns` | PostgreSQL. Supports several server replicas. Refer to [Run several replicas](#run-several-replicas). |
-| `cacheable` | `cache`, `source`, plus the options of both | A write-through `cache` in front of a `source`. The source cannot be `postgres`. |
+| `cacheable` | `cache`, `source`, plus the options of both | A `cache` in front of a `source`. Reads fill the cache; writes go to the source and drop the entry from the cache. A `bigcache` cache keeps entries for `life_window` (default 5 minutes). The source cannot be `postgres`. |
 
 For production, we recommend `postgres`. For a single replica, `cacheable`
 with `bigcache` in front of `s3` also works.
@@ -268,6 +269,17 @@ Use the `postgres` backend. The server creates its tables on startup.
 - Each replica holds one connection open for `LISTEN`. That connection cannot
   go through a pooler in transaction mode, such as PgBouncer's
   `pool_mode = transaction`. Use session mode or connect directly.
+- The first start creates the tables, which needs `CREATE` on the schema.
+  After that, `SELECT`, `INSERT`, `UPDATE`, and `DELETE` on them are enough.
+- Unless your server, database, role, or URL sets them, sessions use
+  `statement_timeout` 30s, `lock_timeout` 15s, and
+  `idle_in_transaction_session_timeout` 30s, so a replica that dies mid-write
+  cannot block the others' writes for long.
+- A replica whose `LISTEN` connection stops answering for 10 seconds
+  reconnects. `/readyz` fails when its change feed has not caught up for 30
+  seconds, and the `realm.postgres.feed.age` metric reports how far behind it
+  is. After a restore or failover that rewinds the database, every stream
+  re-reads its chamber.
 
 ### With Docker
 
@@ -298,8 +310,10 @@ docker run -p 8080:8080 \
 - The `s3` and `gcs` backends work with Kubernetes workload identity. They need
   no more configuration.
 - Use `GET /healthz` for liveness probes and `GET /readyz` for readiness
-  probes. `/readyz` reports 503 when storage does not answer within 2 seconds
-  and while the server drains for shutdown.
+  probes. `/readyz` reports 503 when storage does not answer within 2 seconds,
+  when the `postgres` change feed has stalled, and while the server drains for
+  shutdown. It checks storage at most once a second, however often it is
+  probed.
 
 ### Run in production
 
@@ -310,6 +324,13 @@ docker run -p 8080:8080 \
 - **Logs** are one JSON object per line on standard error. On a terminal they
   are human-readable instead; set `REALM_LOG_FORMAT` to `json` or `console` to
   choose.
+- **Access logs.** Every request is logged when it ends, with its status,
+  duration, caller (`actor`), request ID, and, when it failed, why: changes
+  at `info`, refused credentials and permissions at `warn`, server errors at
+  `error`, and reads (evaluations included) and probes at `debug`. Client
+  mistakes, such as reading a chamber that does not exist, are never logged
+  as errors. Every response carries its request ID in `X-Request-Id`; the
+  server reuses the ID your proxy sends in that header.
 - **Telemetry** (traces and metrics) is off by default. Turn it on with
   `--traces=otlp` (or `REALM_TRACES=otlp`) to export over OTLP/HTTP, or
   `--traces=stdout` to print traces. The exporter is configured by the
@@ -318,12 +339,21 @@ docker run -p 8080:8080 \
   `OTEL_TRACES_SAMPLER`; `OTEL_SDK_DISABLED=true` overrides `--traces`. Every
   request except probes and streams gets a span, and the server records
   `realm.server.streams.active` and `realm.postgres.feed.reconnects`.
-- **Streams.** Each server holds at most 10,000 streams; beyond that, new
-  streams get 503 and clients retry with backoff. Streams close after about 20
+- **Streams.** Each server holds at most 10,000 streams (`maxStreams`);
+  beyond that, new streams get 503 and clients retry with backoff. Evaluation
+  streams, which anyone holding a published evaluate key can open, may take
+  at most three quarters of them, so server SDKs keep hearing about changes. Streams close after about 20
   to 25 minutes and clients reconnect, so a revoked key or expired session
-  loses its stream within that time.
+  loses its stream within that time. A stream whose client takes more than 30
+  seconds to accept an event is closed. When storage fails, streams stay open
+  and retry with backoff; clients keep the values they have.
+- **Browser security.** Responses forbid framing and MIME sniffing. The UI is
+  served with a strict `Content-Security-Policy` (only its own scripts,
+  styles, and fonts; requests only to this server).
 - **Limits.** Request bodies are limited to 4 MiB (evaluation contexts to
-  64 KiB), and request headers must arrive within 10 seconds.
+  64 KiB). Request headers must arrive within 10 seconds, the rest of a
+  request within the 10-second request timeout, and a client must take the
+  response within 30 seconds.
 
 ## Manage flags
 
@@ -393,7 +423,6 @@ import (
 	"os"
 
 	"github.com/steviebps/realm/client"
-	realmhttp "github.com/steviebps/realm/http"
 	realm "github.com/steviebps/realm/pkg"
 )
 
@@ -414,8 +443,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// If realm is unreachable, Start returns the error but keeps retrying in
+	// the background; until it succeeds, reads return your defaults. Don't
+	// exit: a service that cannot start without realm turns a realm outage
+	// into its own.
 	if err := rlm.Start(); err != nil {
-		log.Fatal(err)
+		log.Printf("serving default flag values until realm is reachable: %v", err)
 	}
 	defer rlm.Stop()
 
@@ -426,12 +459,15 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// RealmHandler (below) puts the snapshot in each request context.
 		msg, _ := rlm.String(r.Context(), "message", "DEFAULT")
 		_, _ = w.Write([]byte(msg))
 	})
 
-	log.Fatal(http.ListenAndServe(":3000", realmhttp.RealmHandler(rlm, mux)))
+	// Pin one snapshot to each request, so every flag read in it agrees.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(rlm.NewContext(r.Context())))
+	})
+	log.Fatal(http.ListenAndServe(":3000", handler))
 }
 ```
 
@@ -471,11 +507,27 @@ enabled, _ := rlm.Bool(ctx, "new-checkout", false)
 ### Get updates
 
 By default, the SDK polls the server every 15 minutes. To change the interval,
-use `WithPollingInterval`.
+use `WithPollingInterval` (at least 1 second).
 
 To get changes in real time, use `WithStreaming(true)`. The server then sends
-changes to the SDK over server-sent events. If the server does not support
-streaming, the SDK polls.
+changes to the SDK over server-sent events. If the stream keeps failing (three
+attempts in a row, or a minute without a delivery), for example because the
+server is at its stream limit or a proxy buffers the stream, the SDK also polls
+at the polling interval until the stream recovers. If the server does not
+support streaming, the SDK polls, and tries the stream again every few
+minutes.
+
+The SDK never stops your service: when realm is unreachable it keeps serving
+the last flags it loaded (or your defaults), and retries with jittered backoff,
+honoring `Retry-After`. A refused key (401, 403) or a missing chamber (404) is
+retried after minutes rather than seconds. It logs at `info` and above (set
+your own logger with `WithLogger`), with a `component=realm` field: the first
+failure and the recovery, and repeated failures at most every 5 minutes.
+
+The SDK reads flags written by newer realm servers: a targeting rule that uses
+an operator it does not know never applies, and a flag of a type it does not
+know returns your default with an error. The server refuses both in writes it
+does not support.
 
 ```go
 rlm, _ := realm.NewRealm(

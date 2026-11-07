@@ -7,6 +7,11 @@ import (
 
 // Rule is a typed value: a type ("string", "number", "boolean", or "custom")
 // and a value that is validated against that type. It is the base of a Flag.
+//
+// A type this version of realm does not know (one a newer realm added) is
+// decoded without error and its value kept unread, so that a newer server's
+// chamber does not break older SDKs; a flag of such a type cannot be served.
+// ParseChamber, which validates writes, rejects it.
 type Rule struct {
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
@@ -23,6 +28,14 @@ func (t *Rule) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*t = Rule(alias)
+
+	if !knownType(t.Type) {
+		t.Value = nil
+		if len(raw) > 0 {
+			t.Value = &raw
+		}
+		return nil
+	}
 
 	if t.Value == nil || len(raw) == 0 {
 		return fmt.Errorf("value cannot be empty/nil with type specified as: %q", t.Type)
@@ -65,6 +78,15 @@ func (t *Rule) assertType(data json.RawMessage) error {
 	}
 
 	return &UnsupportedTypeError{t.Type}
+}
+
+// knownType reports whether this version of realm can serve flags of type t.
+func knownType(t string) bool {
+	switch t {
+	case "string", "number", "boolean", "custom":
+		return true
+	}
+	return false
 }
 
 type UnsupportedTypeError struct {

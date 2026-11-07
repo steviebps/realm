@@ -65,10 +65,7 @@ func (s *GCSStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry
 	r, err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).NewReader(ctx)
 	if err != nil {
 		recordError(span, err)
-		if err == gcs.ErrObjectNotExist {
-			return nil, &NotFoundError{logicalPath}
-		}
-		return nil, err
+		return nil, gcsError(logicalPath, err)
 	}
 	defer r.Close()
 
@@ -147,13 +144,23 @@ func (s *GCSStorage) Delete(ctx context.Context, logicalPath string) error {
 	err := s.client.Bucket(s.bucket).Object(objectKeyFor(logicalPath)).Delete(ctx)
 	if err != nil {
 		recordError(span, err)
-		if errors.Is(err, gcs.ErrObjectNotExist) {
-			return &NotFoundError{logicalPath}
+		if err = gcsError(logicalPath, err); isNotFoundErr(err) {
+			return err
 		}
 		return fmt.Errorf("failed to delete: %w", err)
 	}
 
 	return nil
+}
+
+// gcsError maps the client's "object does not exist" to a NotFoundError for
+// logicalPath. The client may wrap it (the JSON API does), so it is matched
+// with errors.Is.
+func gcsError(logicalPath string, err error) error {
+	if errors.Is(err, gcs.ErrObjectNotExist) {
+		return &NotFoundError{logicalPath}
+	}
+	return err
 }
 
 func (s *GCSStorage) List(ctx context.Context, prefix string) ([]string, error) {

@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/steviebps/realm/utils"
 )
 
 // DefaultSessionTTL is how long a UI sign-in lasts.
@@ -132,9 +133,13 @@ func (c *Config) validate() error {
 	if c.AdminKey != "" {
 		// A reference to an unset variable expands to "", which must not
 		// quietly turn the admin key off.
-		key := os.ExpandEnv(c.AdminKey)
+		key := utils.ExpandEnvRef(c.AdminKey)
 		if len(key) < 32 {
-			return fmt.Errorf("auth.adminKey must be at least 32 characters (it is %d after expanding %q)", len(key), c.AdminKey)
+			if key == c.AdminKey {
+				// a literal key: never echo a secret into the log
+				return fmt.Errorf("auth.adminKey must be at least 32 characters (it has %d)", len(key))
+			}
+			return fmt.Errorf("auth.adminKey must be at least 32 characters (%s holds %d)", c.AdminKey, len(key))
 		}
 		c.adminKeyHash = hashSecret(key)
 		c.AdminKey = ""
@@ -152,7 +157,7 @@ func (c *Config) validate() error {
 		return errors.New("auth.externalURL must be an absolute http(s) URL")
 	}
 
-	c.SessionSecret = os.ExpandEnv(c.SessionSecret)
+	c.SessionSecret = utils.ExpandEnvRef(c.SessionSecret)
 	if len(c.SessionSecret) < 32 {
 		return errors.New("auth.sessionSecret must be at least 32 characters")
 	}
@@ -178,7 +183,7 @@ func (c *Config) validate() error {
 		if p.DisplayName == "" {
 			p.DisplayName = p.Name
 		}
-		p.ClientSecret = os.ExpandEnv(p.ClientSecret)
+		p.ClientSecret = utils.ExpandEnvRef(p.ClientSecret)
 		if p.ClientID == "" || p.ClientSecret == "" {
 			return fmt.Errorf("auth provider %q needs a clientId and clientSecret", p.Name)
 		}

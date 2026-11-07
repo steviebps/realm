@@ -840,6 +840,131 @@
           }
         }
       ]
+    },
+    {
+      "name": "forward compatibility: an unknown operator never matches",
+      "chamber": {
+        "rules": {
+          "future-op": {
+            "type": "string",
+            "value": "default",
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "matchesFuture",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": "future"
+              },
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": "known"
+              }
+            ]
+          },
+          "future-op-values": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "seats",
+                    "op": "greaterThan",
+                    "values": [
+                      10
+                    ]
+                  }
+                ],
+                "value": true
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": {
+            "attributes": {
+              "tenantId": "acme",
+              "seats": "20"
+            }
+          },
+          "expect": {
+            "future-op": "known",
+            "future-op-values": false
+          }
+        },
+        {
+          "context": {
+            "attributes": {
+              "tenantId": "globex"
+            }
+          },
+          "expect": {
+            "future-op": "default",
+            "future-op-values": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "forward compatibility: a flag of an unknown type is omitted",
+      "chamber": {
+        "rules": {
+          "known": {
+            "type": "string",
+            "value": "served"
+          },
+          "future-type": {
+            "type": "futureType",
+            "value": {
+              "variant": 2
+            },
+            "targeting": [
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": {
+                  "variant": 3
+                }
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "context": {
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "known": "served"
+          }
+        }
+      ]
     }
   ]
 }

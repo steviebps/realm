@@ -54,11 +54,15 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 - **Flag** — one flag: a `Rule` (its default) plus ordered `Targeting`.
   `ValueFor(flagKey, ec)` returns the value of the first rule that applies, else
   the default. `UnmarshalJSON` type-checks rule values and rejects the removed
-  `overrides`/`rollout` fields.
+  `overrides`/`rollout` fields. A flag of a type this version does not know
+  decodes (kept raw, re-marshaled unchanged) but cannot be served: getters
+  return the caller's default with an error, and `Chamber.Evaluate` omits it.
 - **TargetingRule** — `Clauses` (ANDed), a `Value`, an optional `Rollout`, and
   an optional `Schedule`.
 - **Clause** — `{attribute, op, values}`; ops `in`, `notIn`, `startsWith`,
-  `semverGte`, `semverLte`. A missing attribute never matches.
+  `semverGte`, `semverLte`. A missing attribute never matches, and neither
+  does an operator this version does not know (the clause is kept raw and
+  re-marshaled unchanged).
 - **Rollout** — `{percentage, bucketBy, seed}`: sticky percentage of matching
   contexts, bucketed on any attribute (default `key`). Not bucketed in → next rule.
 - **Schedule** — `{start, end}` RFC 3339 bounds (either optional): the rule
@@ -75,9 +79,12 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   WithVersion, WithAttributes, WithPollingInterval, WithStreaming)`;
   `Start`/`Stop`; `Bool`/`String`/`Float64`/`CustomValue`; `NewContext` /
   `NewContextWithEvaluation`). Refresh is either **polling** (default) or
-  **streaming** (`WithStreaming(true)` → SSE `GET /v1/chambers/<path>?watch=true`,
-  with polling fallback). The server pushes changes via an in-process **broker**
-  (`http/broker.go`, notified after each write).
+  **streaming** (`WithStreaming(true)` → SSE `GET /v1/chambers/<path>?watch=true`),
+  in `pkg/refresh.go`: streaming also polls while the stream is down, and
+  falls back to polling when the server answers a watch with a chamber.
+  Retries back off with jitter, honor `Retry-After`, and wait minutes after
+  401/403/404; failures are logged rate-limited. The server pushes changes via
+  an in-process **broker** (`http/broker.go`, notified after each write).
 - **Metadata** — ETags, history (`/v1/history/<path>`), and the catalog
   (`/v1/catalog/<attribute>`) live in `http/meta.go` / `http/meta_handlers.go`,
   stored under the reserved `/_realm/` prefix in the raw storage beneath the
@@ -102,7 +109,7 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
 | `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`) |
 | `sdk/conformance/` | `evaluation.json`: evaluation cases the Go (`pkg/conformance_test.go`) and TypeScript tests both run |
-| `http/` | Server handler (`handler.go`), evaluation endpoint and CORS (`evaluate.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI embedding (`assets.go` behind the `ui` build tag; `assets_stub.go` fallback), `realm-ui/` React app |
+| `http/` | Server handler (`handler.go`), request lifecycle: per-request deadlines, request IDs, access log, panic recovery (`lifecycle.go`), evaluation endpoint and CORS (`evaluate.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI serving (`ui.go`; files embedded by `assets.go` behind the `ui` build tag, `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |
 | `trace/otel.go` | OpenTelemetry setup |
 | `helper/logging/` | zerolog `TracedLogger` (context-aware, trace-correlated) |
@@ -134,14 +141,20 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
 
 - **Logging is context-first.** Use `logging.Ctx(ctx)` and
   `logger.InfoCtx(ctx)` / `ErrorCtx(ctx)` — never the bare `log` package or
-  `fmt.Println`. Logs are trace-correlated.
+  `fmt.Println`. Logs are trace-correlated, and carry the request ID inside
+  handlers. A handler reports why a request failed with `noteFailure`, which
+  adds the reason to the request's access log line; only server errors (5xx)
+  get an error line of their own, so client mistakes never read as errors.
 - **Wrap meaningful work in an OTel span:** `ctx, span := tracer.Start(ctx, "…")`.
 - **SDK config uses functional options** (`WithX(...) RealmOption`). Extend that
   pattern rather than adding constructor parameters.
 - **Writes are strict, reads are lenient.** The server parses chamber writes
-  with `realm.ParseChamber`, which rejects unknown fields at every level (add
-  a new field to its `shape` tables in `pkg/chamber.go`); the SDK decodes
-  leniently so older SDKs survive newer servers.
+  with `realm.ParseChamber`, which rejects unknown fields, operators, and flag
+  types at every level (add a new field to its `shape` tables in
+  `pkg/chamber.go`); plain `json.Unmarshal`, which the SDKs and the server's
+  reads use, accepts them so older SDKs survive newer servers: an unknown
+  operator never matches, and an unknown-type flag cannot be served. Unknown
+  operators and types round-trip byte for byte.
 - **Paths are canonicalized once** (`canonicalPath` in `http/agent.go`) and
   never unescaped twice; check `storage.IsReservedPath` on the canonical form.
 - **Domain types validate in `UnmarshalJSON`.** Values that depend on the
@@ -160,8 +173,8 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
 ## Recipes
 
 - **Add a targeting operator:** add an `Operator` constant in
-  `pkg/targeting.go`, validate its values in `Clause.validate`, match it in
-  `Clause.Matches`, add table cases to `pkg/targeting_test.go`, port it to
+  `pkg/targeting.go`, list it in `Operator.known`, validate its values in
+  `Clause.validate`, match it in `Clause.Matches`, add table cases to `pkg/targeting_test.go`, port it to
   `sdk/typescript/src/evaluate.ts`, add cases to
   `sdk/conformance/evaluation.json`, and add a label in
   `http/realm-ui/src/utils/describe.ts`. No server change is needed —

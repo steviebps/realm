@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
@@ -11,21 +12,40 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-// CacheableStorage is a wrapper storage used for providing a write-through cache.
-// This allows any storage type to be used on top, however, in-memory storage types are recommended to reduce latency.
-// Size and implementation details of the cache layer will be up to the consumer.
+// CacheableStorage reads through a cache in front of a source. Any storage
+// type can be the cache, but an in-memory one (bigcache) is recommended: the
+// cache is consulted on every read and updated under a lock.
+//
+// Writes go to the source, then drop the key from the cache, whether or not
+// the write succeeded (a write that failed with a timeout may still have
+// landed); the next read fills the cache from the source. A fill that read the
+// source before a write finished is not stored, so the cache never goes back
+// to an older value. When the cache cannot drop a key, reads of it bypass the
+// cache until a later attempt succeeds. Update reads the source directly (see
+// UpdateReader), so a read-modify-write never starts from a cached copy.
 type CacheableStorage struct {
 	cache  Storage
 	source Storage
 	tracer trace.Tracer
+
+	// mu orders cache fills and invalidations. gen counts finished write
+	// attempts: a fill is stored only if gen has not moved since it began
+	// reading the source.
+	mu  sync.Mutex
+	gen uint64
+	// stale holds the keys whose cache entry could not be dropped after a
+	// write; their reads bypass the cache.
+	stale map[string]struct{}
 }
 
 var (
-	_ Storage = (*CacheableStorage)(nil)
-	_ Locker  = (*CacheableStorage)(nil)
+	_ Storage      = (*CacheableStorage)(nil)
+	_ Locker       = (*CacheableStorage)(nil)
+	_ UpdateReader = (*CacheableStorage)(nil)
+	_ KeyValidator = (*CacheableStorage)(nil)
 )
 
-// NewCacheableStorage returns a write-through cacheable storage.
+// NewCacheableStorage returns storage that caches source's entries in cache.
 func NewCacheableStorage(cache Storage, source Storage) (Storage, error) {
 	if cache == nil || source == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
@@ -56,17 +76,17 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 	if err != nil {
 		return nil, err
 	}
-	srcStg, err := sourceCreator(conf)
+	cacheCreator, err := cacheTier(cache)
 	if err != nil {
 		return nil, err
 	}
-
-	cacheCreator, err := sourcable(cache)
+	srcStg, err := sourceCreator(conf)
 	if err != nil {
 		return nil, err
 	}
 	cacheStg, err := cacheCreator(conf)
 	if err != nil {
+		_ = srcStg.Close(context.Background())
 		return nil, err
 	}
 
@@ -86,6 +106,16 @@ func sourcable(name string) (StorageCreator, error) {
 	return nil, fmt.Errorf("storage type %q does not exist", name)
 }
 
+// cacheTier returns the creator of a storage type acting as cacheable's
+// cache. bigcache keeps an expiry there (see newBigCacheTier), unlike as
+// primary storage.
+func cacheTier(name string) (StorageCreator, error) {
+	if name == "bigcache" {
+		return newBigCacheTier, nil
+	}
+	return sourcable(name)
+}
+
 func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := c.tracer.Start(ctx, "CacheableStorage Get", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", logicalPath)))
 	defer span.End()
@@ -93,47 +123,101 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msgf("get operation with cache layer %T", c.cache)
 
-	entry, err := c.cache.Get(ctx, logicalPath)
-	if err != nil {
-		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
-		var nfError *NotFoundError
-		// cache layer is expected to have missing records so let's only log other errors
-		if errors.As(err, &nfError) {
-			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache miss")
-			span.AddEvent("realm.cacheable.cacheMiss")
-		} else {
-			logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache error")
+	gen, cached := c.beginRead(ctx, logicalPath)
+	if cached {
+		entry, err := c.cache.Get(ctx, logicalPath)
+		if err != nil {
+			span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
+			// cache layer is expected to have missing records so let's only log other errors
+			if isNotFoundErr(err) {
+				logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache miss")
+				span.AddEvent("realm.cacheable.cacheMiss")
+			} else {
+				logger.DebugCtx(ctx).Str("error", err.Error()).Msg("cache error")
+			}
 		}
-	}
-
-	if entry != nil {
-		span.AddEvent("realm.cacheable.cacheHit")
-		return entry, err
+		if entry != nil {
+			span.AddEvent("realm.cacheable.cacheHit")
+			return entry, nil
+		}
+	} else {
+		span.AddEvent("realm.cacheable.cacheBypassed")
 	}
 
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msgf("get operation with source layer: %T", c.source)
-	entry, err = c.source.Get(ctx, logicalPath)
+	entry, err := c.source.Get(ctx, logicalPath)
 	if err != nil {
 		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
-		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("source error")
+		if !isNotFoundErr(err) {
+			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("source error")
+		}
 		return nil, err
 	}
-
-	if entry != nil {
-		logger.DebugCtx(ctx).Str("entry.Key", entry.Key).Msgf("value exists in source, inserting value into cache layer")
-		err := c.cache.Put(ctx, *entry)
-
-		// if cache put fails, we log the error but do not return as value has been successfully retrieved from source
-		if err != nil {
-			span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
-			logger.ErrorCtx(ctx).Str("error", err.Error()).Msg("failed to write to cache")
-		} else {
-			span.AddEvent("realm.cacheable.cacheWrite")
-		}
-
+	if cached {
+		c.fill(ctx, span, gen, logicalPath, entry)
 	}
-
 	return entry, nil
+}
+
+// beginRead returns the write generation a read of key starts at, and whether
+// the read may use the cache: not while key's cache entry is stale, unless
+// dropping it succeeds now.
+func (c *CacheableStorage) beginRead(ctx context.Context, key string) (gen uint64, cached bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, stale := c.stale[key]; stale && c.invalidateLocked(ctx, key) != nil {
+		return c.gen, false
+	}
+	return c.gen, true
+}
+
+// fill stores entry, read from the source at generation gen, in the cache,
+// unless a write attempt finished since: the entry may predate that write.
+func (c *CacheableStorage) fill(ctx context.Context, span trace.Span, gen uint64, key string, entry *StorageEntry) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.gen != gen {
+		span.AddEvent("realm.cacheable.fillSkipped")
+		return
+	}
+	if _, stale := c.stale[key]; stale {
+		return
+	}
+	if err := c.cache.Put(ctx, *entry); err != nil {
+		// the read succeeded; the next one tries the cache again
+		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
+		logging.Ctx(ctx).ErrorCtx(ctx).Str("error", err.Error()).Msg("failed to write to cache")
+		return
+	}
+	span.AddEvent("realm.cacheable.cacheWrite")
+}
+
+// invalidate drops key from the cache after a write attempt on the source,
+// and stops fills that began before it from being stored. It runs even when
+// ctx is done, since the write may have landed regardless.
+func (c *CacheableStorage) invalidate(ctx context.Context, span trace.Span, key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gen++
+	if err := c.invalidateLocked(ctx, key); err != nil {
+		span.RecordError(err, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
+		logging.Ctx(ctx).ErrorCtx(ctx).Str("key", key).Str("error", err.Error()).Msg("could not drop a changed entry from the cache; reading it from the source until that succeeds")
+	}
+}
+
+// invalidateLocked drops key from the cache, marking it stale when that
+// fails. c.mu must be held.
+func (c *CacheableStorage) invalidateLocked(ctx context.Context, key string) error {
+	err := c.cache.Delete(context.WithoutCancel(ctx), key)
+	if err == nil || isNotFoundErr(err) {
+		delete(c.stale, key)
+		return nil
+	}
+	if c.stale == nil {
+		c.stale = map[string]struct{}{}
+	}
+	c.stale[key] = struct{}{}
+	return err
 }
 
 func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
@@ -144,16 +228,10 @@ func (c *CacheableStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
 	err := c.source.Put(ctx, e)
-	if err == nil {
-		// best-effort cache update: a cache write failure must not fail the
-		// source write, but it is worth recording on the span
-		if cacheErr := c.cache.Put(ctx, e); cacheErr != nil {
-			span.RecordError(cacheErr)
-		}
-	} else {
+	if err != nil {
 		recordError(span, err)
 	}
-
+	c.invalidate(ctx, span, e.Key)
 	return err
 }
 
@@ -164,23 +242,15 @@ func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
-	sourceErr := c.source.Delete(ctx, logicalPath)
-	if sourceErr != nil {
-		span.RecordError(sourceErr, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
+	// The source decides whether the entry existed: the cache is expected to
+	// miss (an entry is evicted, or was never read), and Update treats "not
+	// found" as "already gone".
+	err := c.source.Delete(ctx, logicalPath)
+	if err != nil {
+		recordError(span, err)
 	}
-	cacheErr := c.cache.Delete(ctx, logicalPath)
-	// The cache is expected to miss (an entry is evicted, or was never read),
-	// and the source decides whether the entry existed. Reporting the cache's
-	// miss would fail a delete that worked and, to Update (which treats "not
-	// found" as "already gone"), hide a delete that failed.
-	var nfError *NotFoundError
-	if errors.As(cacheErr, &nfError) {
-		cacheErr = nil
-	}
-	if cacheErr != nil {
-		span.RecordError(cacheErr, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
-	}
-	return errors.Join(sourceErr, cacheErr)
+	c.invalidate(ctx, span, logicalPath)
+	return err
 }
 
 func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, error) {
@@ -190,6 +260,28 @@ func (c *CacheableStorage) List(ctx context.Context, prefix string) ([]string, e
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 	return c.source.List(ctx, prefix)
+}
+
+// ReadForUpdate reads key from the source, so that Update never starts from
+// a cached copy, which may predate a write made by another process sharing
+// the source. It does not fill the cache.
+func (c *CacheableStorage) ReadForUpdate(ctx context.Context, key string) (*StorageEntry, error) {
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage ReadForUpdate", trace.WithAttributes(attribute.String("realm.cacheable.logicalPath", key)))
+	defer span.End()
+
+	entry, err := c.source.Get(ctx, key)
+	if err != nil {
+		recordError(span, err)
+	}
+	return entry, err
+}
+
+// ValidateKey checks key with the source's KeyValidator, if it has one.
+func (c *CacheableStorage) ValidateKey(key string) error {
+	if v, ok := c.source.(KeyValidator); ok {
+		return v.ValidateKey(key)
+	}
+	return nil
 }
 
 // LockUpdate takes the source's lock when it has one, so Updates through the
@@ -202,8 +294,5 @@ func (c *CacheableStorage) LockUpdate(ctx context.Context, keys []string) (func(
 }
 
 func (c *CacheableStorage) Close(ctx context.Context) error {
-	if err := c.cache.Close(ctx); err != nil {
-		return err
-	}
-	return c.source.Close(ctx)
+	return errors.Join(c.cache.Close(ctx), c.source.Close(ctx))
 }

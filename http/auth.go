@@ -31,10 +31,14 @@ func isPublic(path string) bool {
 func withPrincipal(authn *auth.Authenticator, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		info := requestInfoFrom(ctx)
 		if authn == nil {
 			anon := *auth.Anonymous
 			if actor := strings.TrimSpace(r.Header.Get(ActorHeader)); actor != "" {
 				anon.ID = actor
+			}
+			if info != nil {
+				info.actor = anon.Actor()
 			}
 			h.ServeHTTP(w, r.WithContext(auth.WithPrincipal(ctx, &anon)))
 			return
@@ -59,6 +63,9 @@ func withPrincipal(authn *auth.Authenticator, h http.Handler) http.Handler {
 			}
 		} else {
 			ctx = auth.WithPrincipal(ctx, p)
+			if info != nil {
+				info.actor = p.Actor()
+			}
 		}
 		h.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -76,11 +83,13 @@ func requireAdmin(h http.Handler) http.Handler {
 }
 
 func unauthorized(w http.ResponseWriter, r *http.Request, message string) {
+	noteFailure(r.Context(), http.StatusUnauthorized, errors.New(message))
 	w.Header().Set("WWW-Authenticate", `Bearer realm="realm"`)
 	handleError(r.Context(), w, http.StatusUnauthorized, createResponseWithErrors(nil, []string{message}))
 }
 
 func forbidden(w http.ResponseWriter, r *http.Request, message string) {
+	noteFailure(r.Context(), http.StatusForbidden, errors.New(message))
 	handleError(r.Context(), w, http.StatusForbidden, createResponseWithErrors(nil, []string{message}))
 }
 
@@ -128,7 +137,7 @@ func handleKeys(keys *auth.KeyStore) http.Handler {
 		defer r.Body.Close()
 		ctx := r.Context()
 		fail := func(status int, err error) {
-			logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path).Msg(err.Error())
+			noteFailure(ctx, status, err)
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 		}
 

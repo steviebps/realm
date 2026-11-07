@@ -363,9 +363,18 @@ func TestOIDCSignIn(t *testing.T) {
 
 	t.Run("returnTo cannot leave the server", func(t *testing.T) {
 		issuer.SignInAs("someone@example.com", true)
-		status, body := get(t, authtest.Browser(t), srv.URL+"/v1/auth/login/test?returnTo=//evil.example/")
-		if status != http.StatusOK || body != "ui:/ui/" {
-			t.Fatalf("sign-in ended at %d %q", status, body)
+		for _, target := range []string{
+			"//evil.example/",
+			"/\t/evil.example/", // browsers drop the tab: //evil.example/
+			"/%09/evil.example/",
+			"/\\evil.example/", // browsers read \ as /
+			"https://evil.example/ui/",
+			"/v1/auth/logout",
+		} {
+			status, body := get(t, authtest.Browser(t), srv.URL+"/v1/auth/login/test?returnTo="+url.QueryEscape(target))
+			if status != http.StatusOK || body != "ui:/ui/" {
+				t.Errorf("returnTo %q: sign-in ended at %d %q", target, status, body)
+			}
 		}
 	})
 
@@ -450,7 +459,12 @@ func TestBearerTokens(t *testing.T) {
 		c.Providers = []ProviderConfig{{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "secret"}}
 		c.AdminKey = adminKey
 	})
-	_, token, err := a.Keys().Create(context.Background(), NewKeyRequest{Name: "ci", Access: AccessWrite, Path: "/prod/"}, "t")
+	key, token, err := a.Keys().Create(context.Background(), NewKeyRequest{Name: "ci", Access: AccessWrite, Path: "/prod/"}, "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a stored key named "admin" is not recorded like the admin key
+	impostor, impostorToken, err := a.Keys().Create(context.Background(), NewKeyRequest{Name: "admin", Access: AccessWrite, Path: "/prod/"}, "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,7 +473,8 @@ func TestBearerTokens(t *testing.T) {
 		wantErr error
 		want    string
 	}{
-		{"Bearer " + token, nil, "key:ci"},
+		{"Bearer " + token, nil, "key:ci (" + key.ID + ")"},
+		{"Bearer " + impostorToken, nil, "key:admin (" + impostor.ID + ")"},
 		{"Bearer " + adminKey, nil, "key:admin"},
 		{"Bearer " + adminKey + "x", ErrInvalidKey, ""},
 		{"Bearer realm_bogus_token", ErrInvalidKey, ""},
@@ -617,6 +632,61 @@ func TestHostedDomain(t *testing.T) {
 			}
 			if status, _ := get(t, browser, srv.URL+"/whoami"); status != wantWhoami {
 				t.Fatalf("whoami = %d, want %d", status, wantWhoami)
+			}
+		})
+	}
+}
+
+// TestSessionsFollowProviderConfig verifies that sessions end when the
+// provider they came from is removed, or restricted to hosted domains they
+// do not belong to.
+func TestSessionsFollowProviderConfig(t *testing.T) {
+	issuer := authtest.NewIssuer(t, "someone@example.com")
+	access := AccessConfig{Viewers: Grant{Domains: []string{"example.com"}}}
+	google := ProviderConfig{Name: "google", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}
+	_, srv := realmServer(t, func(c *Config) {
+		c.Access = access
+		c.Providers = []ProviderConfig{google}
+	})
+	issuer.SetClaim("hd", "example.com")
+	browser := authtest.Browser(t)
+	if status, _ := get(t, browser, srv.URL+"/v1/auth/login/google"); status != http.StatusOK {
+		t.Fatalf("sign-in = %d", status)
+	}
+	u, _ := url.Parse(srv.URL)
+	cookies := browser.Jar.Cookies(u)
+
+	restricted := google
+	restricted.HostedDomains = []string{"corp.example"}
+	allowed := google
+	allowed.HostedDomains = []string{"example.com"}
+	other := ProviderConfig{Name: "other", Type: ProviderGitHub, ClientID: "id", ClientSecret: "secret"}
+	tests := []struct {
+		name      string
+		providers []ProviderConfig
+		signedIn  bool
+	}{
+		{"unchanged", []ProviderConfig{google}, true},
+		{"its domain is allowed", []ProviderConfig{allowed}, true},
+		{"provider removed", []ProviderConfig{other}, false},
+		{"restricted to another domain", []ProviderConfig{restricted}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a, err := New(Config{ExternalURL: srv.URL, SessionSecret: testSecret, Access: access, Providers: tt.providers}, newStorage(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest(http.MethodGet, srv.URL+"/v1/chambers/", nil)
+			for _, c := range cookies {
+				r.AddCookie(c)
+			}
+			p, err := a.Authenticate(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (p != nil) != tt.signedIn {
+				t.Fatalf("principal = %+v, want signed in: %v", p, tt.signedIn)
 			}
 		})
 	}
@@ -780,5 +850,50 @@ func TestAdminKeyOnly(t *testing.T) {
 	a.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodPost, LogoutPath, nil))
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("logout status = %d", w.Code)
+	}
+}
+
+// TestHostPrefixedCookies verifies that over HTTPS the session and sign-in
+// cookies carry the "__Host-" prefix, so a sibling subdomain cannot plant
+// them, and that an unprefixed cookie is ignored.
+func TestHostPrefixedCookies(t *testing.T) {
+	issuer := authtest.NewIssuer(t, "owner@example.com")
+	a, err := New(Config{
+		ExternalURL:   "https://realm.example",
+		SessionSecret: testSecret,
+		Access:        AccessConfig{Admins: Grant{Emails: []string{"owner@example.com"}}},
+		Providers:     []ProviderConfig{{Name: "test", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}},
+	}, newStorage(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "https://realm.example/v1/auth/login/test", nil))
+	if rec.Code != http.StatusFound {
+		t.Fatalf("login = %d", rec.Code)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "__Host-realm_login" || cookies[0].Path != "/" || !cookies[0].Secure || cookies[0].Domain != "" {
+		t.Fatalf("login cookies = %+v", cookies)
+	}
+
+	sealed, err := a.sealer.seal(SessionCookie, session{Email: "owner@example.com", Provider: "test", Expires: time.Now().Add(time.Hour).Unix()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		cookie   string
+		signedIn bool
+	}{
+		{"__Host-realm_session", true},
+		{"realm_session", false}, // could have been planted by a sibling subdomain
+	} {
+		r := httptest.NewRequest(http.MethodGet, "https://realm.example/v1/chambers/", nil)
+		r.AddCookie(&http.Cookie{Name: tt.cookie, Value: sealed})
+		p, err := a.Authenticate(r)
+		if err != nil || (p != nil) != tt.signedIn {
+			t.Errorf("cookie %s: principal = %+v, %v; want signed in: %v", tt.cookie, p, err, tt.signedIn)
+		}
 	}
 }

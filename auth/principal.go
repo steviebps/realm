@@ -163,7 +163,9 @@ func (p *Principal) IsSecretKey() bool {
 func (p *Principal) Actor() string {
 	switch p.Kind {
 	case KindKey:
-		return "key:" + p.Name
+		// Names are not unique, and a key may be named "admin": the ID tells
+		// keys apart, and from the admin key.
+		return "key:" + p.Name + " (" + p.ID + ")"
 	case KindAdminKey:
 		return "key:admin"
 	}

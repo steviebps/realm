@@ -1,6 +1,7 @@
 package realm
 
 import (
+	"bytes"
 	"crypto/sha1"
 	"encoding/binary"
 	"encoding/json"
@@ -34,6 +35,16 @@ const (
 	OpSemverLte Operator = "semverLte"
 )
 
+// known reports whether this version of realm implements op. A clause with an
+// operator it does not know (one a newer realm added) never matches.
+func (op Operator) known() bool {
+	switch op {
+	case OpIn, OpNotIn, OpStartsWith, OpSemverGte, OpSemverLte:
+		return true
+	}
+	return false
+}
+
 // longScale is the maximum value representable by the 15 leading hex digits
 // (60 bits) of the bucketing hash. It normalizes the hash into the [0,1) range.
 const longScale = float64(0xFFFFFFFFFFFFFFF)
@@ -48,19 +59,47 @@ type Clause struct {
 	// semverBound caches the "v"-prefixed semver operand so evaluation does
 	// not rebuild it. Set by validation; computed on demand when empty.
 	semverBound string
+
+	// raw holds a clause with an unknown operator as it was read, so that it
+	// is marshaled again unchanged.
+	raw json.RawMessage
 }
 
 type clauseAlias Clause
 
-// UnmarshalJSON validates that the clause names an attribute, uses a known
-// operator, and carries values appropriate for that operator.
+// UnmarshalJSON validates that the clause names an attribute and carries
+// values appropriate for its operator. A clause with an operator this version
+// of realm does not know (one a newer realm added) is kept as it is,
+// unvalidated, and never matches; ParseChamber, which validates writes,
+// rejects it.
 func (c *Clause) UnmarshalJSON(b []byte) error {
 	var alias clauseAlias
 	if err := json.Unmarshal(b, &alias); err != nil {
-		return err
+		// An unknown operator's values need not be strings.
+		var head struct {
+			Attribute string   `json:"attribute"`
+			Op        Operator `json:"op"`
+		}
+		if json.Unmarshal(b, &head) != nil || head.Op.known() {
+			return err
+		}
+		alias = clauseAlias{Attribute: head.Attribute, Op: head.Op}
 	}
 	*c = Clause(alias)
+	if !c.Op.known() {
+		c.raw = bytes.Clone(b)
+		return nil
+	}
 	return c.validate()
+}
+
+// MarshalJSON writes the clause. A clause with an unknown operator is written
+// exactly as it was read.
+func (c Clause) MarshalJSON() ([]byte, error) {
+	if c.raw != nil {
+		return c.raw, nil
+	}
+	return json.Marshal(clauseAlias(c))
 }
 
 func (c *Clause) validate() error {
@@ -87,7 +126,8 @@ func (c *Clause) validate() error {
 }
 
 // Matches reports whether the clause holds for the evaluation context. A
-// clause never matches when its attribute is absent from the context.
+// clause never matches when its attribute is absent from the context, or when
+// its operator is unknown.
 func (c *Clause) Matches(ec EvaluationContext) bool {
 	v, ok := ec.Attribute(c.Attribute)
 	if !ok {
@@ -280,6 +320,20 @@ func (tr *TargetingRule) Applies(flagKey string, ec EvaluationContext) bool {
 	return tr.Rollout.Includes(flagKey, ec)
 }
 
+// hasUnknownOperator reports whether a clause of the rule has an operator this
+// version of realm does not know, so the rule never applies.
+func (tr *TargetingRule) hasUnknownOperator() bool {
+	return slices.ContainsFunc(tr.Clauses, func(c *Clause) bool { return !c.Op.known() })
+}
+
+// ruleName names the targeting rule at index i, with the given id, in errors.
+func ruleName(id string, i int) string {
+	if id != "" {
+		return id
+	}
+	return "#" + strconv.Itoa(i+1)
+}
+
 type targetingRuleAlias TargetingRule
 
 // targetingRuleJSON decodes a TargetingRule with its value kept raw so the
@@ -300,10 +354,7 @@ func parseTargeting(data json.RawMessage, ruleType string) ([]*TargetingRule, er
 	ids := make(map[string]struct{}, len(raw))
 	rules := make([]*TargetingRule, 0, len(raw))
 	for i, r := range raw {
-		name := r.ID
-		if name == "" {
-			name = "#" + strconv.Itoa(i+1)
-		}
+		name := ruleName(r.ID, i)
 		if r.ID != "" {
 			if _, dup := ids[r.ID]; dup {
 				return nil, fmt.Errorf("targeting rule id %q is not unique", r.ID)

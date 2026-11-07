@@ -1,4 +1,5 @@
 dist/*
 realm
 .realm/
-realm.exee2e-server.log
+realm.exe
+e2e-server.log

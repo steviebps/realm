@@ -70,7 +70,7 @@ func newClient(cmd *cobra.Command) (*client.HttpClient, error) {
 		token = os.Getenv(TokenEnv)
 	}
 	if token == "" {
-		token = os.ExpandEnv(realmConfig.Client.Token)
+		token = utils.ExpandEnvRef(realmConfig.Client.Token)
 	}
 	return client.NewHttpClient(&client.HttpClientConfig{Address: addr, Token: token})
 }

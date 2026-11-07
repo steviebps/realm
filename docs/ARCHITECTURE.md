@@ -127,13 +127,25 @@ change, plus periodic heartbeat comments. On the server, an in-process **broker*
 wakes watchers whose path is at or below the changed path (prefix match), so an
 inherited parent change refreshes child watchers. The watch request bypasses the
 per-request timeout; the endpoint reuses the same storage `Get` as a normal read,
-so inheritance and validation are identical. Each server caps its open streams
-(`HandlerConfig.MaxStreams`, 503 beyond it) and ends each stream after about 20
-minutes so clients reconnect and are re-authenticated; shutdown cancels every
-stream (`http.Server.BaseContext`). The Go SDK reopens a stream that receives
-nothing (not even a heartbeat) for 75 seconds, retries with jittered backoff,
-and falls back to polling only when the server answers a watch with a plain
-chamber.
+so inheritance and validation are identical. A write wakes every stream below
+it at once, so the streams of a path share one read (`sharedReads`, a
+`singleflight` keyed by path and the broker's generation, so a stream woken by
+a change never gets a read begun before it). A read that fails (storage
+unreachable) does not end the stream: it retries with backoff while the client
+keeps its values. Each server caps its open streams
+(`HandlerConfig.MaxStreams`, 503 beyond it), gives each event 30 seconds to be
+written (a client that stops reading loses its stream), and ends each stream
+after about 20 minutes so clients reconnect and are re-authenticated; shutdown
+cancels every stream (`http.Server.BaseContext`). The Go SDK (`pkg/refresh.go`) reopens a stream that receives nothing (not even
+a heartbeat) for 75 seconds and retries with jittered backoff, honoring
+`Retry-After` and waiting minutes after 401, 403, or 404. While the stream is
+down (three attempts in a row, or a minute, without a delivery), it also polls
+at the polling interval, so a server at its stream cap or a proxy that buffers
+streams cannot freeze its flags. It falls back to polling only when the server
+answers a watch with a chamber (a server that predates streaming), and tries
+the stream again every 5 minutes. It applies only `chamber` events, and
+rejects a payload that is not a chamber (null, or no `rules`), keeping the
+last snapshot.
 
 Where the broker hears about writes depends on the backend. A `Watchable`
 backend (`postgres`) reports every committed change, including other replicas'
@@ -158,13 +170,25 @@ those backends.
 
 ### Capabilities and multi-replica safety
 
-Backends can implement two optional interfaces (`pkg/storage/txn.go`):
+Backends can implement optional interfaces (`pkg/storage/txn.go`,
+`storage.go`):
 
 - **`Transactional`** — `Txn(checks, ops)` applies several puts and deletes
   atomically if each checked key is still at the version read. Every write gets
   the next value of one storage-wide revision, which is each entry's `Version`.
 - **`Watchable`** — `Watch(ctx)` reports every committed change (revision and
   key) in order, from any server sharing the storage.
+- **`UpdateReader`** — `ReadForUpdate(ctx, key)` reads an entry as stored,
+  bypassing any copy; `Update` reads through it, so a read-modify-write never
+  starts from a stale cached copy (`cacheable` reads its source).
+- **`KeyValidator`** — `ValidateKey(key)` refuses keys the backend cannot
+  store (`file`: names too long for the file system, and characters some file
+  systems would map onto other names). `Update` checks every op's key before
+  applying any; the error wraps `ErrInvalidPath`, which the server answers
+  with 400.
+- **`HealthReporter`** — `Health()` reports trouble beyond failing reads
+  (`postgres`: a change feed that has not caught up for 30 seconds), which
+  fails `/readyz`.
 
 All read-modify-write sequences go through `storage.Update` (or
 `UpdateJSON`): a chamber write with its If-Match check and history entry, the
@@ -187,13 +211,22 @@ in `realm_changes` and sends `NOTIFY realm_changes`. A watcher holds a `LISTEN`
 connection, reads `realm_changes` past the last revision it saw whenever it is
 notified, every 5 seconds, and after reconnecting, and reports a change to `/`
 (everything) when the records it needed were already pruned (10,000 revisions
-are kept).
+are kept) or when the revision went backwards (a restore or failover). Every
+feed query runs under a 10-second timeout, after which the watcher
+reconnects, and its connections use TCP keepalive. Sessions default to short
+statement, lock, and idle-in-transaction timeouts, and transactions run at
+READ COMMITTED; serialization failures and deadlocks are retried as
+conflicts.
 
 Two wrappers compose backends:
 
-- **`cacheable`** (`cacheable.go`) — a write-through `cache` over a `source`
-  (e.g. `bigcache` over `boltdb`). It refuses a `postgres` source: another
-  replica's write would leave this replica's cache stale.
+- **`cacheable`** (`cacheable.go`) — a `cache` over a `source` (e.g.
+  `bigcache` over `boltdb`). Reads fill the cache; writes go to the source and
+  then drop the entry from the cache, even when the write failed (it may have
+  landed). A generation counter keeps a fill that read the source before a
+  write from landing after it, and `Update` reads the source (`UpdateReader`).
+  It refuses a `postgres` source: another replica's write would leave this
+  replica's cache stale.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
   `Get`, merges a chamber with every ancestor along the path, up to and
   including the root chamber `/`, so child chambers inherit parent rules and
@@ -228,10 +261,26 @@ goes through `helper/logging` — a zerolog `TracedLogger` accessed as
 correlated with the active span. Handlers and commands wrap work in
 `tracer.Start(ctx, "…")`; storage spans mark failures with an error status
 (`recordError`). The SDK never installs providers or touches zerolog globals;
-`WithLogger` routes its logs.
+`WithLogger` routes its logs. By default it logs at `info` and above, with a
+`component=realm` field, and rate-limits failures: the first, the recovery,
+and repeats at most every 5 minutes.
 
 `GET /healthz` is liveness; `GET /readyz` is readiness (storage answers, not
 draining).
+
+The outermost handler, `withLifecycle` (`http/lifecycle.go`), runs around
+everything else, tracing included. It sets per-request deadlines: the request
+must arrive within the request timeout and the response be taken within 20
+seconds more. `http.Server.ReadTimeout` and `WriteTimeout` stay unset, because
+they would also cut off watch streams; streams lift the read deadline once
+their request is read and bound each write instead. It also gives each request
+an ID (`X-Request-Id`, reused from a proxy when safe) and a logger carrying it,
+recovers panics into a 500 (or an aborted response, once one has begun), and
+writes one access log line per request, whose level reflects what happened
+(`logAccess`). Handlers report the caller and, through `noteFailure`, why a
+request failed to it through `requestInfo`; only server errors (5xx) get a
+log line of their own.
+`http.Server.ErrorLog` routes net/http's own messages into the same log.
 
 ## Path to LaunchDarkly parity
 

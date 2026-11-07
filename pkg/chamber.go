@@ -55,16 +55,17 @@ type EvaluatedFlag struct {
 }
 
 // Evaluate resolves every flag in the chamber for ec, evaluating every
-// schedule at the same instant. It also returns the next time a schedule could
-// change those values, or the zero time when none can, so a caller holding the
-// values need only re-evaluate then.
+// schedule at the same instant. Flags of a type this version of realm does not
+// know are omitted. It also returns the next time a schedule could change
+// those values, or the zero time when none can, so a caller holding the values
+// need only re-evaluate then.
 func (c *Chamber) Evaluate(ec EvaluationContext) (map[string]EvaluatedFlag, time.Time) {
 	if ec.at.IsZero() {
 		ec.at = time.Now()
 	}
 	flags := make(map[string]EvaluatedFlag, len(c.Rules))
 	for key, f := range c.Rules {
-		if f == nil || f.Rule == nil {
+		if f == nil || f.Rule == nil || !knownType(f.Type) {
 			continue
 		}
 		flags[key] = EvaluatedFlag{Type: f.Type, Value: f.ValueFor(key, ec)}
@@ -211,11 +212,12 @@ func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 }
 
 // ParseChamber decodes and validates a chamber strictly, as the server does
-// for writes. It is json.Unmarshal into a Chamber, except that a field realm
-// does not know, at any level, is an error instead of being ignored: a
-// misspelled "schedule" would otherwise make its rule apply immediately, and
-// a misspelled "rules" would replace the chamber with an empty one. (SDKs
-// decode leniently, so a newer server's additions do not break them.)
+// for writes. It is json.Unmarshal into a Chamber, except that a field,
+// operator, or flag type realm does not know, at any level, is an error
+// instead of being ignored: a misspelled "schedule" would otherwise make its
+// rule apply immediately, a misspelled "rules" would replace the chamber with
+// an empty one, and a misspelled operator would never match. (Reads decode
+// leniently, so a newer server's additions do not break older SDKs.)
 func ParseChamber(b []byte) (*Chamber, error) {
 	var c Chamber
 	if err := json.Unmarshal(b, &c); err != nil {
@@ -224,7 +226,49 @@ func ParseChamber(b []byte) (*Chamber, error) {
 	if err := checkFields(b, chamberShape, ""); err != nil {
 		return nil, err
 	}
+	if err := c.checkSupported(); err != nil {
+		return nil, err
+	}
 	return &c, nil
+}
+
+// checkSupported reports the first flag, in key order, of a type or with an
+// operator this version of realm does not know.
+func (c *Chamber) checkSupported() error {
+	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
+		f := c.Rules[key]
+		if f == nil || f.Rule == nil {
+			continue
+		}
+		if !knownType(f.Type) {
+			return fmt.Errorf("flag %q: %w", key, &UnsupportedTypeError{RuleType: f.Type})
+		}
+		for i, tr := range f.Targeting {
+			for _, cl := range tr.Clauses {
+				if !cl.Op.known() {
+					return fmt.Errorf("flag %q: targeting rule %s: clause on %q: unsupported operator %q", key, ruleName(tr.ID, i), cl.Attribute, cl.Op)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// unsupportedFlags returns, sorted, the keys of the flags this version of
+// realm cannot fully evaluate: those of an unknown type, which cannot be
+// served, and those with a clause of an unknown operator, which never matches.
+func (c *Chamber) unsupportedFlags() []string {
+	var keys []string
+	for key, f := range c.Rules {
+		if f == nil || f.Rule == nil {
+			continue
+		}
+		if !knownType(f.Type) || slices.ContainsFunc(f.Targeting, (*TargetingRule).hasUnknownOperator) {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // shape lists the fields a JSON object may hold, and the shapes of nested

@@ -221,7 +221,7 @@ func TestAPIKeys(t *testing.T) {
 		t.Errorf("invalid key = %d, want 400", status)
 	}
 	readKey, readToken := create(`{"name":"sdk","access":"read","path":"/prod/"}`)
-	_, writeToken := create(`{"name":"ci","access":"write","path":"/prod/"}`)
+	writeKey, writeToken := create(`{"name":"ci","access":"write","path":"/prod/"}`)
 	_, rootReadToken := create(`{"name":"labels","access":"read","path":"/"}`)
 	if readKey.CreatedBy != "admin@example.com" {
 		t.Errorf("createdBy = %q", readKey.CreatedBy)
@@ -262,8 +262,8 @@ func TestAPIKeys(t *testing.T) {
 		})
 	}
 
-	if got := lastActor(t, nil, srv.URL+"/v1/history/prod/app/", readToken); got != "key:ci" {
-		t.Errorf("history actor = %q, want key:ci", got)
+	if got, want := lastActor(t, nil, srv.URL+"/v1/history/prod/app/", readToken), "key:ci ("+writeKey.ID+")"; got != want {
+		t.Errorf("history actor = %q, want %q", got, want)
 	}
 
 	if status, _ := call(t, admin, http.MethodDelete, srv.URL+"/v1/keys/"+readKey.ID, "", ""); status != http.StatusNoContent {

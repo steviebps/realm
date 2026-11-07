@@ -98,6 +98,9 @@ func serveLayers(w http.ResponseWriter, r *http.Request, strg storage.Storage, p
 	case errors.As(err, &nf):
 		fail(http.StatusNotFound, nf)
 		return
+	case errors.Is(err, storage.ErrInvalidPath):
+		fail(http.StatusBadRequest, err)
+		return
 	case err != nil:
 		// the cause is logged, not sent: it can name storage internals
 		span.RecordError(err)

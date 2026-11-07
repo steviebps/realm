@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/steviebps/realm/auth"
-	"github.com/steviebps/realm/helper/logging"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
 	"go.opentelemetry.io/otel/attribute"
@@ -43,8 +42,8 @@ type evaluateResponse struct {
 //	POST /v1/evaluate/<path>             → {"flags": {"<name>": {"type", "value"}}}
 //	POST /v1/evaluate/<path>?watch=true  → the same as server-sent events, re-sent when the values change
 //	                                       (after a write, or when a targeting rule's schedule starts or ends)
-func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
-	chambers := &parsedChambers{strg: strg}
+func handleEvaluate(strg storage.Storage, brk *broker, streamReads *sharedReads) http.Handler {
+	chambers := &parsedChambers{}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -52,7 +51,7 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 		span := trace.SpanFromContext(ctx)
 		span.SetAttributes(attribute.String("realm.server.logicalPath", path))
 		fail := func(status int, err error) {
-			logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path).Msg(err.Error())
+			noteFailure(ctx, status, err)
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 		}
 
@@ -62,6 +61,10 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 		}
 		if storage.IsReservedPath(path) {
 			fail(http.StatusBadRequest, fmt.Errorf("paths under %q are reserved", storage.ReservedPrefix))
+			return
+		}
+		if err := storage.ValidatePath(path); err != nil {
+			fail(http.StatusBadRequest, err)
 			return
 		}
 		p := auth.FromContext(ctx)
@@ -84,14 +87,20 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 
 		var req evaluateRequest
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxEvaluateBody)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			fail(http.StatusBadRequest, fmt.Errorf("invalid evaluation context: %w", err))
+			status, err := readFailure(err)
+			if status == http.StatusBadRequest {
+				err = fmt.Errorf("invalid evaluation context: %w", err)
+			}
+			fail(status, err)
 			return
 		}
 		ec := realm.EvaluationContext{Key: req.Key, Attributes: req.Attributes}
 
 		if isWatchRequest(r) {
-			streamEvents(w, r, brk, path, "flags", func(ctx context.Context) ([]byte, time.Time, error) {
-				flags, changesAt, err := chambers.evaluate(ctx, path, ec)
+			// evaluate keys are published in web pages, so anyone can open
+			// these streams
+			streamEvents(w, r, brk, path, "flags", true, func(ctx context.Context) ([]byte, time.Time, error) {
+				flags, changesAt, err := chambers.evaluate(ctx, streamReads, path, ec)
 				if err != nil {
 					return nil, time.Time{}, err
 				}
@@ -101,11 +110,15 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 			return
 		}
 
-		flags, _, err := chambers.evaluate(ctx, path, ec)
+		flags, _, err := chambers.evaluate(ctx, strg, path, ec)
 		if err != nil {
 			var nf *storage.NotFoundError
 			if errors.As(err, &nf) {
 				fail(http.StatusNotFound, nf)
+				return
+			}
+			if errors.Is(err, storage.ErrInvalidPath) {
+				fail(http.StatusBadRequest, err)
 				return
 			}
 			fail(http.StatusInternalServerError, err)
@@ -119,7 +132,6 @@ func handleEvaluate(strg storage.Storage, brk *broker) http.Handler {
 // path so the evaluation streams on a path share one parse per change rather
 // than each re-parsing the chamber on every write.
 type parsedChambers struct {
-	strg storage.Storage
 	mu   sync.Mutex
 	last map[string]parsedChamber
 }
@@ -129,11 +141,20 @@ type parsedChamber struct {
 	chamber *realm.Chamber
 }
 
-// evaluate resolves every flag of the chamber at path (as inherited) for ec.
-// It also returns the next time a schedule could change those values, or the
-// zero time when none can.
-func (p *parsedChambers) evaluate(ctx context.Context, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, time.Time, error) {
-	entry, err := p.strg.Get(ctx, path)
+// maxParsedChambers bounds how many paths parsedChambers remembers; past it,
+// it forgets them all and starts over.
+const maxParsedChambers = 1024
+
+// entryGetter reads storage entries: the storage itself, or sharedReads.
+type entryGetter interface {
+	Get(ctx context.Context, key string) (*storage.StorageEntry, error)
+}
+
+// evaluate resolves every flag of the chamber at path (as inherited, read
+// from src) for ec. It also returns the next time a schedule could change
+// those values, or the zero time when none can.
+func (p *parsedChambers) evaluate(ctx context.Context, src entryGetter, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, time.Time, error) {
+	entry, err := src.Get(ctx, path)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
@@ -157,7 +178,7 @@ func (p *parsedChambers) parse(path string, raw []byte) (*realm.Chamber, error) 
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return nil, fmt.Errorf("could not read chamber %s: %w", path, err)
 	}
-	if p.last == nil {
+	if p.last == nil || len(p.last) >= maxParsedChambers {
 		p.last = make(map[string]parsedChamber)
 	}
 	p.last[path] = parsedChamber{raw: bytes.Clone(raw), chamber: &c}

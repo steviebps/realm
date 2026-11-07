@@ -32,16 +32,76 @@ export function bucket(seed: string, key: string): number {
 /**
  * Returns the named attribute of context, falling back to the process-wide
  * defaults, or undefined when it is absent. `key` resolves to context.key.
+ * Values are read as attributeValue reads them, so a number that a
+ * JavaScript caller passed matches as its string.
  */
 export function attribute(
   context: EvaluationContext,
   defaults: Record<string, string> | undefined,
   name: string,
 ): string | undefined {
-  if (name === KEY_ATTRIBUTE && context.key) return context.key;
-  if (context.attributes && Object.hasOwn(context.attributes, name)) return context.attributes[name];
-  if (defaults && Object.hasOwn(defaults, name)) return defaults[name];
+  if (name === KEY_ATTRIBUTE) {
+    const key = attributeValue(context.key);
+    if (key) return key;
+  }
+  const attributes = context.attributes;
+  if (typeof attributes === 'object' && attributes !== null && Object.hasOwn(attributes, name)) {
+    const value = attributeValue(attributes[name]);
+    if (value !== undefined) return value;
+  }
+  if (defaults && Object.hasOwn(defaults, name)) return attributeValue(defaults[name]);
   return undefined;
+}
+
+/**
+ * Returns value as an attribute value: a string as it is, and a number or
+ * boolean (which JavaScript callers pass, but the server does not accept) as
+ * a string. Anything else is undefined, so it counts as a missing attribute.
+ */
+export function attributeValue(value: unknown): string | undefined {
+  switch (typeof value) {
+    case 'string':
+      return value;
+    case 'number':
+    case 'boolean':
+      return String(value);
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Returns attributes with every value a string, as attributeValue reads it,
+ * leaving out values it cannot read; undefined when attributes is not an
+ * object. It returns attributes itself when every value is a string already.
+ */
+export function stringAttributes(attributes: unknown): Record<string, string> | undefined {
+  if (typeof attributes !== 'object' || attributes === null || Array.isArray(attributes)) return undefined;
+  const entries = Object.entries(attributes);
+  if (entries.every(([, value]) => typeof value === 'string')) return attributes as Record<string, string>;
+  const strings: Record<string, string> = {};
+  for (const [name, value] of entries) {
+    const v = attributeValue(value);
+    if (v !== undefined) strings[name] = v;
+  }
+  return strings;
+}
+
+/**
+ * Returns context as the server accepts it: its key and attribute values as
+ * strings (see attributeValue), leaving out values that cannot be. It returns
+ * context itself when that changes nothing, and an empty context for one
+ * that is not an object.
+ */
+export function normalizeContext(context: EvaluationContext | null | undefined): EvaluationContext {
+  if (typeof context !== 'object' || context === null) return {};
+  const key = context.key === undefined ? undefined : attributeValue(context.key);
+  const attributes = context.attributes === undefined ? undefined : stringAttributes(context.attributes);
+  if (key === context.key && attributes === context.attributes) return context;
+  const normalized: EvaluationContext = {};
+  if (key !== undefined) normalized.key = key;
+  if (attributes !== undefined) normalized.attributes = attributes;
+  return normalized;
 }
 
 /** Reports whether the clause holds for context. A missing attribute never matches. */
@@ -132,7 +192,10 @@ export function flagValue(
 
 /**
  * Resolves every flag in the chamber for context, evaluating every schedule at
- * the same instant, now (the current time by default).
+ * the same instant, now (the current time by default). A flag of a type this
+ * SDK does not know (from a newer server) is left out, as the Go SDK leaves
+ * it out, and so is one too malformed to evaluate, rather than failing every
+ * flag; getters return their fallbacks for both.
  */
 export function evaluateChamber(
   chamber: Chamber,
@@ -142,13 +205,40 @@ export function evaluateChamber(
 ): EvaluatedFlags {
   const flags: EvaluatedFlags = {};
   for (const [key, flag] of Object.entries(chamber.rules ?? {})) {
-    if (flag) flags[key] = { type: flag.type, value: flagValue(key, flag, context, defaults, now) };
+    if (!flag || !isFlagType(flag.type)) continue;
+    try {
+      flags[key] = { type: flag.type, value: flagValue(key, flag, context, defaults, now) };
+    } catch {
+      // malformed: left out
+    }
   }
   return flags;
+}
+
+const flagTypes: ReadonlySet<unknown> = new Set<FlagType>(['string', 'number', 'boolean', 'custom']);
+
+/** Reports whether type is one of the flag types this SDK knows. */
+export function isFlagType(type: unknown): type is FlagType {
+  return flagTypes.has(type);
 }
 
 /** Returns value when the flag has the wanted type, otherwise fallback. */
 export function typedValue<T>(type: FlagType | undefined, value: unknown, want: FlagType, fallback: T): T {
   if (type !== want || (want !== 'custom' && typeof value !== want)) return fallback;
   return value as T;
+}
+
+/**
+ * Returns a deep copy of value, a flag's value, so that a caller that changes
+ * the copy does not change what later reads return. Primitives are returned
+ * as they are, and so is a value that cannot be copied: one from the server
+ * is JSON, which always can, but a bootstrap value might not be.
+ */
+export function copyValue<T>(value: T): T {
+  if (typeof value !== 'object' || value === null) return value;
+  try {
+    return typeof structuredClone === 'function' ? structuredClone(value) : (JSON.parse(JSON.stringify(value)) as T);
+  } catch {
+    return value;
+  }
 }

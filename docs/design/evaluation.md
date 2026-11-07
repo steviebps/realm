@@ -17,9 +17,9 @@ POST /v1/evaluate/<path>
 {"key": "user-123", "attributes": {"tenantId": "acme", "version": "2.4.0"}}
 ```
 
-The server reads the chamber at `<path>`, including rules inherited from its
-parents, and evaluates every flag for the context with the same code the Go
-SDK uses (`Chamber.Evaluate`). The response holds only results:
+The server reads the chamber at `<path>`, including flags inherited from its
+parent chambers up to the root chamber `/`, and evaluates every flag for the
+context with the same code the Go SDK uses (`Chamber.Evaluate`). The response holds only results:
 
 ```json
 {"data": {"flags": {"new-checkout": {"type": "boolean", "value": true}}}}
@@ -55,7 +55,10 @@ A key's `access` may now be `evaluate`, besides `read` and `write`. An
 evaluate key can call `/v1/evaluate/` for chambers at or beneath its path and
 nothing else: it cannot read chambers, their history, or the catalog. It is
 meant to be shipped in front-end code, so treat it as public. It reveals the
-values a context would receive, never the rules behind them.
+values a context would receive, never the rules behind them. Those values
+include every flag the chamber inherits, up to `/`: inheritance applies to
+browsers as it does to servers, so a value only servers should see belongs in
+a chamber that browser apps do not inherit from.
 
 `read` and `write` keys may call `/v1/evaluate/` too, so backends in other
 languages can evaluate without porting the rules engine, but never from a
@@ -141,6 +144,13 @@ the expected value for each flag, plus raw bucket values. The Go tests
 (`pkg/conformance_test.go`) and the TypeScript tests run the same file, so the
 two implementations cannot silently disagree. Add a case there whenever
 evaluation changes.
+
+Both SDKs read chambers written by newer servers. A clause with an operator
+they do not know never matches, so its rule falls through to the next one,
+and a flag of a type they do not know is left out of evaluations, so its
+getters return the caller's default. The server's write path
+(`realm.ParseChamber`) refuses both, so they appear only when a newer server
+wrote them. The conformance file has a case for each.
 
 ## Not yet built
 

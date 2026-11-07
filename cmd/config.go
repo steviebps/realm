@@ -7,9 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/steviebps/realm/auth"
@@ -33,10 +31,13 @@ type RealmConfig struct {
 	Server ServerConfig `json:"server,omitempty"`
 }
 
+// NewDefaultServerConfig returns the config of a --dev server: in-memory
+// storage whose entries never expire (bigcache without a life_window), so
+// dev data lasts until the server stops.
 func NewDefaultServerConfig() RealmConfig {
 	return RealmConfig{
 		Client: ClientConfig{},
-		Server: ServerConfig{StorageType: "bigcache", StorageOptions: map[string]string{"life_window": strconv.FormatInt(int64(time.Hour*24), 10)}, Port: "8080", Inheritable: true},
+		Server: ServerConfig{StorageType: "bigcache", StorageOptions: map[string]string{}, Port: "8080", Inheritable: true},
 	}
 }
 
@@ -56,6 +57,10 @@ type ServerConfig struct {
 	// Auth enables authentication; without it the server is open to anyone
 	// who can reach it.
 	Auth *auth.Config `json:"auth,omitempty"`
+	// MaxStreams caps the watch (SSE) streams the server holds open at once
+	// (default 10,000). Evaluation streams, which anyone holding a published
+	// evaluate key can open, may take at most three quarters of them.
+	MaxStreams int `json:"maxStreams,omitempty"`
 }
 
 type ClientConfig struct {
