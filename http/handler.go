@@ -592,7 +592,12 @@ func chamberTree(ctx context.Context, strg storage.Storage, root string) ([]stri
 			// backends name a child "a" or "a/", and the file backend lists
 			// a chamber's own entry as "."
 			name = strings.TrimSuffix(name, "/")
-			if name == "" || name == "." || isReservedName(name) {
+			if name == "" || name == "." {
+				continue
+			}
+			// realm's metadata lives only beneath the root; a chamber named
+			// "_realm" anywhere else is an ordinary one
+			if paths[i] == "/" && isReservedName(name) {
 				continue
 			}
 			paths = append(paths, paths[i]+name+"/")

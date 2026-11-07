@@ -118,6 +118,49 @@ func TestRecursiveDelete(t *testing.T) {
 	}
 }
 
+// TestRecursiveDeleteChamberNamedLikeMetadata checks that only the root-level
+// "_realm" is realm's metadata: a chamber of that name anywhere else is an
+// ordinary one, and a recursive delete removes it with the rest.
+func TestRecursiveDeleteChamberNamedLikeMetadata(t *testing.T) {
+	tree := []string{"a/", "a/_realm/", "a/_realm/b/", "a/c/", "other/"}
+
+	for name, newStorage := range deleteBackends {
+		t.Run(name, func(t *testing.T) {
+			srv := newInheritableTestServerOn(t, newStorage(t))
+			base := srv.URL + "/v1/chambers/"
+			for _, p := range tree {
+				if resp, out := do(t, http.MethodPost, base+p, `{"rules":{}}`, nil); resp.StatusCode != http.StatusCreated {
+					t.Fatalf("create %s: %d %v", p, resp.StatusCode, out.Errors)
+				}
+			}
+
+			resp, out := do(t, http.MethodDelete, base+"a?recursive=true", "", nil)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("recursive delete: %d %v", resp.StatusCode, out.Errors)
+			}
+			var result deleteResult
+			if err := json.Unmarshal(out.Data, &result); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			want := []string{"/a/", "/a/_realm/", "/a/_realm/b/", "/a/c/"}
+			if !slices.Equal(result.Deleted, want) {
+				t.Errorf("deleted = %v, want %v", result.Deleted, want)
+			}
+
+			for _, p := range tree {
+				resp, _ := do(t, http.MethodGet, base+p+"?inherit=false", "", nil)
+				want := http.StatusNotFound
+				if p == "other/" {
+					want = http.StatusOK
+				}
+				if resp.StatusCode != want {
+					t.Errorf("GET %s after delete: %d, want %d", p, resp.StatusCode, want)
+				}
+			}
+		})
+	}
+}
+
 func TestRecursiveDeleteRequests(t *testing.T) {
 	tests := []struct {
 		name    string

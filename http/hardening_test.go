@@ -82,6 +82,43 @@ func TestReservedPathsCannotBeReachedByEncoding(t *testing.T) {
 	}
 }
 
+// TestReservedPathsIgnoreCase verifies that realm's metadata is out of reach
+// however its prefix is capitalized. The file backend maps "/_REALM/" onto
+// the directory of "/_realm/" on a case-insensitive filesystem (the default
+// on macOS and Windows), which would let a chamber write replace the catalog
+// or the API keys.
+func TestReservedPathsIgnoreCase(t *testing.T) {
+	stg, err := storage.NewFileStorage(map[string]string{"path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newInheritableTestServerOn(t, stg)
+
+	if res, out := do(t, http.MethodPost, srv.URL+"/v1/catalog/region", `{"values":{"eu":"Europe"}}`, nil); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("seed the catalog: %d %v", res.StatusCode, out.Errors)
+	}
+
+	for _, p := range []string{"_REALM/catalog/", "_Realm/catalog/", "_realm/catalog/"} {
+		for _, req := range []struct{ method, route, body string }{
+			{http.MethodGet, "/v1/chambers/", ""},
+			{http.MethodPost, "/v1/chambers/", `{"rules":{}}`},
+			{http.MethodPatch, "/v1/chambers/", `{"rules":{}}`},
+			{http.MethodDelete, "/v1/chambers/", ""},
+			{http.MethodPost, "/v1/evaluate/", `{}`},
+		} {
+			res, out := do(t, req.method, srv.URL+req.route+p, req.body, nil)
+			if res.StatusCode != http.StatusBadRequest {
+				t.Errorf("%s %s%s = %d, want 400 (%v)", req.method, req.route, p, res.StatusCode, out.Errors)
+			}
+		}
+	}
+
+	res, out := do(t, http.MethodGet, srv.URL+"/v1/catalog/region", "", nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(out.Data), "Europe") {
+		t.Errorf("the catalog was changed: %d %s %v", res.StatusCode, out.Data, out.Errors)
+	}
+}
+
 func TestCanonicalPath(t *testing.T) {
 	for in, want := range map[string]string{
 		"":          "/",
