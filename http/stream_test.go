@@ -3,6 +3,7 @@ package http
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,5 +95,64 @@ func TestStreamChamberPushesInitialAndUpdates(t *testing.T) {
 
 	if second := waitData(t, events, 2*time.Second); !strings.Contains(second, `"two"`) {
 		t.Fatalf("update event missing new value: %s", second)
+	}
+}
+
+// TestStreamChamberFramesMultiLinePayloads checks that a chamber stored
+// pretty-printed (edited by hand, or written by a tool that formats JSON)
+// reaches clients whole. Every line of an event's payload must be a data
+// field: a client takes any other line for a field it does not know and
+// drops it, and is left with a fragment of the chamber.
+func TestStreamChamberFramesMultiLinePayloads(t *testing.T) {
+	stg, err := storage.NewBigCacheStorage(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewHandler(context.Background(), HandlerConfig{Storage: stg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	pretty := "{\n  \"rules\": {\n    \"flag\": {\n      \"type\": \"string\",\n      \"value\": \"one\"\n    }\n  }\n}\n"
+	if err := stg.Put(context.Background(), storage.StorageEntry{Key: "/root/", Value: []byte(pretty)}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(srv.URL + "/v1/chambers/root?watch=true")
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	stop := time.AfterFunc(5*time.Second, func() { resp.Body.Close() })
+	defer stop.Stop()
+
+	// read the first event as a client does
+	var data, stray []string
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "" && len(data) > 0:
+		case line == "", strings.HasPrefix(line, "event:"), strings.HasPrefix(line, ":"):
+			continue
+		case strings.HasPrefix(line, "data:"):
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			continue
+		default:
+			stray = append(stray, line)
+			continue
+		}
+		break
+	}
+	if len(stray) > 0 {
+		t.Errorf("lines of the event that are not fields: %q", stray)
+	}
+	var chamber struct {
+		Rules map[string]struct{ Value string }
+	}
+	if err := json.Unmarshal([]byte(strings.Join(data, "\n")), &chamber); err != nil || chamber.Rules["flag"].Value != "one" {
+		t.Errorf("event data = %q, which does not hold the chamber (%v)", data, err)
 	}
 }

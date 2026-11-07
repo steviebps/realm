@@ -111,8 +111,9 @@ type loginState struct {
 // they are invalid.
 func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	if h := r.Header.Get("Authorization"); h != "" {
-		token, ok := strings.CutPrefix(h, "Bearer ")
-		if !ok {
+		// the scheme is case-insensitive (RFC 7235, section 2.1)
+		scheme, token, _ := strings.Cut(h, " ")
+		if !strings.EqualFold(scheme, "Bearer") {
 			return nil, ErrInvalidKey
 		}
 		token = strings.TrimSpace(token)
@@ -321,10 +322,19 @@ func (a *Authenticator) signInFailed(w http.ResponseWriter, status int, message 
 <h1>Couldn't sign you in</h1><p>%s</p><p><a href="/ui/">Back to realm</a></p></body></html>`, html.EscapeString(message))
 }
 
-// safeReturnTo keeps post-sign-in redirects on this server.
+// safeReturnTo keeps post-sign-in redirects on this server. Control
+// characters are refused along with backslashes: browsers drop tabs and line
+// breaks from a URL before parsing it, so "/<tab>/evil.example" would
+// otherwise redirect to "//evil.example", another site.
 func safeReturnTo(target string) string {
-	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.ContainsAny(target, "\\\r\n") {
+	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.ContainsFunc(target, unsafeInRedirect) {
 		return "/ui/"
 	}
 	return target
+}
+
+// unsafeInRedirect reports whether r (a backslash or an ASCII control
+// character) can make a browser read a local path as another site's.
+func unsafeInRedirect(r rune) bool {
+	return r == '\\' || r < ' ' || r == 0x7f
 }
