@@ -169,6 +169,14 @@ func (c *CacheableStorage) Delete(ctx context.Context, logicalPath string) error
 		span.RecordError(sourceErr, trace.WithAttributes(attribute.String("realm.cacheable.origin", "source")))
 	}
 	cacheErr := c.cache.Delete(ctx, logicalPath)
+	// The cache is expected to miss (an entry is evicted, or was never read),
+	// and the source decides whether the entry existed. Reporting the cache's
+	// miss would fail a delete that worked and, to Update (which treats "not
+	// found" as "already gone"), hide a delete that failed.
+	var nfError *NotFoundError
+	if errors.As(cacheErr, &nfError) {
+		cacheErr = nil
+	}
 	if cacheErr != nil {
 		span.RecordError(cacheErr, trace.WithAttributes(attribute.String("realm.cacheable.origin", "cache")))
 	}

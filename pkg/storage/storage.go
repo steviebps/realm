@@ -72,6 +72,9 @@ const ReservedPrefix = "/_realm/"
 // IsReservedPath reports whether p falls under ReservedPrefix. Empty and "."
 // segments are ignored, so "//_realm/" and "/./_realm" are reserved too: some
 // backends clean paths and would otherwise map them onto realm's metadata.
+// Case is ignored as well, so "/_REALM/" is reserved: on a case-insensitive
+// filesystem (the default on macOS and Windows) the file backend maps it onto
+// the same directory as "/_realm/".
 func IsReservedPath(p string) bool {
 	var b strings.Builder
 	b.WriteByte('/')
@@ -85,7 +88,8 @@ func IsReservedPath(p string) bool {
 			break
 		}
 	}
-	return strings.HasPrefix(b.String(), ReservedPrefix)
+	s := b.String()
+	return len(s) >= len(ReservedPrefix) && strings.EqualFold(s[:len(ReservedPrefix)], ReservedPrefix)
 }
 
 // ReadJSON loads the entry at key into v. found is false when it does not exist.
