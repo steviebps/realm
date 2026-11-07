@@ -23,6 +23,8 @@ type Identity struct {
 	Name  string
 	// GitHubOrgs lists the user's GitHub organizations (GitHub sign-ins only).
 	GitHubOrgs []string
+	// HostedDomain is the ID token's "hd" claim (OIDC sign-ins only).
+	HostedDomain string
 }
 
 // provider runs the authorization-code flow (with PKCE) for one sign-in
@@ -32,7 +34,19 @@ type provider interface {
 	authURL(ctx context.Context, redirectURL, state, verifier, nonce string) (string, error)
 	// identify exchanges the callback's code for the user's identity.
 	identify(ctx context.Context, redirectURL, code, verifier, nonce string) (*Identity, error)
+	// allowsHostedDomain reports whether a user whose sign-in carried the
+	// hosted domain hd ("" when none) may still be signed in.
+	allowsHostedDomain(hd string) bool
 }
+
+// allowsHostedDomain applies the provider's hostedDomains, if any.
+func (p *oidcProvider) allowsHostedDomain(hd string) bool {
+	return len(p.cfg.HostedDomains) == 0 ||
+		slices.ContainsFunc(p.cfg.HostedDomains, func(d string) bool { return strings.EqualFold(d, hd) })
+}
+
+// allowsHostedDomain allows everyone: GitHub has no hosted domains.
+func (p *githubProvider) allowsHostedDomain(string) bool { return true }
 
 func newProvider(c *ProviderConfig, client *http.Client) provider {
 	if c.Type == ProviderGitHub {
@@ -131,10 +145,10 @@ func (p *oidcProvider) identify(ctx context.Context, redirectURL, code, verifier
 	if claims.Email == "" || claims.EmailVerified == nil || !*claims.EmailVerified {
 		return nil, errors.New("the provider did not return a verified email address")
 	}
-	if len(p.cfg.HostedDomains) > 0 && !slices.ContainsFunc(p.cfg.HostedDomains, func(d string) bool { return strings.EqualFold(d, claims.HostedDomain) }) {
+	if !p.allowsHostedDomain(claims.HostedDomain) {
 		return nil, fmt.Errorf("%s is not an account of an allowed organization domain", claims.Email)
 	}
-	return &Identity{Email: claims.Email, Name: claims.Name}, nil
+	return &Identity{Email: claims.Email, Name: claims.Name, HostedDomain: claims.HostedDomain}, nil
 }
 
 // githubProvider signs users in with GitHub OAuth, which is not OpenID

@@ -3,13 +3,176 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 )
+
+// TestValidateFileKey checks which keys the file backend refuses before it
+// touches the file system, on every platform: keys that Windows would map
+// onto other keys' files (realm's reserved metadata among them), and names
+// longer than the file system allows.
+func TestValidateFileKey(t *testing.T) {
+	const root = "/srv/realm"
+	long := func(n int) string { return strings.Repeat("a", n) }
+	tooDeep := strings.Repeat("/"+long(200), maxPathBytes()/200+2) + "/"
+	tests := []struct {
+		key string
+		ok  bool
+	}{
+		{"/", true},
+		{"", true},
+		{"/a/b/", true},
+		{"/_realm/history/%2Fa%2Fb%2F/12/", true},
+		{"/a b/c/", true},
+		{"/v1.2/.well-known/", true},
+		{"/" + long(maxNameBytes) + "/", true},
+		{"/a/" + long(maxNameBytes-len("_"+fileEntryKey)), true}, // without a trailing slash, the file is "_<last>entry.json"
+
+		{"/a/../b/", false},
+		{"/_realm\\keys/", false},
+		{"/a\\b/", false},
+		{"/_realm::$INDEX_ALLOCATION/keys/", false},
+		{"/a:b/", false},
+		{"/C:/x/", false},
+		{"/a\x00b/", false},
+		{"/_realm./keys/", false},
+		{"/_realm /keys/", false},
+		{"/a./", false},
+		{"/a /", false},
+		{"/.realm-lock/", false},
+		{"/a/.realm-tmp-1/", false},
+		{"/" + long(maxNameBytes+1) + "/", false},
+		{"/a/" + long(maxNameBytes-len("_"+fileEntryKey)+1), false},
+		{tooDeep, false},
+	}
+	for _, tt := range tests {
+		name := tt.key
+		if len(name) > 40 {
+			name = name[:40] + "…"
+		}
+		t.Run(name, func(t *testing.T) {
+			err := validateFileKey(root, tt.key)
+			if tt.ok && err != nil {
+				t.Errorf("validateFileKey(%q) = %v, want nil", tt.key, err)
+			}
+			if !tt.ok && !errors.Is(err, ErrInvalidPath) {
+				t.Errorf("validateFileKey(%q) = %v, want an error wrapping ErrInvalidPath", tt.key, err)
+			}
+		})
+	}
+}
+
+// TestFileRefusesInvalidKeys checks that every operation of the file backend
+// refuses an invalid key before it touches the file system.
+func TestFileRefusesInvalidKeys(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	s, err := NewFileStorage(map[string]string{"path": root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"/_realm./keys/", "/_realm\\keys/", "/" + strings.Repeat("a", maxNameBytes+1) + "/"} {
+		ops := map[string]error{
+			"Put":    s.Put(ctx, StorageEntry{Key: key, Value: json.RawMessage(`{}`)}),
+			"Delete": s.Delete(ctx, key),
+		}
+		_, ops["Get"] = s.Get(ctx, key)
+		_, ops["List"] = s.List(ctx, key)
+		for op, err := range ops {
+			if !errors.Is(err, ErrInvalidPath) {
+				t.Errorf("%s(%q) = %v, want an error wrapping ErrInvalidPath", op, key, err)
+			}
+		}
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) > 0 {
+		t.Errorf("refused keys touched the store: %v, %v", entries, err)
+	}
+}
+
+// TestFileListToleratesConcurrentRemoval lists a directory while another
+// process removes the entries in it: entries that vanish mid-listing are left
+// out rather than failing the List.
+func TestFileListToleratesConcurrentRemoval(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	s, err := NewFileStorage(map[string]string{"path": root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := func(i int) string { return filepath.Join(root, "p", fmt.Sprintf("c%d", i)) }
+	const n = 200
+	for range 10 {
+		// written directly, as another process would, without syncing
+		for i := range n {
+			if err := os.MkdirAll(child(i), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(child(i), "_"+fileEntryKey), []byte(`{}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		removed := make(chan struct{})
+		go func() {
+			defer close(removed)
+			for i := range n {
+				_ = os.RemoveAll(child(i))
+			}
+		}()
+		for listing := true; listing; {
+			select {
+			case <-removed:
+				listing = false
+			default:
+			}
+			if _, err := s.List(ctx, "/p/"); err != nil {
+				<-removed
+				t.Fatalf("List while entries were removed = %v", err)
+			}
+		}
+	}
+}
+
+// TestFileDirectorySync checks the directories the file backend syncs:
+// mkdirAllSync creates (and syncs the parents of) missing directories, and
+// pruneEmptyDirs returns the deepest directory left after pruning, which
+// Delete syncs so the removal is durable.
+func TestFileDirectorySync(t *testing.T) {
+	root := t.TempDir()
+	deep := filepath.Join(root, "a", "b", "c")
+	for range 2 { // missing, then existing
+		if err := mkdirAllSync(deep); err != nil {
+			t.Fatalf("mkdirAllSync(%s) = %v", deep, err)
+		}
+		if fi, err := os.Stat(deep); err != nil || !fi.IsDir() {
+			t.Fatalf("after mkdirAllSync, %s: %v, %v", deep, fi, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := mkdirAllSync(filepath.Join(root, "file", "x")); err == nil {
+		t.Error("mkdirAllSync through a file succeeded")
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, "a", "d"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	f := &FileStorage{path: root}
+	for _, tt := range []struct{ prune, want string }{
+		{filepath.Join(root, "a", "b", "c"), filepath.Join(root, "a")}, // c and b go; a still holds d
+		{filepath.Join(root, "a", "d"), filepath.Clean(root)},          // d, then the emptied a, go
+	} {
+		if got := f.pruneEmptyDirs(tt.prune); got != tt.want {
+			t.Errorf("pruneEmptyDirs(%s) = %s, want %s", tt.prune, got, tt.want)
+		}
+	}
+}
 
 // fileWorkerEnv makes the test binary act as one of the processes in
 // TestFileUpdatesAcrossProcesses; its value is the storage directory.

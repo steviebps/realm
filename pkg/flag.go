@@ -1,6 +1,7 @@
 package realm
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -8,10 +9,22 @@ import (
 // Flag is a single feature flag: a typed default value plus an ordered list of
 // targeting rules. The first targeting rule that applies to an evaluation
 // context supplies the value; when none applies, the default is served.
+//
+// A flag of a type this version of realm does not know (one a newer realm
+// added) decodes without error but cannot be served: typed getters return the
+// caller's default with an error, and Chamber.Evaluate omits it. It is kept
+// exactly as it was read, so that marshaling it again (as a server does when
+// it patches a chamber) neither drops nor alters it.
 type Flag struct {
 	*Rule
 	Targeting []*TargetingRule `json:"targeting,omitempty"`
+
+	// raw holds a flag of an unknown type as it was read.
+	raw json.RawMessage
 }
+
+// flagAlias is a Flag without its methods, for marshaling.
+type flagAlias Flag
 
 // removedFlagFields maps fields from earlier releases to migration guidance.
 var removedFlagFields = map[string]string{
@@ -20,13 +33,21 @@ var removedFlagFields = map[string]string{
 }
 
 // UnmarshalJSON validates the flag's default value against its type, and each
-// targeting rule's clauses, rollout, and value.
+// targeting rule's clauses, rollout, and value. A flag of an unknown type is
+// kept as it is, unvalidated.
 func (f *Flag) UnmarshalJSON(b []byte) error {
 	var rule Rule
 	if err := json.Unmarshal(b, &rule); err != nil {
 		return err
 	}
 	f.Rule = &rule
+	f.Targeting = nil
+	f.raw = nil
+
+	if !knownType(rule.Type) {
+		f.raw = bytes.Clone(b)
+		return nil
+	}
 
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(b, &m); err != nil {
@@ -39,7 +60,6 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	f.Targeting = nil
 	if v, ok := m["targeting"]; ok {
 		targeting, err := parseTargeting(v, rule.Type)
 		if err != nil {
@@ -49,6 +69,15 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 	}
 
 	return nil
+}
+
+// MarshalJSON writes the flag. A flag of an unknown type is written exactly as
+// it was read.
+func (f Flag) MarshalJSON() ([]byte, error) {
+	if f.raw != nil {
+		return f.raw, nil
+	}
+	return json.Marshal(flagAlias(f))
 }
 
 // ValueFor resolves the flag value for the given evaluation context: the value
@@ -94,10 +123,13 @@ func (f *Flag) Float64ValueFor(flagKey string, ec EvaluationContext, defaultValu
 }
 
 // CustomValueFor unmarshals the flag value for the given evaluation context
-// into v.
+// into v. Only a flag of type "custom" has one.
 func (f *Flag) CustomValueFor(flagKey string, ec EvaluationContext, v any) error {
+	if f.Type != "custom" {
+		return fmt.Errorf("flag with type %q could not be converted for unmarshalling", f.Type)
+	}
 	raw, ok := f.ValueFor(flagKey, ec).(*json.RawMessage)
-	if !ok {
+	if !ok || raw == nil {
 		return fmt.Errorf("flag with type %q could not be converted for unmarshalling", f.Type)
 	}
 	return json.Unmarshal(*raw, v)

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/steviebps/realm/client"
-	realmhttp "github.com/steviebps/realm/http"
 	realm "github.com/steviebps/realm/pkg"
 	realmtrace "github.com/steviebps/realm/trace"
 )
@@ -23,7 +22,6 @@ type CustomStruct struct {
 }
 
 func main() {
-	var err error
 	ctx := context.Background()
 	shutdownFn, err := realmtrace.SetupOtelInstrumentation(ctx, false, "v1.0.0")
 	if err != nil {
@@ -40,10 +38,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = rlm.Start()
-	if err != nil {
-		log.Fatal(err)
+	// Start keeps retrying in the background when the first load fails, so
+	// serve the flags' defaults until realm is reachable rather than exiting.
+	if err := rlm.Start(); err != nil {
+		log.Printf("realm is not reachable yet; serving default flag values until it is: %v", err)
 	}
+	defer rlm.Stop()
 
 	bootCtx := rlm.NewContext(ctx)
 	port, _ := rlm.Float64(bootCtx, "port", 3000)
@@ -67,9 +67,13 @@ func main() {
 		_ = json.NewEncoder(w).Encode(custom)
 	})
 
-	rlmHandler := realmhttp.RealmHandler(rlm, mux)
+	// Pin one snapshot of the flags to each request, so that every flag read
+	// while serving it agrees.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux.ServeHTTP(w, r.WithContext(rlm.NewContext(r.Context())))
+	})
 
-	server := &http.Server{Addr: fmt.Sprintf(":%d", int(port)), Handler: rlmHandler}
+	server := &http.Server{Addr: fmt.Sprintf(":%d", int(port)), Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 
 	go func() {
 		log.Println("Listening on :", port)
@@ -82,8 +86,9 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 
-	rlm.Stop()
-	if err := server.Shutdown(bootCtx); err != nil {
-		log.Fatal(err.Error())
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown: %v", err)
 	}
 }

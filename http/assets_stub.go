@@ -3,15 +3,13 @@
 
 package http
 
-import (
-	"net/http"
-)
+import "io/fs"
 
 func init() {
 	uiExists = false
 }
 
-// webFS is a stub
-func webFS() http.FileSystem {
+// uiFiles is a stub: the binary was built without the UI.
+func uiFiles() fs.FS {
 	return nil
 }

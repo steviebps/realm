@@ -252,6 +252,55 @@ describe('hooks', () => {
     expect(renders).toBeLessThan(5);
   });
 
+  it('give each component its own copy of a JSON value', async () => {
+    const realm = await setup();
+    realm.publish({ rules: { quota: { type: 'custom', value: { max: 3 } } } });
+    const client = new BrowserClient({ address: realm.address, streaming: false });
+    const seen: { max: number }[] = [];
+    function Quota() {
+      const quota = useJsonFlag('quota', { max: 0 });
+      seen.push(quota);
+      return <p>{quota.max}</p>;
+    }
+    const view = render(
+      <RealmProvider client={client}>
+        <Quota />
+      </RealmProvider>,
+    );
+    await vi.waitFor(() => expect(view.text()).toBe('3'));
+    const quota = seen.at(-1)!;
+    quota.max = 99;
+    expect(client.json('quota', { max: 0 })).toEqual({ max: 3 });
+    expect(client.allFlags().quota?.value).toEqual({ max: 3 });
+
+    // the same copy on every render until the value changes
+    view.rerender(
+      <RealmProvider client={client}>
+        <Quota />
+      </RealmProvider>,
+    );
+    await vi.waitFor(() => expect(view.text()).toBe('99'));
+    expect(seen.at(-1)).toBe(quota);
+  });
+
+  it('keep their values when the server answers without data', async () => {
+    const realm = await setup();
+    realm.publish(betaOn);
+    const client = new BrowserClient({ address: realm.address, streaming: false, pollingInterval: 10, onError: () => {} });
+    const view = render(app(client));
+    await vi.waitFor(() => expect(view.text()).toBe('ready beta=true'));
+
+    // a maintenance page in front of the server
+    realm.intercept((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"data":null}');
+      return true;
+    });
+    const seen = realm.requests.length;
+    await vi.waitFor(() => expect(realm.requests.length).toBeGreaterThan(seen + 3));
+    expect(view.text()).toBe('ready beta=true');
+  });
+
   it('render fallbacks on the server', () => {
     const client = new BrowserClient({ address: 'http://127.0.0.1:1' });
     expect(renderToString(app(client))).toBe('<p>loading beta=false</p>');

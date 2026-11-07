@@ -60,13 +60,16 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
 - **`adminKey`**: optional; see [The admin key](#the-admin-key).
 - **`externalURL`**: the address users reach realm at. Sign-in callbacks are
   `<externalURL>/v1/auth/callback/<provider name>`; register that URL with each
-  provider. When it is `https`, cookies are marked `Secure`.
+  provider. When it is `https`, cookies are marked `Secure` and named with the
+  `__Host-` prefix (`__Host-realm_session`), so a site on a sibling subdomain
+  cannot plant one.
 - **`sessionSecret`**: at least 32 characters, for example
   `openssl rand -hex 32`. It encrypts session cookies, so every replica must
   share it. Changing it signs everyone out.
 - **Secrets** (`adminKey`, `sessionSecret`, `clientSecret`) may reference environment
   variables as `${NAME}`. This keeps them out of the config file and works
-  with Docker and Kubernetes secrets.
+  with Docker and Kubernetes secrets. Only a reference that is the whole value
+  expands, so a literal secret containing `$` is used as written.
 
 The block needs `providers`, an `adminKey`, or both. With no providers nobody
 can sign in, only API keys authenticate, and `externalURL`, `sessionSecret`,
@@ -126,7 +129,9 @@ working. Organization grants are unaffected.
 
 The session stores who signed in and through which provider, not their role.
 The role is recomputed from the config on every request, so removing
-someone's grant and restarting the server takes effect immediately.
+someone's grant and restarting the server takes effect immediately. So does
+removing a provider (its sessions end) or adding `hostedDomains` to one (its
+sessions from other domains end).
 
 **GitHub organization memberships** are read once, at sign-in, and stored in
 the session. They are trusted for `githubOrgsTTL` (default `1h`). After that,
@@ -240,7 +245,7 @@ config file.
 | Route | Auth | Purpose |
 |---|---|---|
 | `GET /v1/auth/me` | none | `{authEnabled, user, canEdit, isAdmin, providers}`; the UI starts here |
-| `GET /v1/auth/login/<provider>?returnTo=/ui/…` | none | starts sign-in (`returnTo` must be a local path) |
+| `GET /v1/auth/login/<provider>?returnTo=/ui/…` | none | starts sign-in (`returnTo` must be a path under `/ui/`) |
 | `GET /v1/auth/callback/<provider>` | none | finishes sign-in, sets the session cookie |
 | `POST /v1/auth/logout` | none | clears the session cookie |
 | `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)` |
@@ -253,7 +258,7 @@ Routes are private by default: only `/healthz`, `/ui/`, and `/v1/auth/` are
 reachable without credentials (`publicPaths` in `http/auth.go`), so a new
 route needs no opt-in to be protected. Requests with no credentials get `401`. Requests with credentials that lack
 permission get `403`. When auth is on, history records the authenticated
-identity (an email, `key:<name>`, or `key:admin`) and ignores the self-reported
+identity (an email, `key:<name> (<key id>)`, or `key:admin`) and ignores the self-reported
 `X-Realm-Actor` header.
 
 ## Security notes

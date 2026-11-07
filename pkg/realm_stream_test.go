@@ -112,7 +112,7 @@ func TestRealmStreamingFallsBackToPolling(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	rlm := newStreamingRealm(t, srv.URL, 50*time.Millisecond)
+	rlm := newStreamingRealm(t, srv.URL, MinPollingInterval)
 	if err := rlm.Start(); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRealmStreamingFallsBackToPolling(t *testing.T) {
 	value = "two"
 	mu.Unlock()
 
-	if !eventually(2*time.Second, func() bool {
+	if !eventually(5*time.Second, func() bool {
 		got, _ := rlm.String(context.Background(), "msg", "default")
 		return got == "two"
 	}) {

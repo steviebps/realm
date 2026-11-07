@@ -10,6 +10,7 @@ import {
 } from 'react';
 import type { ReactNode } from 'react';
 import type { BrowserClient, FlagSource } from './browser.js';
+import { copyValue } from './evaluate.js';
 import type { EvaluatedFlags, EvaluationContext } from './types.js';
 
 /** Props for a RealmProvider. */
@@ -163,14 +164,36 @@ export function useNumberFlag(flag: string, fallback: number): number {
   return useClientValue('useNumberFlag', (c) => c.number(flag, fallback), fallback);
 }
 
-/** The value of a custom (JSON) flag, or fallback. */
+// absent stands for a custom flag's missing value in useJsonFlag.
+const absent: unique symbol = Symbol('absent');
+
+/**
+ * The value of a custom (JSON) flag, or fallback. The value is this
+ * component's copy, made again only when the flag changes: changing it
+ * changes neither the client's value nor what other components read.
+ */
 export function useJsonFlag<T>(flag: string, fallback: T): T {
-  return useClientValue('useJsonFlag', (c) => c.json(flag, fallback), fallback);
+  // The client's own value, which stays the same object until it changes,
+  // as useSyncExternalStore requires; json would copy it on every call.
+  const shared = useClientValue(
+    'useJsonFlag',
+    (c) => {
+      const flags = c.allFlags();
+      const f = Object.hasOwn(flags, flag) ? flags[flag] : undefined;
+      return f?.type === 'custom' ? f.value : absent;
+    },
+    absent,
+  );
+  const value = useMemo(() => (shared === absent ? absent : copyValue(shared)), [shared]);
+  return value === absent ? fallback : (value as T);
 }
 
 const noFlags: EvaluatedFlags = {};
 
-/** Every flag's current value. */
+/**
+ * Every flag's current value. The object is the client's own (see
+ * BrowserClient.allFlags), so treat it as read only.
+ */
 export function useAllFlags(): EvaluatedFlags {
   return useClientValue('useAllFlags', (c) => c.allFlags(), noFlags);
 }

@@ -2,14 +2,26 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net';
 import { BrowserClient, type EvaluationContext, type StorageAdapter } from '../src/index.js';
 
+/** A request the fake server received, and when (Date.now()). */
+export interface FakeRequest {
+  method: string;
+  url: string;
+  auth: string | undefined;
+  body: string;
+  at: number;
+}
+
 // fakeRealm serves one chamber the way the realm server does, and lets tests
 // push changes to open event streams.
 export async function fakeRealm() {
   let chamber: unknown = { rules: { beta: { type: 'boolean', value: false } } };
   const streams = new Set<{ res: ServerResponse; send: () => void }>();
-  const requests: { method: string; url: string; auth: string | undefined; body: string }[] = [];
+  const requests: FakeRequest[] = [];
   let status = 200;
   let hang = false;
+  // A test's own answer to some requests, like a proxy in front of the
+  // server: it returns true when it has answered.
+  let intercept: ((req: FakeRequest, res: ServerResponse) => boolean) | undefined;
 
   const evaluate = (body: string) => {
     const ctx = body ? (JSON.parse(body) as { key?: string }) : {};
@@ -25,8 +37,10 @@ export async function fakeRealm() {
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     let body = '';
     for await (const chunk of req) body += chunk;
-    requests.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, body });
+    const request = { method: req.method!, url: req.url!, auth: req.headers.authorization, body, at: Date.now() };
+    requests.push(request);
     if (hang) return; // never respond, like a server behind a dead network
+    if (intercept?.(request, res)) return;
     if (status !== 200) {
       res.writeHead(status, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ errors: ['not allowed'] }));
@@ -54,6 +68,11 @@ export async function fakeRealm() {
     streams,
     setStatus: (s: number) => (status = s),
     setHang: (h: boolean) => (hang = h),
+    intercept: (fn: ((req: FakeRequest, res: ServerResponse) => boolean) | undefined) => (intercept = fn),
+    /** Writes text, such as a malformed event, to every open stream. */
+    write(text: string) {
+      for (const s of streams) s.res.write(text);
+    },
     publish(next: unknown) {
       chamber = next;
       for (const s of streams) s.send();

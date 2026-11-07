@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -32,8 +34,9 @@ type FileStorage struct {
 }
 
 var (
-	_ Storage = (*FileStorage)(nil)
-	_ Locker  = (*FileStorage)(nil)
+	_ Storage      = (*FileStorage)(nil)
+	_ Locker       = (*FileStorage)(nil)
+	_ KeyValidator = (*FileStorage)(nil)
 )
 
 const fileEntryKey string = "entry.json"
@@ -45,7 +48,15 @@ const internalPrefix = ".realm-"
 const (
 	lockFileName = internalPrefix + "lock"
 	tempPattern  = internalPrefix + "tmp-*"
+	// tempNameBytes bounds the length of a temporary file's name: os.CreateTemp
+	// replaces the "*" with at most 10 digits.
+	tempNameBytes = len(tempPattern) - 1 + 10
 )
+
+// maxNameBytes is the longest file or directory name the file backend
+// writes: the NAME_MAX of common file systems (ext4, XFS, APFS; NTFS counts
+// UTF-16 units, and a name of 255 bytes has no more than 255 of them).
+const maxNameBytes = 255
 
 func NewFileStorage(conf map[string]string) (Storage, error) {
 	if conf["path"] == "" {
@@ -58,6 +69,79 @@ func NewFileStorage(conf map[string]string) (Storage, error) {
 	}, nil
 }
 
+// ValidateKey implements KeyValidator: it reports, wrapping ErrInvalidPath,
+// why key cannot be stored beneath this store's directory (see
+// validateFileKey). Every operation checks its key first, so a refused key
+// never reaches the file system.
+func (f *FileStorage) ValidateKey(key string) error {
+	return validateFileKey(f.path, key)
+}
+
+// validateFileKey reports why key cannot be stored by the file backend in the
+// directory root, wrapping ErrInvalidPath, or returns nil. A key is refused
+// when:
+//
+//   - it references a parent (see ValidatePath);
+//   - it contains a backslash, colon, or NUL byte, or one of its segments ends
+//     in a dot or a space. Windows treats "\" as a separator and ":" as a
+//     drive or stream separator, and drops trailing dots and spaces, so such
+//     a key could name another key's files, including realm's reserved
+//     metadata. These are refused on every platform, so that a store means
+//     the same wherever it is opened, including on NTFS or SMB volumes;
+//   - one of its segments begins with internalPrefix, which names the
+//     backend's own files;
+//   - a file or directory name it maps to is longer than maxNameBytes, or its
+//     path (or that of the temporary file written beside it) is longer than
+//     the platform accepts (see maxPathBytes).
+func validateFileKey(root, key string) error {
+	if err := ValidatePath(key); err != nil {
+		return err
+	}
+	if i := strings.IndexAny(key, "\\:\x00"); i >= 0 {
+		return fmt.Errorf("%w: %q contains %q, which file storage does not allow", ErrInvalidPath, key, key[i])
+	}
+	for seg := range strings.SplitSeq(key, "/") {
+		if seg == "" {
+			continue
+		}
+		if last := seg[len(seg)-1]; last == '.' || last == ' ' {
+			return fmt.Errorf("%w: segment %q of %q ends in %q, which file storage does not allow", ErrInvalidPath, seg, key, last)
+		}
+		if strings.HasPrefix(seg, internalPrefix) {
+			return fmt.Errorf("%w: segment %q of %q begins with %q, which file storage keeps for its own files", ErrInvalidPath, seg, key, internalPrefix)
+		}
+	}
+
+	// the names expandPath maps the key to: its directories, then the file
+	dir, name := path.Split(path.Clean("/" + key + fileEntryKey))
+	for seg := range strings.SplitSeq(strings.Trim(dir, "/"), "/") {
+		if len(seg) > maxNameBytes {
+			return fmt.Errorf("%w: segment %q of %q is longer than %d bytes", ErrInvalidPath, seg[:16]+"…", key, maxNameBytes)
+		}
+	}
+	if name = "_" + name; len(name) > maxNameBytes {
+		return fmt.Errorf("%w: the last segment of %q is longer than %d bytes", ErrInvalidPath, key, maxNameBytes-len("_"+fileEntryKey))
+	}
+	if n := len(filepath.Join(root, filepath.FromSlash(dir))) + 1 + max(len(name), tempNameBytes); n > maxPathBytes() {
+		return fmt.Errorf("%w: %q makes a file path of %d bytes, longer than the %d this platform allows", ErrInvalidPath, key, n, maxPathBytes())
+	}
+	return nil
+}
+
+// maxPathBytes is the longest path, in bytes, that the platform's file calls
+// accept: PATH_MAX less its terminating NUL. On Windows, Go lifts MAX_PATH by
+// prefixing long paths with \\?\, which allows 32,767 UTF-16 units.
+func maxPathBytes() int {
+	switch runtime.GOOS {
+	case "linux", "android":
+		return 4095
+	case "windows":
+		return 32000
+	default: // macOS and the BSDs
+		return 1023
+	}
+}
+
 func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := f.tracer.Start(ctx, "FileStorage Get", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
 	defer span.End()
@@ -68,7 +152,7 @@ func (f *FileStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("get operation")
 
-	if err := ValidatePath(logicalPath); err != nil {
+	if err := f.ValidateKey(logicalPath); err != nil {
 		recordError(span, err)
 		return nil, err
 	}
@@ -103,7 +187,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("logicalPath", e.Key).Msg("put operation")
 
-	if err := ValidatePath(e.Key); err != nil {
+	if err := f.ValidateKey(e.Key); err != nil {
 		recordError(span, err)
 		return err
 	}
@@ -117,7 +201,7 @@ func (f *FileStorage) Put(ctx context.Context, e StorageEntry) error {
 	}
 
 	// Make the parent tree
-	if err := os.MkdirAll(path, 0o700); err != nil {
+	if err := mkdirAllSync(path); err != nil {
 		recordError(span, err)
 		return err
 	}
@@ -162,6 +246,37 @@ func writeFileAtomic(dir, name string, data []byte) (err error) {
 	return syncDir(dir)
 }
 
+// mkdirAllSync creates dir and any missing parents, like os.MkdirAll, then
+// syncs the parent of each directory it created, so the new directories
+// survive a crash along with the entry written into them.
+func mkdirAllSync(dir string) error {
+	var created []string
+	for d := filepath.Clean(dir); ; {
+		if _, err := os.Stat(d); err == nil {
+			break
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		created = append(created, d)
+		parent := filepath.Dir(d)
+		if parent == d {
+			break
+		}
+		d = parent
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// outermost first, so each directory's entry is durable before the
+	// directories inside it
+	for _, d := range slices.Backward(created) {
+		if err := syncDir(filepath.Dir(d)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	ctx, span := f.tracer.Start(ctx, "FileStorage Delete", trace.WithAttributes(attribute.String("realm.file.logicalPath", logicalPath)))
 	defer span.End()
@@ -172,7 +287,7 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("logicalPath", logicalPath).Msg("delete operation")
 
-	if err := ValidatePath(logicalPath); err != nil {
+	if err := f.ValidateKey(logicalPath); err != nil {
 		recordError(span, err)
 		return err
 	}
@@ -192,7 +307,12 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 		}
 		return err
 	}
-	f.pruneEmptyDirs(path)
+	// sync the directory whose entries changed last, so the removal survives
+	// a crash (another process may have removed it meanwhile)
+	if err := syncDir(f.pruneEmptyDirs(path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		recordError(span, err)
+		return err
+	}
 
 	return nil
 }
@@ -200,15 +320,17 @@ func (f *FileStorage) Delete(ctx context.Context, logicalPath string) error {
 // pruneEmptyDirs removes dir and then each parent directory that is left
 // empty, up to (not including) the storage root, so a deleted chamber with
 // nothing below it no longer lists as a folder. It stops at the first
-// directory that is not empty; failures are ignored, since an empty directory
-// left behind is harmless.
-func (f *FileStorage) pruneEmptyDirs(dir string) {
+// directory that is not empty, and returns it: the deepest directory left,
+// whose entries changed last. Failures to remove are ignored, since an empty
+// directory left behind is harmless.
+func (f *FileStorage) pruneEmptyDirs(dir string) string {
 	root := filepath.Clean(f.path)
 	for dir = filepath.Clean(dir); dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)); dir = filepath.Dir(dir) {
 		if err := os.Remove(dir); err != nil {
-			return
+			return dir
 		}
 	}
+	return dir
 }
 
 func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error) {
@@ -221,7 +343,7 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("prefix", prefix).Msg("list operation")
 
-	if err := ValidatePath(prefix); err != nil {
+	if err := f.ValidateKey(prefix); err != nil {
 		recordError(span, err)
 		return nil, err
 	}
@@ -231,10 +353,10 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		path = filepath.Join(path, prefix)
 	}
 
-	file, err := os.Open(path)
-	if file != nil {
-		defer file.Close()
-	}
+	// Another process may delete entries (and prune their directories) while
+	// this one lists: ReadDir skips entries that vanish before it reads their
+	// type, and so does the stat below.
+	entries, err := os.ReadDir(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -243,24 +365,29 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 		return nil, err
 	}
 
-	names, err := file.Readdirnames(-1)
-	if err != nil {
-		recordError(span, err)
-		return nil, err
-	}
-
-	names = slices.DeleteFunc(names, func(name string) bool {
-		return strings.HasPrefix(name, internalPrefix)
-	})
-	for i, name := range names {
-		fi, err := os.Stat(filepath.Join(path, name))
-		if err != nil {
-			return nil, err
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, internalPrefix) {
+			continue
 		}
-		if fi.IsDir() {
-			names[i] = name + "/"
+		isDir := entry.IsDir()
+		if entry.Type()&fs.ModeSymlink != 0 {
+			// follow links, as the entries they lead to are read through them
+			fi, err := os.Stat(filepath.Join(path, name))
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				recordError(span, err)
+				return nil, err
+			}
+			isDir = fi.IsDir()
+		}
+		if isDir {
+			names = append(names, name+"/")
 		} else {
-			names[i] = "."
+			names = append(names, ".")
 		}
 	}
 
@@ -271,11 +398,9 @@ func (f *FileStorage) List(ctx context.Context, prefix string) ([]string, error)
 	default:
 	}
 
-	if len(names) > 0 {
-		slices.Sort(names)
-	}
-
-	return names, nil
+	slices.Sort(names)
+	// every file in a directory is the entry at its path
+	return slices.Compact(names), nil
 }
 
 func (f *FileStorage) Close(ctx context.Context) error {

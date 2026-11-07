@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserClient, localStorageAdapter, type EvaluationContext, type StorageAdapter } from '../src/index.js';
-import { decodeFlags, storageKey } from '../src/storage.js';
+import { decodeFlags, maxStoredContexts, recentKey, storageKey } from '../src/storage.js';
 import { fakeRealm, seedStorage } from './fake-realm.js';
 
 let cleanup: (() => unknown)[] = [];
@@ -22,7 +22,14 @@ function memoryStorage() {
     items,
     getItem: (key: string) => items.get(key) ?? null,
     setItem: (key: string, value: string) => void items.set(key, value),
+    removeItem: (key: string) => void items.delete(key),
   };
+}
+
+// entries returns the values items holds for contexts, without the list of
+// the most recently used ones.
+function entries(items: Map<string, string>): string[] {
+  return [...items].filter(([key]) => !key.endsWith(':recent')).map(([, value]) => value);
 }
 
 // asyncStorage answers reads only when release is called, like IndexedDB on a busy device.
@@ -68,7 +75,7 @@ describe('BrowserClient bootstrap', () => {
     expect(client.isReady()).toBe(true);
     expect(client.bool('beta', true)).toBe(false);
     expect(changed).toHaveBeenCalledTimes(1);
-    expect([...storage.items.values()]).toEqual(['{"flags":{"beta":{"type":"boolean","value":false}}}']);
+    expect(entries(storage.items)).toEqual(['{"flags":{"beta":{"type":"boolean","value":false}}}']);
   });
 
   it('reports the source turning network, and stores, when the evaluation matches bootstrap', async () => {
@@ -87,7 +94,7 @@ describe('BrowserClient bootstrap', () => {
     await client.start();
     expect(client.source()).toBe('network');
     expect(changed).toHaveBeenCalledTimes(1);
-    expect([...storage.items.values()]).toEqual([JSON.stringify({ flags: betaTrue })]);
+    expect(entries(storage.items)).toEqual([JSON.stringify({ flags: betaTrue })]);
   });
 
   it('applies only to the context it was given for', async () => {
@@ -209,7 +216,7 @@ describe('BrowserClient storage', () => {
     const realm = await setup();
     const storage = memoryStorage();
     await seed(realm.address, storage, { key: 'vip', attributes: { tenantId: 't-secret', location: 'l1' } });
-    const [key] = storage.items.keys();
+    const [key] = [...storage.items.keys()].filter((k) => k !== recentKey(`${realm.address}/v1/evaluate/prod/web/`));
     expect(key).toMatch(new RegExp(`^realm:v1:${realm.address}/v1/evaluate/prod/web/:[0-9a-f]{40}$`));
     expect(key).not.toContain('vip');
     expect(key).not.toContain('t-secret');
@@ -248,7 +255,8 @@ describe('BrowserClient storage', () => {
     await client.start();
     expect(client.bool('beta', false)).toBe(true);
     expect(onError.mock.calls.map(([e]) => (e as Error).message)).toEqual([
-      'flag storage failed: blocked',
+      'flag storage failed: blocked', // reading the context's values
+      'flag storage failed: blocked', // reading the list of recent contexts
       'flag storage failed: quota exceeded',
     ]);
   });
@@ -263,6 +271,81 @@ describe('BrowserClient storage', () => {
     await client.start();
     expect(client.source()).toBe('network');
     expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it('keeps the values of only the most recently used contexts', async () => {
+    const realm = await setup();
+    const storage = memoryStorage();
+    const stored = (key: string) => storage.items.has(storageKey(`${realm.address}/v1/evaluate/prod/web/`, { key }));
+    for (let i = 0; i < maxStoredContexts + 2; i++) await seed(realm.address, storage, { key: `u${i}` });
+    expect(entries(storage.items)).toHaveLength(maxStoredContexts);
+    expect([stored('u0'), stored('u1'), stored('u2'), stored('u11')]).toEqual([false, false, true, true]);
+
+    // an evaluation for u2, unchanged, makes it the most recently used
+    await seed(realm.address, storage, { key: 'u2' });
+    await seed(realm.address, storage, { key: 'u12' });
+    expect([stored('u2'), stored('u3'), stored('u12')]).toEqual([true, false, true]);
+    expect(entries(storage.items)).toHaveLength(maxStoredContexts);
+  });
+
+  it('empties the values it no longer keeps where storage cannot remove them', async () => {
+    const realm = await setup();
+    const { items, getItem, setItem } = memoryStorage();
+    for (let i = 0; i <= maxStoredContexts; i++) await seed(realm.address, { getItem, setItem }, { key: `u${i}` });
+    expect(items.get(storageKey(`${realm.address}/v1/evaluate/prod/web/`, { key: 'u0' }))).toBe('');
+    expect(entries(items).filter((raw) => raw !== '')).toHaveLength(maxStoredContexts);
+  });
+
+  it('removes nothing but its own values for a list of recent contexts it did not write', async () => {
+    const realm = await setup();
+    const storage = memoryStorage();
+    const list = recentKey(`${realm.address}/v1/evaluate/prod/web/`);
+    const other = list.replace(/recent$/, 'other');
+    storage.items.set(other, 'kept');
+    const full = Array.from({ length: maxStoredContexts }, (_, i) => i.toString(16).repeat(40));
+    for (const raw of ['not json', '{"recent":[]}', JSON.stringify([...full, 'other', 7])]) {
+      storage.items.set(list, raw);
+      await seed(realm.address, storage, { key: 'u1' });
+      expect(storage.items.get(other), raw).toBe('kept');
+      expect(JSON.parse(storage.items.get(list)!)[0]).toMatch(/^[0-9a-f]{40}$/);
+    }
+  });
+
+  it('never stores a response that is not an evaluation', async () => {
+    const realm = await setup();
+    realm.intercept((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end('{"data":null}');
+      return true;
+    });
+    const storage = memoryStorage();
+    const client = new BrowserClient({
+      address: realm.address,
+      context: { key: 'u1' },
+      bootstrap: betaTrue,
+      storage,
+      streaming: false,
+    });
+    cleanup.push(() => client.stop());
+    await expect(client.start()).rejects.toThrow('the server did not return an evaluation');
+    expect(client.source()).toBe('bootstrap');
+    expect(client.bool('beta', false)).toBe(true);
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('shares values between contexts the server evaluates the same', async () => {
+    const realm = await setup();
+    const storage = memoryStorage();
+    // as a JavaScript caller might pass it: the server receives "7"
+    await seed(realm.address, storage, { key: 'vip', attributes: { build: 7 } } as unknown as EvaluationContext);
+    const client = new BrowserClient({
+      address: realm.address,
+      path: '/prod/web/',
+      context: { key: 'vip', attributes: { build: '7' } },
+      storage,
+      fetch: offline,
+    });
+    expect(client.source()).toBe('cache');
   });
 
   it('applies values read asynchronously, unless the context changed or the server answered first', async () => {

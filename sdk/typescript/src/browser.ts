@@ -1,7 +1,7 @@
-import { typedValue } from './evaluate.js';
-import { Snapshot } from './snapshot.js';
-import { decodeFlags, storageKey, type StorageAdapter } from './storage.js';
-import { asError, Transport, type ClientOptions } from './transport.js';
+import { copyValue, normalizeContext, typedValue } from './evaluate.js';
+import { isRecord, Snapshot } from './snapshot.js';
+import { decodeFlags, isPromise, storageKey, touch, type StorageAdapter } from './storage.js';
+import { asError, pollingInterval, RealmError, Transport, type ClientOptions, type Following } from './transport.js';
 import type { EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
 /** Options for a BrowserClient. */
@@ -19,7 +19,8 @@ export interface BrowserClientOptions extends ClientOptions {
    * Where to keep the latest evaluated values for each context (never the
    * rules), so that a start without a network serves them instead of
    * fallbacks; see localStorageAdapter. Values are written whenever they
-   * change, and read back only for the context they were evaluated for.
+   * change, and read back only for the context they were evaluated for. For
+   * each chamber, only the ten most recently used contexts' values are kept.
    */
   storage?: StorageAdapter;
 }
@@ -45,7 +46,7 @@ interface Evaluation {
 export class BrowserClient {
   readonly #transport: Transport;
   readonly #options: BrowserClientOptions;
-  readonly #evaluation = new Snapshot<Evaluation>({ flags: {} });
+  readonly #evaluation = new Snapshot<Evaluation>({ flags: {} }, asEvaluation);
   #context: EvaluationContext;
   // The context as JSON, and the key its values are stored under.
   #contextKey: string;
@@ -60,8 +61,10 @@ export class BrowserClient {
   // What storage is known to hold under #storageKey, so unchanged values are
   // not written again.
   #stored: string | undefined;
-  // The background refresh, and its first evaluation, while started.
-  #running: { controller: AbortController; started: Promise<void> } | undefined;
+  // The storage key last marked as recently used.
+  #touched: string | undefined;
+  // The background refresh, while started.
+  #running: { controller: AbortController; following: Following } | undefined;
 
   constructor(options: BrowserClientOptions) {
     this.#options = options;
@@ -69,8 +72,10 @@ export class BrowserClient {
     this.#storagePrefix = this.#transport.url('evaluate');
     this.#context = options.context ?? {};
     this.#contextKey = JSON.stringify(this.#context);
-    this.#storageKey = this.#options.storage ? storageKey(this.#storagePrefix, this.#context) : '';
-    this.#bootstrap = options.bootstrap && { contextKey: this.#contextKey, flags: options.bootstrap };
+    this.#storageKey = this.#keyFor(this.#context);
+    this.#bootstrap = isRecord(options.bootstrap)
+      ? { contextKey: this.#contextKey, flags: options.bootstrap }
+      : undefined;
     this.#restore();
   }
 
@@ -78,10 +83,13 @@ export class BrowserClient {
    * Evaluates flags for the context, then keeps them current in the
    * background. It rejects when the first evaluation fails, but keeps
    * retrying with backoff until stop; isReady reports when values arrive.
-   * Calling it again while started returns the first call's result.
+   * Calling it again while started reflects the current state: it waits for
+   * the first evaluation while that is in flight; after that, it resolves
+   * once any evaluation has arrived, and otherwise rejects with the latest
+   * failure.
    */
   async start(): Promise<void> {
-    if (this.#running) return this.#running.started;
+    if (this.#running) return this.#running.following.current();
     return this.#connect();
   }
 
@@ -94,11 +102,12 @@ export class BrowserClient {
    * fails. On a stopped client it only sets the context.
    */
   async identify(context: EvaluationContext): Promise<void> {
+    if (context === undefined) context = {};
     const contextKey = JSON.stringify(context);
     this.#context = context;
     if (contextKey !== this.#contextKey) {
       this.#contextKey = contextKey;
-      this.#storageKey = this.#options.storage ? storageKey(this.#storagePrefix, context) : '';
+      this.#storageKey = this.#keyFor(context);
       this.#restore();
     }
     if (this.#running) await this.#connect();
@@ -157,19 +166,43 @@ export class BrowserClient {
     return this.#typed(flag, 'number', fallback);
   }
 
-  /** The value of a custom (JSON) flag, or fallback. */
+  /**
+   * The value of a custom (JSON) flag, or fallback. The value is a copy:
+   * changing it does not change what later reads return.
+   */
   json<T>(flag: string, fallback: T): T {
-    return this.#typed(flag, 'custom', fallback);
+    return this.#typed(flag, 'custom', fallback, true);
   }
 
-  /** Every flag's current value. */
+  /**
+   * Every flag's current value. The object is shared and stays the same
+   * until a value changes (React's hooks rely on that), so treat it as read
+   * only; json returns a copy of one value.
+   */
   allFlags(): EvaluatedFlags {
-    return this.#evaluation.value.flags ?? noFlags;
+    const flags = this.#evaluation.value.flags;
+    return isRecord(flags) ? flags : noFlags;
   }
 
-  #typed<T>(key: string, want: FlagType, fallback: T): T {
-    const flag = this.allFlags()[key];
-    return flag ? typedValue(flag.type, flag.value, want, fallback) : fallback;
+  // typed returns the value of flag when it has type want (a copy, with
+  // copy), and otherwise fallback. It never throws: a flag of a shape this
+  // SDK does not expect returns fallback too.
+  #typed<T>(key: string, want: FlagType, fallback: T, copy = false): T {
+    try {
+      const flags = this.allFlags();
+      const flag = Object.hasOwn(flags, key) ? flags[key] : undefined;
+      if (!flag) return fallback;
+      const value = typedValue(flag.type, flag.value, want, fallback);
+      return copy && value !== fallback ? copyValue(value) : value;
+    } catch {
+      return fallback;
+    }
+  }
+
+  // keyFor returns the storage key of context's values, or '' without
+  // storage. Contexts are keyed as the server evaluates them, normalized.
+  #keyFor(context: EvaluationContext): string {
+    return this.#options.storage ? storageKey(this.#storagePrefix, normalizeContext(context)) : '';
   }
 
   // show records that the snapshot holds values from source, then applies
@@ -203,11 +236,10 @@ export class BrowserClient {
         this.#reportStorage(e);
       }
       if (isPromise(stored)) {
-        stored.then(
+        stored
           // by now the server's values, or other stored ones, may be shown
-          (raw) => this.#source !== 'network' && this.#source !== 'cache' && this.#applyStored(contextKey, raw),
-          (e: unknown) => this.#reportStorage(e),
-        );
+          .then((raw) => this.#source !== 'network' && this.#source !== 'cache' && this.#applyStored(contextKey, raw))
+          .catch((e: unknown) => this.#reportStorage(e));
       } else if (this.#applyStored(contextKey, stored)) {
         return;
       }
@@ -233,14 +265,28 @@ export class BrowserClient {
   }
 
   // persist stores the current values for the current context, unless
-  // storage already holds them.
+  // storage already holds them, and marks the context as recently used,
+  // which removes the values of the least recently used beyond the limit.
   #persist(): void {
     const storage = this.#options.storage;
+    if (!storage) return;
+    const key = this.#storageKey;
     const raw = this.#evaluation.raw;
-    if (!storage || raw === this.#stored) return;
-    this.#stored = raw;
+    // Mark first: removing old values makes room for these.
+    if (key !== this.#touched) {
+      this.#touched = key;
+      this.#store(() => touch(storage, this.#storagePrefix, key));
+    }
+    if (raw !== this.#stored) {
+      this.#stored = raw;
+      this.#store(() => storage.setItem(key, raw));
+    }
+  }
+
+  // store calls write, reporting a failure, thrown or rejected, to onError.
+  #store(write: () => void | Promise<void>): void {
     try {
-      const done = storage.setItem(this.#storageKey, raw);
+      const done = write();
       if (isPromise(done)) done.catch((e: unknown) => this.#reportStorage(e));
     } catch (e) {
       this.#reportStorage(e);
@@ -248,7 +294,7 @@ export class BrowserClient {
   }
 
   #reportStorage(e: unknown): void {
-    this.#transport.onError(new Error(`flag storage failed: ${asError(e).message}`));
+    this.#transport.report(new Error(`flag storage failed: ${asError(e).message}`));
   }
 
   // connect evaluates for the current context, replacing any refresh for an
@@ -263,30 +309,33 @@ export class BrowserClient {
       this.#show('network', update);
       this.#persist();
     };
-    const started = this.#transport
-      .follow<Evaluation>(
-        'evaluate',
-        { method: 'POST', body: this.#contextKey },
-        'flags',
-        {
-          set: (value) => receive(() => this.#evaluation.set(value)),
-          setRaw: (raw) => receive(() => this.#evaluation.setRaw(raw)),
-        },
-        this.#options.streaming ?? true,
-        this.#options.pollingInterval ?? defaultPollingInterval,
-        controller.signal,
-      )
-      .catch((e: unknown) => {
-        // identify or stop aborted this evaluation and may have started another.
-        if (controller.signal.aborted) return;
-        // Stored or bootstrap values for the context stay in use.
-        throw e;
-      });
-    this.#running = { controller, started };
-    return started;
+    const following = this.#transport.follow(
+      'evaluate',
+      // The server accepts only strings, as the key and attribute values.
+      { method: 'POST', body: JSON.stringify(normalizeContext(this.#context)) },
+      'flags',
+      {
+        set: (data) => receive(() => this.#evaluation.set(data)),
+        setRaw: (raw) => receive(() => this.#evaluation.setRaw(raw)),
+      },
+      this.#options.streaming ?? true,
+      pollingInterval(this.#options.pollingInterval, defaultPollingInterval),
+      controller.signal,
+    );
+    this.#running = { controller, following };
+    return following.started.catch((e: unknown) => {
+      // identify or stop aborted this evaluation and may have started another.
+      if (controller.signal.aborted) return;
+      // Stored or bootstrap values for the context stay in use.
+      throw e;
+    });
   }
 }
 
-function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
-  return typeof (value as { then?: unknown } | null | undefined)?.then === 'function';
+// asEvaluation returns data as an evaluation, or throws when it is not one: a
+// gateway or maintenance page in front of the server may answer with other
+// JSON.
+function asEvaluation(data: unknown): Evaluation {
+  if (!isRecord(data) || !isRecord(data.flags)) throw new RealmError('the server did not return an evaluation');
+  return data as unknown as Evaluation;
 }

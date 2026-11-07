@@ -1,49 +1,54 @@
 package realm
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
-	"math/rand/v2"
-	"net/http"
-	"strings"
+	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
 	"github.com/steviebps/realm/helper/logging"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
-
-var refreshes, _ = otel.Meter("github.com/steviebps/realm").Int64Counter(
-	"realm.sdk.refreshes",
-	metric.WithDescription("Chamber loads by the SDK (Start and polling), by result."),
-	metric.WithUnit("{refresh}"))
 
 type Realm struct {
 	attributes map[string]string
 	path       string
-	// lifecycle guards started and cancel.
-	lifecycle       sync.Mutex
-	started         bool
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	mu              sync.RWMutex
-	root            *ChamberEntry
+	// lifecycle guards started, ctx, and cancel.
+	lifecycle sync.Mutex
+	started   bool
+	// ctx is the context of the background refresh; Stop cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+	// mu guards the snapshot (root) and the fields that describe it.
+	mu   sync.RWMutex
+	root *ChamberEntry
+	// version counts the snapshot's replacements, so that a chamber fetched
+	// while a newer one arrived (from the stream, say) never replaces it.
+	version uint64
+	// refreshed is when the snapshot was last replaced.
+	refreshed time.Time
+	// unsupported lists the snapshot's flags that this SDK cannot fully
+	// evaluate, as last logged.
+	unsupported []string
+
 	client          *client.HttpClient
 	pollingInterval time.Duration
 	streaming       bool
 	logger          *logging.TracedLogger
 	tracer          trace.Tracer
+
+	// loadFailures, streamFailures, streamDown, and badEvents keep a failure
+	// that repeats from flooding the log.
+	loadFailures, streamFailures, streamDown, badEvents failureLog
 }
 
 type RealmConfig struct {
@@ -62,6 +67,14 @@ type RealmConfig struct {
 const (
 	// DefaultPollingInterval is used as the default polling interval for realm
 	DefaultPollingInterval time.Duration = 15 * time.Minute
+
+	// MinPollingInterval is the shortest polling interval realm uses; a
+	// shorter one is raised to it.
+	MinPollingInterval time.Duration = time.Second
+
+	// DefaultStartTimeout bounds a synchronous chamber load by a repeated
+	// Start.
+	DefaultStartTimeout = 15 * time.Second
 )
 
 type contextKey struct {
@@ -104,6 +117,10 @@ func WithPath(path string) RealmOption {
 	})
 }
 
+// WithPollingInterval sets how often realm refetches the chamber: always when
+// polling (the default), and while the stream is down when streaming. Zero or
+// a negative interval means DefaultPollingInterval; one shorter than
+// MinPollingInterval is raised to it.
 func WithPollingInterval(d time.Duration) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.pollingInterval = d
@@ -137,10 +154,12 @@ func WithAttributes(attributes map[string]string) RealmOption {
 	})
 }
 
-// WithStreaming enables real-time updates over a server-sent-events stream. When
-// enabled, realm applies chamber changes as the server pushes them, reconnecting
-// with backoff and falling back to polling if the server does not support
-// streaming. Defaults to false (polling only).
+// WithStreaming enables real-time updates over a server-sent-events stream.
+// When enabled, realm applies chamber changes as the server pushes them,
+// reconnecting with backoff. While the stream is down (it has delivered
+// nothing for a few attempts or about a minute), realm also polls at the
+// polling interval; against a server that does not stream, it polls and
+// tries the stream again every few minutes. Defaults to false (polling only).
 func WithStreaming(streaming bool) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.streaming = streaming
@@ -149,8 +168,11 @@ func WithStreaming(streaming bool) RealmOption {
 }
 
 // WithLogger sets the logger realm reports refresh failures and reconnects
-// to. By default realm writes JSON lines to standard error; pass
-// zerolog.Nop() to silence it.
+// to. By default realm writes its lines at Info and above to standard error,
+// as JSON (human-readable on a terminal; REALM_LOG_FORMAT=json or console
+// chooses), without changing zerolog's global settings; pass zerolog.Nop() to
+// silence it. Failures are logged when they start, at most every few minutes
+// while they last, and when they end.
 func WithLogger(logger zerolog.Logger) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.logger = logging.FromZerolog(logger)
@@ -174,8 +196,11 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		return nil, errors.New("path must not be empty")
 	}
 
-	if cfg.pollingInterval <= 0 {
+	switch {
+	case cfg.pollingInterval <= 0:
 		cfg.pollingInterval = DefaultPollingInterval
+	case cfg.pollingInterval < MinPollingInterval:
+		cfg.pollingInterval = MinPollingInterval
 	}
 
 	attributes := maps.Clone(cfg.attributes)
@@ -191,7 +216,7 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 
 	logger := cfg.logger
 	if logger == nil {
-		logger = logging.NewTracedLogger()
+		logger = defaultLogger()
 	}
 
 	return &Realm{
@@ -205,245 +230,82 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 	}, nil
 }
 
+// defaultLogger writes JSON lines to standard error, or human-readable ones
+// when it is a terminal (REALM_LOG_FORMAT=json or console chooses).
+func defaultLogger() *logging.TracedLogger {
+	var w io.Writer = os.Stderr
+	console := zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339}
+	switch os.Getenv("REALM_LOG_FORMAT") {
+	case "json":
+	case "console":
+		w = console
+	default:
+		if fi, err := os.Stderr.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+			w = console
+		}
+	}
+	return newDefaultLogger(w)
+}
+
+// newDefaultLogger returns realm's default logger writing to w: Info and
+// above, timestamped, and tagged as realm's, with no caller paths.
+func newDefaultLogger(w io.Writer) *logging.TracedLogger {
+	return logging.FromZerolog(zerolog.New(w).Level(zerolog.InfoLevel).With().Timestamp().Str("component", "realm").Logger())
+}
+
+// errStopped is returned by Start on a stopped Realm that has no chamber.
+var errStopped = errors.New("realm is stopped")
+
 // Start loads the chamber, then keeps it current in the background (by
 // polling, or streaming with WithStreaming) until Stop.
 //
 // If the first load fails, Start returns its error but keeps retrying in the
 // background, with backoff, so a service can start while realm is
 // unreachable: until a load succeeds, flag reads return their defaults along
-// with ErrChamberEmpty. Calling Start again only retries the load
-// synchronously. A stopped Realm cannot be restarted.
+// with ErrChamberEmpty. Stop cancels a first load still in flight. Calling
+// Start again only retries the load synchronously (within
+// DefaultStartTimeout), and never replaces a newer snapshot with what it
+// fetched. A stopped Realm cannot be restarted.
 func (rlm *Realm) Start() error {
 	rlm.lifecycle.Lock()
-	defer rlm.lifecycle.Unlock()
-
 	if rlm.started {
+		ctx := rlm.ctx
+		rlm.lifecycle.Unlock()
 		if rlm.getChamber() != nil {
 			return nil
 		}
-		ctx, cancel := context.WithTimeout(rlm.logger.WithContext(context.Background()), DefaultStartTimeout)
-		defer cancel()
-		chamber, err := rlm.retrieveChamber(ctx, rlm.path)
-		if err == nil {
-			rlm.setChamber(chamber)
+		if ctx.Err() != nil {
+			return errStopped
 		}
-		return err
+		ctx, cancel := context.WithTimeout(ctx, DefaultStartTimeout)
+		defer cancel()
+		return rlm.load(ctx)
 	}
 	rlm.started = true
-
 	ctx, cancel := context.WithCancel(rlm.logger.WithContext(context.Background()))
-	rlm.cancel = cancel
-
-	chamber, err := rlm.retrieveChamber(ctx, rlm.path)
-	if err == nil {
-		rlm.setChamber(chamber)
-	}
-
-	loaded := err == nil
+	rlm.ctx, rlm.cancel = ctx, cancel
 	rlm.wg.Add(1)
+	rlm.lifecycle.Unlock()
+
+	// The first load runs in the background goroutine, so Stop can cancel it.
+	first := make(chan error, 1)
 	go func() {
 		defer rlm.wg.Done()
+		err := rlm.load(ctx)
+		first <- err
 		if rlm.streaming {
 			rlm.stream(ctx)
 		} else {
-			rlm.poll(ctx, loaded)
+			rlm.poll(ctx, err)
 		}
+		rlm.logger.InfoCtx(ctx).Msg("realm stopped")
 	}()
-
-	return err
+	return <-first
 }
 
-const (
-	// DefaultStartTimeout bounds a synchronous chamber load by a repeated
-	// Start.
-	DefaultStartTimeout = 15 * time.Second
-
-	// retryBackoff is the first wait before retrying a failed refresh; it
-	// doubles up to maxRetryBackoff.
-	retryBackoff    = time.Second
-	maxRetryBackoff = 30 * time.Second
-)
-
-// streamIdleTimeout is how long a stream may go without receiving anything
-// (the server sends a heartbeat every 30 seconds) before it is considered
-// dead and reopened. It catches connections silently dropped by a proxy or
-// NAT, which would otherwise leave the snapshot stale indefinitely.
-var streamIdleTimeout = 75 * time.Second
-
-// backoff produces capped exponential delays with jitter, so many clients
-// reconnecting after the same outage spread out instead of arriving at once.
-type backoff struct {
-	next, max time.Duration
-}
-
-func newBackoff(max time.Duration) *backoff {
-	return &backoff{next: min(retryBackoff, max), max: max}
-}
-
-// wait returns the next delay: a random duration in [d/2, d) for the current
-// step d, which then doubles up to the cap.
-func (b *backoff) wait() time.Duration {
-	d := b.next
-	b.next = min(b.next*2, b.max)
-	return d/2 + rand.N(d/2+1)
-}
-
-func (b *backoff) reset() { b.next = min(retryBackoff, b.max) }
-
-// jitter spreads a fixed interval by up to ±10%.
-func jitter(d time.Duration) time.Duration {
-	spread := d / 5
-	if spread <= 0 {
-		return d
-	}
-	return d - spread/2 + rand.N(spread)
-}
-
-// sleep waits for d or until ctx is done, reporting whether d elapsed.
-func sleep(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
-}
-
-// poll refreshes the chamber snapshot on the polling interval until realm is
-// stopped. Failed refreshes are retried sooner, with backoff, so an outage
-// does not leave the snapshot stale (or never loaded) for a whole interval.
-func (rlm *Realm) poll(ctx context.Context, loaded bool) {
-	retry := newBackoff(min(maxRetryBackoff, rlm.pollingInterval))
-	wait := jitter(rlm.pollingInterval)
-	if !loaded {
-		wait = retry.wait()
-	}
-	for sleep(ctx, wait) {
-		if chamber, err := rlm.retrieveChamber(ctx, rlm.path); err == nil {
-			rlm.setChamber(chamber)
-			retry.reset()
-			wait = jitter(rlm.pollingInterval)
-		} else {
-			wait = retry.wait()
-		}
-	}
-	rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
-}
-
-// stream keeps the chamber snapshot current from a server-sent-events stream,
-// reconnecting with capped, jittered exponential backoff. If the server does
-// not support streaming, it falls back to polling permanently.
-func (rlm *Realm) stream(ctx context.Context) {
-	retry := newBackoff(maxRetryBackoff)
-	for ctx.Err() == nil {
-		supported, received, err := rlm.consumeStream(ctx)
-		if !supported {
-			rlm.logger.InfoCtx(ctx).Msg("realm server does not support streaming; falling back to polling")
-			rlm.poll(ctx, rlm.getChamber() != nil)
-			return
-		}
-		switch {
-		case err == nil || ctx.Err() != nil:
-		case errors.Is(err, errStreamClosed) && received:
-			rlm.logger.DebugCtx(ctx).Msg("chamber stream ended; reconnecting")
-		default:
-			rlm.logger.WarnCtx(ctx).Str("error", err.Error()).Msg("chamber stream disconnected; reconnecting")
-		}
-		if received {
-			retry.reset()
-		}
-		if !sleep(ctx, retry.wait()) {
-			break
-		}
-	}
-	rlm.logger.InfoCtx(ctx).Msg("shutting down realm")
-}
-
-// errStreamClosed reports a stream the server ended, as it does routinely
-// (streams have a maximum lifetime) and on shutdown.
-var errStreamClosed = errors.New("stream closed by the server")
-
-// errStreamIdle reports a stream closed for receiving nothing for
-// streamIdleTimeout.
-var errStreamIdle = errors.New("no data or heartbeat received; the connection is presumed dead")
-
-// consumeStream opens one streaming connection and applies chamber updates until
-// it drops. It reports whether the server supports streaming (false means the
-// caller should fall back to polling) and whether at least one event was
-// applied (used to reset reconnect backoff).
-func (rlm *Realm) consumeStream(ctx context.Context) (supported bool, received bool, err error) {
-	// The connection is torn down when nothing arrives for streamIdleTimeout,
-	// including while waiting for the response headers.
-	parent := ctx
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	idle := time.AfterFunc(streamIdleTimeout, cancel)
-	defer idle.Stop()
-	idleErr := func(err error) error {
-		if parent.Err() == nil && ctx.Err() != nil {
-			return errStreamIdle
-		}
-		return err
-	}
-
-	resp, err := rlm.client.Watch(ctx, rlm.path)
-	if err != nil {
-		// A transient connection error: keep retrying the stream.
-		return true, false, idleErr(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// An error from the server or a proxy in front of it (during a
-		// deploy, say) is transient: retry the stream rather than giving up
-		// on it.
-		return true, false, fmt.Errorf("chamber stream: unexpected status %s", resp.Status)
-	}
-	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		// The server answered with the chamber itself instead of a stream (it
-		// predates streaming and ignored ?watch=true): fall back to polling.
-		return false, false, nil
-	}
-
-	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-
-	var data strings.Builder
-	for scanner.Scan() {
-		idle.Reset(streamIdleTimeout)
-		line := scanner.Text()
-		switch {
-		case strings.HasPrefix(line, "data:"):
-			data.WriteString(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		case line == "":
-			// blank line terminates an event
-			if data.Len() == 0 {
-				continue
-			}
-			var c Chamber
-			if uerr := json.Unmarshal([]byte(data.String()), &c); uerr != nil {
-				rlm.logger.ErrorCtx(ctx).Str("error", uerr.Error()).Msg("could not unmarshal streamed chamber; keeping the last one")
-			} else {
-				rlm.setChamber(&c)
-				received = true
-			}
-			data.Reset()
-		default:
-			// comment/heartbeat (": ping") or other SSE fields (event:, id:) — ignore
-		}
-	}
-
-	err = scanner.Err()
-	if err == nil {
-		err = errStreamClosed
-	}
-	return true, received, idleErr(err)
-}
-
-// Stop stops realm and blocks until the background refresh goroutine has exited.
-// It is safe to call more than once.
+// Stop stops realm, canceling any load in flight, and blocks until the
+// background refresh goroutine has exited. It is safe to call more than once.
+// The last snapshot stays available to flag reads.
 func (rlm *Realm) Stop() {
 	rlm.lifecycle.Lock()
 	if rlm.cancel != nil {
@@ -453,59 +315,52 @@ func (rlm *Realm) Stop() {
 	rlm.wg.Wait()
 }
 
-func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber, err error) {
-	ctx, span := rlm.tracer.Start(ctx, "retrieveChamber", trace.WithAttributes(attribute.String("realm.path", path)))
-	defer func() {
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			refreshes.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "error")))
-		} else {
-			refreshes.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
-		}
-		span.End()
-	}()
-
-	logger := rlm.logger
-	client := rlm.client
-
-	res, err := client.PerformRequest(ctx, "GET", strings.TrimPrefix(path, "/"), nil)
-	if err != nil {
-		logger.ErrorCtx(ctx).Msg(fmt.Sprintf("could not perform request for getting: %q, %s", path, err.Error()))
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	// Decoded leniently: fields added to the envelope by newer servers must
-	// not break older SDKs.
-	var httpRes api.HTTPErrorAndDataResponse
-	if err := json.NewDecoder(res.Body).Decode(&httpRes); err != nil {
-		err = fmt.Errorf("could not read response for %q (status %s): %w", path, res.Status, err)
-		logger.ErrorCtx(ctx).Msg(err.Error())
-		return nil, err
-	}
-
-	if len(httpRes.Errors) > 0 || res.StatusCode != http.StatusOK {
-		err := fmt.Errorf("could not get %q: %s %s", path, res.Status, strings.Join(httpRes.Errors, "; "))
-		logger.ErrorCtx(ctx).Msg(err.Error())
-		return nil, err
-	}
-
-	var c Chamber
-	err = json.Unmarshal(httpRes.Data, &c)
-	if err != nil {
-		logger.ErrorCtx(ctx).Str("error", err.Error()).Msg(fmt.Sprintf("could not unmarshal chamber from response for getting: %q", path))
-		return nil, err
-	}
-
-	return &c, nil
+// snapshotVersion returns the version of the snapshot, for setChamberIf.
+func (rlm *Realm) snapshotVersion() uint64 {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	return rlm.version
 }
 
+// setChamber replaces the snapshot with c.
 func (rlm *Realm) setChamber(c *Chamber) {
+	rlm.replace(c, false, 0)
+}
+
+// setChamberIf replaces the snapshot with c, which was fetched while the
+// snapshot was at version, unless the snapshot has changed since: a newer
+// chamber (from the stream, say) arrived while c was in flight. It reports
+// whether it replaced the snapshot.
+func (rlm *Realm) setChamberIf(c *Chamber, version uint64) bool {
+	return rlm.replace(c, true, version)
+}
+
+func (rlm *Realm) replace(c *Chamber, conditional bool, version uint64) bool {
 	entry := NewChamberEntry(c, rlm.attributes)
+	unsupported := c.unsupportedFlags()
 	rlm.mu.Lock()
-	defer rlm.mu.Unlock()
+	if conditional && rlm.version != version {
+		rlm.mu.Unlock()
+		return false
+	}
 	rlm.root = entry
+	rlm.version++
+	rlm.refreshed = time.Now()
+	changed := !slices.Equal(unsupported, rlm.unsupported)
+	rlm.unsupported = unsupported
+	rlm.mu.Unlock()
+	if changed && len(unsupported) > 0 {
+		rlm.logger.Warn().Strs("flags", unsupported).Msg("these flags use flag types or targeting operators this version of the realm SDK does not support: a flag of an unknown type returns the caller's default, and a rule with an unknown operator never matches; upgrade the SDK")
+	}
+	return true
+}
+
+// refreshedAt returns when the snapshot was last replaced, or the zero time
+// if it never was.
+func (rlm *Realm) refreshedAt() time.Time {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	return rlm.refreshed
 }
 
 func (rlm *Realm) getChamber() *ChamberEntry {

@@ -78,7 +78,11 @@ func TestClauseUnmarshalValidation(t *testing.T) {
 		{"valid semver without v", `{"attribute":"version","op":"semverGte","values":["1.2.0"]}`, false},
 		{"missing attribute", `{"op":"in","values":["a"]}`, true},
 		{"no values", `{"attribute":"a","op":"in","values":[]}`, true},
-		{"unknown op", `{"attribute":"a","op":"regex","values":["a"]}`, true},
+		// a newer realm's operator decodes (and never matches); ParseChamber rejects it
+		{"unknown op", `{"attribute":"a","op":"regex","values":["a"]}`, false},
+		{"unknown op with other values", `{"attribute":"a","op":"between","values":[1,10]}`, false},
+		{"unknown op without values", `{"attribute":"a","op":"exists"}`, false},
+		{"known op with other values", `{"attribute":"a","op":"in","values":[1]}`, true},
 		{"semver two values", `{"attribute":"version","op":"semverGte","values":["1.0.0","2.0.0"]}`, true},
 		{"semver invalid", `{"attribute":"version","op":"semverLte","values":["latest"]}`, true},
 	}
@@ -106,7 +110,9 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"rule value missing", `{"type":"boolean","value":false,"targeting":[{"clauses":[]}]}`, "cannot be empty"},
 		{"duplicate ids", `{"type":"string","value":"a","targeting":[{"id":"x","value":"b"},{"id":"x","value":"c"}]}`, "not unique"},
 		{"rollout out of range", `{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":101}}]}`, "range"},
-		{"bad clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"a","op":"nope","values":["x"]}]}]}`, "unsupported operator"},
+		{"bad clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"","op":"in","values":["x"]}]}]}`, "attribute cannot be empty"},
+		{"unknown operator", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"a","op":"nope","values":["x"]}]}]}`, ""},
+		{"unknown type", `{"type":"json","value":{"a":1},"targeting":[{"value":{"a":2},"whatever":true}],"rollout":5}`, ""},
 		{"null clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[null]}]}`, "must not be null"},
 		{"valid schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00-05:00","end":"2026-11-04T17:00:00-05:00"}}]}`, ""},
 		{"open-ended schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"end":"2026-11-04T17:00:00Z"}}]}`, ""},

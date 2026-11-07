@@ -6,6 +6,7 @@ import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
 import { describeDefinition, formatValue, same } from '../utils/describe';
 import { Served } from '../utils/provenance';
 import { scheduleEnded } from '../utils/schedule';
+import { encodePath } from '../utils/path';
 import { plural, trimSuffix } from '../utils/strings';
 
 /** Rows share the table's column tracks so every column lines up. */
@@ -34,7 +35,7 @@ export const ChamberRef = ({ path, here }: { path: string; here: string }) =>
 /** A link to the chamber at path, shown as the path in monospace. */
 export const PathLink = ({ path, children }: { path: string; children?: React.ReactNode }) => (
   <Link
-    to={trimSuffix(path, '/') || '/'}
+    to={encodePath(trimSuffix(path, '/')) || '/'}
     className={`text-primary-700 hover:underline dark:text-primary-300 ${FOCUS_RING}`}
   >
     {children}

@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	// SessionCookie holds a signed-in user's session.
+	// SessionCookie holds a signed-in user's session. Over HTTPS the cookie
+	// is named with the "__Host-" prefix (see cookieName).
 	SessionCookie = "realm_session"
 	// loginCookie holds the state of a sign-in in progress.
 	loginCookie = "realm_login"
@@ -86,10 +87,13 @@ func (a *Authenticator) Providers() []ProviderInfo {
 // is recomputed from the access configuration on every request, so changes
 // to grants apply immediately.
 type session struct {
-	Email      string   `json:"email"`
-	Name       string   `json:"name,omitempty"`
-	Provider   string   `json:"provider"`
-	GitHubOrgs []string `json:"githubOrgs,omitempty"`
+	Email    string `json:"email"`
+	Name     string `json:"name,omitempty"`
+	Provider string `json:"provider"`
+	// HostedDomain is the ID token's "hd" claim, kept so that a provider's
+	// hostedDomains also apply to sessions begun before they were set.
+	HostedDomain string   `json:"hd,omitempty"`
+	GitHubOrgs   []string `json:"githubOrgs,omitempty"`
 	// OrgsAt is when GitHubOrgs was read from GitHub (Unix seconds).
 	OrgsAt  int64 `json:"orgsAt,omitempty"`
 	Expires int64 `json:"exp"`
@@ -131,7 +135,7 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	if a.sealer == nil {
 		return nil, nil
 	}
-	cookie, err := r.Cookie(SessionCookie)
+	cookie, err := r.Cookie(a.cookieName(SessionCookie))
 	if err != nil {
 		return nil, nil
 	}
@@ -140,6 +144,12 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 		return nil, nil
 	}
 	if time.Now().Unix() > s.Expires {
+		return nil, nil
+	}
+	// The provider the user signed in through must still be trusted: removing
+	// a provider, or restricting it to hosted domains, ends its sessions.
+	p, ok := a.providers[s.Provider]
+	if !ok || !p.allowsHostedDomain(s.HostedDomain) {
 		return nil, nil
 	}
 	if !safeMethod(r.Method) && !a.sameOrigin(r) {
@@ -198,9 +208,24 @@ func (a *Authenticator) secureCookies() bool {
 	return a.cfg.external != nil && a.cfg.external.Scheme == "https"
 }
 
+// cookieName returns the name of the cookie that holds name. Over HTTPS it
+// carries the "__Host-" prefix, which browsers accept only from this host,
+// for every path, and over HTTPS: a site on a sibling subdomain cannot plant
+// a session or a sign-in in progress that the browser would send here.
+func (a *Authenticator) cookieName(name string) string {
+	if a.secureCookies() {
+		return "__Host-" + name
+	}
+	return name
+}
+
 func (a *Authenticator) setCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
+	if a.secureCookies() {
+		// required by the "__Host-" prefix
+		path = "/"
+	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     name,
+		Name:     a.cookieName(name),
 		Value:    value,
 		Path:     path,
 		MaxAge:   maxAge,
@@ -271,7 +296,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var login loginState
-	cookie, err := r.Cookie(loginCookie)
+	cookie, err := r.Cookie(a.cookieName(loginCookie))
 	if err == nil {
 		err = a.sealer.open(loginCookie, cookie.Value, &login)
 	}
@@ -293,7 +318,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
-	s := session{Email: id.Email, Name: id.Name, Provider: name, GitHubOrgs: id.GitHubOrgs, OrgsAt: now.Unix(), Expires: now.Add(a.cfg.sessionTTL).Unix()}
+	s := session{Email: id.Email, Name: id.Name, Provider: name, HostedDomain: id.HostedDomain, GitHubOrgs: id.GitHubOrgs, OrgsAt: now.Unix(), Expires: now.Add(a.cfg.sessionTTL).Unix()}
 	sealed, err := a.sealer.seal(SessionCookie, s)
 	if err != nil {
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
@@ -322,13 +347,20 @@ func (a *Authenticator) signInFailed(w http.ResponseWriter, status int, message 
 <h1>Couldn't sign you in</h1><p>%s</p><p><a href="/ui/">Back to realm</a></p></body></html>`, html.EscapeString(message))
 }
 
-// safeReturnTo keeps post-sign-in redirects on this server. Control
-// characters are refused along with backslashes: browsers drop tabs and line
-// breaks from a URL before parsing it, so "/<tab>/evil.example" would
-// otherwise redirect to "//evil.example", another site.
+// safeReturnTo keeps post-sign-in redirects on this server, in the UI.
+// Browsers drop tabs and line breaks from a URL before parsing it, and read
+// "\" as "/", so "/<tab>/evil.example" or "/\evil.example" would lead to
+// another site: they are refused (see unsafeInRedirect) before the target is
+// parsed.
 func safeReturnTo(target string) string {
-	if !strings.HasPrefix(target, "/") || strings.HasPrefix(target, "//") || strings.ContainsFunc(target, unsafeInRedirect) {
-		return "/ui/"
+	const ui = "/ui/"
+	if strings.ContainsFunc(target, unsafeInRedirect) {
+		return ui
+	}
+	u, err := url.Parse(target)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || strings.HasPrefix(target, "//") ||
+		!strings.HasPrefix(u.Path, ui) {
+		return ui
 	}
 	return target
 }

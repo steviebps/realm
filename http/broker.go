@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel/metric"
@@ -26,6 +27,25 @@ type broker struct {
 	next int
 	// max caps len(subs); zero means unlimited.
 	max int
+	// public counts the subscriptions in subs made with public set.
+	public int
+	// gen counts Notify calls (see Generation).
+	gen atomic.Uint64
+}
+
+// publicMax returns how many public subscriptions the broker holds at most:
+// three quarters of max, so that streams anyone can open (evaluation streams,
+// opened with evaluate keys published in web pages) can never take the slots
+// that server SDKs need to hear about changes. Zero means unlimited.
+func (b *broker) publicMax() int {
+	return b.max - b.max/4
+}
+
+// Generation returns the number of changes announced so far. Notify advances
+// it before it signals any subscriber, so a subscriber woken by a change reads
+// a generation at least as new as that change.
+func (b *broker) Generation() uint64 {
+	return b.gen.Load()
 }
 
 type subscription struct {
@@ -44,22 +64,26 @@ func newBroker(max int) *broker {
 
 // Subscribe registers a watcher for watchPath and returns a channel that
 // receives a signal whenever a change affects that path, along with a function
-// that unregisters the watcher. ok is false, and nothing is registered, when
-// the broker already holds its maximum number of subscriptions.
-func (b *broker) Subscribe(watchPath string) (_ <-chan struct{}, _ func(), ok bool) {
+// that unregisters the watcher. public marks a watcher anyone may open (see
+// publicMax). ok is false, and nothing is registered, when the broker already
+// holds its maximum number of subscriptions, or of public ones.
+func (b *broker) Subscribe(watchPath string, public bool) (_ <-chan struct{}, _ func(), ok bool) {
 	sub := &subscription{
 		path: utils.EnsureTrailingSlash(watchPath),
 		ch:   make(chan struct{}, 1),
 	}
 
 	b.mu.Lock()
-	if b.max > 0 && len(b.subs) >= b.max {
+	if b.max > 0 && (len(b.subs) >= b.max || (public && b.public >= b.publicMax())) {
 		b.mu.Unlock()
 		return nil, nil, false
 	}
 	id := b.next
 	b.next++
 	b.subs[id] = sub
+	if public {
+		b.public++
+	}
 	activeStreams.Add(context.Background(), 1)
 	b.mu.Unlock()
 
@@ -68,6 +92,9 @@ func (b *broker) Subscribe(watchPath string) (_ <-chan struct{}, _ func(), ok bo
 		once.Do(func() {
 			b.mu.Lock()
 			delete(b.subs, id)
+			if public {
+				b.public--
+			}
 			b.mu.Unlock()
 			activeStreams.Add(context.Background(), -1)
 		})
@@ -84,6 +111,7 @@ func (b *broker) Subscribe(watchPath string) (_ <-chan struct{}, _ func(), ok bo
 func (b *broker) Notify(changedPath string) {
 	changed := utils.EnsureTrailingSlash(changedPath)
 
+	b.gen.Add(1)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, sub := range b.subs {

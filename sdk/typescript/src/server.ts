@@ -1,6 +1,14 @@
-import { evaluateChamber, flagValue, typedValue, VERSION_ATTRIBUTE } from './evaluate.js';
-import { Snapshot } from './snapshot.js';
-import { Transport, type ClientOptions } from './transport.js';
+import {
+  attributeValue,
+  copyValue,
+  evaluateChamber,
+  flagValue,
+  stringAttributes,
+  typedValue,
+  VERSION_ATTRIBUTE,
+} from './evaluate.js';
+import { isRecord, Snapshot } from './snapshot.js';
+import { pollingInterval, RealmError, Transport, type ClientOptions, type Following } from './transport.js';
 import type { Chamber, EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
 /** Options for a ServerClient. */
@@ -22,48 +30,59 @@ export class ServerClient {
   readonly #transport: Transport;
   readonly #options: ServerClientOptions;
   readonly #defaults: Record<string, string>;
-  readonly #chamber = new Snapshot<Chamber>({ rules: {} });
-  // The background refresh, and its first load, while started.
-  #running: { controller: AbortController; started: Promise<void> } | undefined;
+  readonly #chamber = new Snapshot<Chamber>({ rules: {} }, asChamber);
+  // The background refresh, while started.
+  #running: { controller: AbortController; following: Following } | undefined;
 
   constructor(options: ServerClientOptions) {
     this.#options = options;
     this.#transport = new Transport(options);
-    this.#defaults = { ...options.attributes };
-    if (options.version) this.#defaults[VERSION_ATTRIBUTE] = options.version;
+    // as strings, as contexts are read
+    this.#defaults = { ...stringAttributes(options.attributes) };
+    const version = attributeValue(options.version);
+    if (version) this.#defaults[VERSION_ATTRIBUTE] = version;
   }
 
   /**
    * Loads the chamber, then keeps it current in the background. It rejects
    * when the first load fails (for example, a bad key or a missing chamber),
    * but keeps retrying with backoff until stop. Calling it again while
-   * started returns the first call's result.
+   * started reflects the current state: it waits for the first load while
+   * that is in flight; after that, it resolves once any load has succeeded,
+   * and otherwise rejects with the latest failure.
    */
   async start(): Promise<void> {
-    if (this.#running) return this.#running.started;
+    if (this.#running) return this.#running.following.current();
     const controller = new AbortController();
-    const started = this.#transport
-      .follow(
-        'chambers',
-        { method: 'GET' },
-        'chamber',
-        this.#chamber,
-        this.#options.streaming ?? true,
-        this.#options.pollingInterval ?? defaultPollingInterval,
-        controller.signal,
-      )
-      .catch((e: unknown) => {
-        // A stop aborted this load; the client may have been started again since.
-        if (!controller.signal.aborted) throw e;
-      });
-    this.#running = { controller, started };
-    return started;
+    const following = this.#transport.follow(
+      'chambers',
+      { method: 'GET' },
+      'chamber',
+      this.#chamber,
+      this.#options.streaming ?? true,
+      pollingInterval(this.#options.pollingInterval, defaultPollingInterval),
+      controller.signal,
+    );
+    this.#running = { controller, following };
+    return following.started.catch((e: unknown) => {
+      // A stop aborted this load; the client may have been started again since.
+      if (!controller.signal.aborted) throw e;
+    });
   }
 
   /** Stops refreshing. The last known values stay available. */
   stop(): void {
     this.#running?.controller.abort();
     this.#running = undefined;
+  }
+
+  /**
+   * Whether the client has a chamber from the server; until it does, getters
+   * return their fallbacks. It stays true after stop, as the last known
+   * values stay in use.
+   */
+  isReady(): boolean {
+    return this.#chamber.raw !== '';
   }
 
   /** Calls listener whenever the chamber changes. Returns a function that unsubscribes. */
@@ -86,19 +105,48 @@ export class ServerClient {
     return this.#typed(flag, context, 'number', fallback);
   }
 
-  /** The value of a custom (JSON) flag for context, or fallback. */
+  /**
+   * The value of a custom (JSON) flag for context, or fallback. The value is
+   * a copy: changing it does not change what later reads return.
+   */
   json<T>(flag: string, context: EvaluationContext | undefined, fallback: T): T {
-    return this.#typed(flag, context, 'custom', fallback);
+    return this.#typed(flag, context, 'custom', fallback, true);
   }
 
-  /** Every flag's value for context, for example to bootstrap a page. */
-  allFlags(context: EvaluationContext = {}): EvaluatedFlags {
-    return evaluateChamber(this.#chamber.value, context, this.#defaults);
+  /**
+   * Every flag's value for context, for example to bootstrap a page. Custom
+   * values are copies, as json returns them.
+   */
+  allFlags(context?: EvaluationContext): EvaluatedFlags {
+    try {
+      const flags = evaluateChamber(this.#chamber.value, context ?? {}, this.#defaults);
+      for (const flag of Object.values(flags)) flag.value = copyValue(flag.value);
+      return flags;
+    } catch {
+      return {};
+    }
   }
 
-  #typed<T>(key: string, context: EvaluationContext = {}, want: FlagType, fallback: T): T {
-    const flag = this.#chamber.value.rules?.[key];
-    if (!flag) return fallback;
-    return typedValue(flag.type, flagValue(key, flag, context, this.#defaults), want, fallback);
+  // typed returns the value of flag for context when it has type want (a
+  // copy, with copy), and otherwise fallback. It never throws: a flag of a
+  // shape this SDK does not expect returns fallback too.
+  #typed<T>(key: string, context: EvaluationContext | undefined, want: FlagType, fallback: T, copy = false): T {
+    try {
+      const rules = this.#chamber.value.rules;
+      const flag = Object.hasOwn(rules, key) ? rules[key] : undefined;
+      if (!flag) return fallback;
+      const value = typedValue(flag.type, flagValue(key, flag, context ?? {}, this.#defaults), want, fallback);
+      return copy && value !== fallback ? copyValue(value) : value;
+    } catch {
+      return fallback;
+    }
   }
+}
+
+// asChamber returns data as a chamber, or throws when it is not one: a
+// gateway or maintenance page in front of the server may answer with other
+// JSON.
+function asChamber(data: unknown): Chamber {
+  if (!isRecord(data) || !isRecord(data.rules)) throw new RealmError('the server did not return a chamber');
+  return data as unknown as Chamber;
 }

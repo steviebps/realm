@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -28,6 +29,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 )
 
 const DefaultHandlerTimeout = 10 * time.Second
@@ -94,7 +96,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	brk := newBroker(hc.MaxStreams)
 
 	if uiExists {
-		mux.Handle("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", http.FileServer(webFS()))))
+		mux.Handle("/ui/", gziphandler.GzipHandler(http.StripPrefix("/ui/", uiHandler(uiFiles()))))
 	} else {
 		mux.Handle("/ui/", handleUIEmpty())
 	}
@@ -116,8 +118,9 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 		}()
 	}
 
-	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, notify))
-	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk))
+	streamReads := &sharedReads{strg: hc.Storage, brk: brk, timeout: hc.RequestTimeout}
+	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, streamReads, notify))
+	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk, streamReads))
 	mux.Handle("/v1/history/", handleHistory(meta))
 	mux.Handle("/v1/catalog", handleCatalog(meta))
 	mux.Handle("/v1/catalog/", handleCatalog(meta))
@@ -139,12 +142,13 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	timeoutHandler := wrapWithTimeout(withCORS(evaluatePrefix, withPrincipal(authn, mux)), hc.RequestTimeout)
 	// One span per request, around authentication too, so refused requests
 	// are traced and measured like the rest.
-	return otelhttp.NewHandler(wrapCommonHandler(timeoutHandler, logger), "realm",
+	instrumented := otelhttp.NewHandler(wrapCommonHandler(timeoutHandler), "realm",
 		otelhttp.WithFilter(traced),
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			return r.Method + " " + routeOf(r.URL.Path)
 		}),
 	)
+	return withLifecycle(instrumented, logger, hc.RequestTimeout)
 }
 
 // routes are the registered route prefixes, used to name spans with low
@@ -191,7 +195,7 @@ func isWatchRequest(r *http.Request) bool {
 		(strings.HasPrefix(r.URL.Path, "/v1/chambers/") || strings.HasPrefix(r.URL.Path, evaluatePrefix))
 }
 
-func wrapCommonHandler(next http.Handler, logger *logging.TracedLogger) http.Handler {
+func wrapCommonHandler(next http.Handler) http.Handler {
 	meter := otel.Meter("github.com/steviebps/realm")
 	apiCounter, _ := meter.Int64Counter(
 		"handler.counter",
@@ -201,7 +205,9 @@ func wrapCommonHandler(next http.Handler, logger *logging.TracedLogger) http.Han
 
 	hostname, _ := os.Hostname()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(logger.WithContext(r.Context()))
+		if info := requestInfoFrom(r.Context()); info != nil {
+			info.span = trace.SpanContextFromContext(r.Context())
+		}
 		apiCounter.Add(r.Context(), 1)
 		h := w.Header()
 		h.Set("Cache-Control", "no-store")
@@ -209,6 +215,10 @@ func wrapCommonHandler(next http.Handler, logger *logging.TracedLogger) http.Han
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
 		h.Set("Referrer-Policy", "no-referrer")
+		if r.TLS != nil {
+			// served over HTTPS by realm itself: keep browsers on HTTPS
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 		}
@@ -290,12 +300,10 @@ func preconditionFailed(r *http.Request, current string) bool {
 	return false
 }
 
-func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify func(path string)) http.Handler {
+func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamReads *sharedReads, notify func(path string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
-		logger := logging.Ctx(ctx)
-		errorLog := logger.ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
 		req := buildAgentRequest(r)
@@ -305,10 +313,14 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{fmt.Sprintf("paths under %q are reserved", storage.ReservedPrefix)}))
 			return
 		}
+		if err := storage.ValidatePath(req.Path); err != nil {
+			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
+			return
+		}
 
 		fail := func(status int, err error) {
 			span.SetStatus(codes.Error, err.Error())
-			errorLog.Msg(err.Error())
+			noteFailure(ctx, status, err)
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 		}
 
@@ -331,12 +343,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 		if req.Operation == PutOperation || req.Operation == PatchOperation {
 			raw, err := io.ReadAll(r.Body)
 			if err != nil {
-				var tooLarge *http.MaxBytesError
-				if errors.As(err, &tooLarge) {
-					fail(http.StatusRequestEntityTooLarge, fmt.Errorf("request body must be at most %d bytes", tooLarge.Limit))
-					return
-				}
-				fail(http.StatusBadRequest, err)
+				fail(readFailure(err))
 				return
 			}
 			if len(bytes.TrimSpace(raw)) == 0 {
@@ -369,7 +376,13 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 				fail(http.StatusNotFound, nf)
 			case errors.Is(err, storage.ErrConflict):
 				fail(http.StatusConflict, errors.New("the chamber is being changed by others; try again"))
+			case errors.Is(err, storage.ErrInvalidPath):
+				// refused before anything was written
+				fail(http.StatusBadRequest, err)
 			case err != nil:
+				// Backends without transactions apply a write's changes one
+				// at a time, so part of it may have landed: let streams look.
+				notify(req.Path)
 				fail(http.StatusInternalServerError, err)
 			default:
 				notify(req.Path)
@@ -393,7 +406,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 				return
 			}
 			if isWatchRequest(r) {
-				streamChamber(w, r, strg, brk, req.Path)
+				streamChamber(w, r, streamReads, brk, req.Path)
 				return
 			}
 
@@ -409,10 +422,24 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 			entry, err := source.Get(ctx, req.Path)
 			if err != nil {
 				var nfError *storage.NotFoundError
-				if errors.As(err, &nfError) {
-					err = nfError
+				var invalid *storage.ChamberError
+				switch {
+				case errors.As(err, &nfError):
+					fail(http.StatusNotFound, nfError)
+				case errors.Is(err, storage.ErrInvalidPath):
+					fail(http.StatusBadRequest, err)
+				case errors.As(err, &invalid):
+					// a stored chamber (this one or a parent) is broken: say
+					// which and why, as the layers view does
+					span.SetStatus(codes.Error, err.Error())
+					noteFailure(ctx, http.StatusInternalServerError, err)
+					errorCounter.Add(ctx, 1, metric.WithAttributes(attribute.Int("http.status_code", http.StatusInternalServerError)))
+					handleWithStatus(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
+				default:
+					// an outage is not a missing chamber (which editors would
+					// offer to create), and its cause is logged, not sent
+					fail(http.StatusInternalServerError, err)
 				}
-				fail(http.StatusNotFound, err)
 				return
 			}
 
@@ -457,7 +484,11 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 				fail(http.StatusNotFound, nf)
 			case errors.Is(err, storage.ErrConflict):
 				fail(http.StatusConflict, errors.New("the chambers are being changed by others; try again"))
+			case errors.Is(err, storage.ErrInvalidPath):
+				fail(http.StatusBadRequest, err)
 			case err != nil:
+				// part of the deletion may have landed (see commit)
+				notify(req.Path)
 				fail(http.StatusInternalServerError, err)
 			default:
 				// subscribers at or below the path are all signaled
@@ -471,6 +502,10 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, notify f
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					fail(http.StatusNotFound, errors.New(http.StatusText(http.StatusNotFound)))
+					return
+				}
+				if errors.Is(err, storage.ErrInvalidPath) {
+					fail(http.StatusBadRequest, err)
 					return
 				}
 				fail(http.StatusInternalServerError, err)
@@ -664,9 +699,9 @@ func deleteChamberTree(ctx context.Context, meta *metaStore, r *http.Request, ro
 // streamChamber holds an SSE connection open and pushes the chamber at path
 // whenever it changes. Clients evaluate the chamber themselves, so its
 // schedules need no pushes of their own.
-func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage, brk *broker, path string) {
-	streamEvents(w, r, brk, path, "chamber", func(ctx context.Context) ([]byte, time.Time, error) {
-		entry, err := strg.Get(ctx, path)
+func streamChamber(w http.ResponseWriter, r *http.Request, reads *sharedReads, brk *broker, path string) {
+	streamEvents(w, r, brk, path, "chamber", false, func(ctx context.Context) ([]byte, time.Time, error) {
+		entry, err := reads.Get(ctx, path)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
@@ -679,33 +714,53 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 // signals a change at or above path and the payload differs from the last one
 // sent. It emits periodic heartbeats so dead connections and idle
 // intermediaries are handled. A payload spanning several lines is sent as
-// several data fields (see writeEvent).
+// several data fields (see eventText).
 //
 // current may also return a time at which the payload changes by itself (a
 // schedule boundary of an evaluated flag); the payload is produced again then.
 // A zero time means it changes only with writes.
 //
 // A payload whose source does not exist yet is not fatal: the stream waits for
-// it to be created. Any other error closes the stream.
-func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, current func(context.Context) ([]byte, time.Time, error)) {
+// it to be created. Neither is a failure to produce it (storage unreachable,
+// say): the client keeps the payload it has, and it is produced again with
+// backoff, so a storage outage does not make every client reconnect at once.
+//
+// The request must have been read in full: the stream lifts the request's
+// read deadline, and bounds each write instead, so a client that stops
+// reading loses its stream rather than holding it.
+//
+// public marks a stream anyone may open, which the broker limits to a share
+// of its streams (see broker.publicMax).
+func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, public bool, current func(context.Context) ([]byte, time.Time, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Bool("realm.server.watch", true))
 
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{"streaming is not supported"}))
 		return
 	}
 
-	signals, unsubscribe, ok := brk.Subscribe(path)
+	signals, unsubscribe, ok := brk.Subscribe(path, public)
 	if !ok {
 		w.Header().Set("Retry-After", "5")
 		handleError(ctx, w, http.StatusServiceUnavailable, createResponseWithErrors(nil, []string{"too many open streams; try again later"}))
 		return
 	}
 	defer unsubscribe()
+
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	// write writes and flushes s, giving the client streamWriteTimeout to
+	// take it. It returns false when the stream should end.
+	write := func(s string) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+		if _, err := io.WriteString(w, s); err != nil {
+			return false
+		}
+		return rc.Flush() == nil
+	}
 
 	// Streams end after a while and clients reconnect, which re-checks their
 	// credentials (a revoked key or expired session loses its stream) and
@@ -719,38 +774,61 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	// Commit the headers now, so clients see the stream open even while
 	// they wait for the payload's source to be created.
 	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	if !write("") {
+		return
+	}
 
 	// recheck fires when the last payload produced changes by itself.
 	recheck := time.NewTimer(0)
 	recheck.Stop()
 	defer recheck.Stop()
+	// retry fires when a payload that could not be produced is due to be
+	// produced again.
+	retry := time.NewTimer(0)
+	retry.Stop()
+	defer retry.Stop()
+	failures := 0
 
 	var last []byte
 	// send writes the current payload unless it is unchanged. It returns
 	// false when the connection should be torn down.
 	send := func() bool {
 		data, changesAt, err := current(ctx)
+		if ctx.Err() != nil {
+			return false
+		}
+		if err != nil {
+			var nfError *storage.NotFoundError
+			if errors.As(err, &nfError) {
+				// wait for it to be created
+				failures = 0
+				recheck.Stop()
+				return true
+			}
+			if errors.Is(err, storage.ErrInvalidPath) {
+				// storage refuses the path: it will never exist
+				return false
+			}
+			failures++
+			delay := streamRetryDelay(failures)
+			// the shared read logs the failure itself, once for every stream
+			logger.DebugCtx(ctx).Str("path", path).Str("error", err.Error()).Dur("retryIn", delay).Msg("could not produce a stream payload")
+			retry.Reset(delay)
+			return true
+		}
+		failures = 0
+		retry.Stop()
 		if changesAt.IsZero() {
 			recheck.Stop()
 		} else {
 			recheck.Reset(time.Until(changesAt))
 		}
-		if err != nil {
-			var nfError *storage.NotFoundError
-			if errors.As(err, &nfError) {
-				return true
-			}
-			logger.ErrorCtx(ctx).Str("path", path).Msg(err.Error())
-			return false
-		}
 		if last != nil && bytes.Equal(data, last) {
 			return true
 		}
-		if err := writeEvent(w, event, data); err != nil {
+		if !write(eventText(event, data)) {
 			return false
 		}
-		flusher.Flush()
 		last = data
 		return true
 	}
@@ -776,35 +854,93 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 			if !send() {
 				return
 			}
-		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+		case <-retry.C:
+			if !send() {
 				return
 			}
-			flusher.Flush()
+		case <-heartbeat.C:
+			if !write(": ping\n\n") {
+				return
+			}
 		}
 	}
 }
 
-// writeEvent writes data as one server-sent event. Each line of data becomes a
+// eventText returns data as one server-sent event. Each line of data becomes a
 // data field, which clients join back with newlines: a payload spanning lines
 // (a chamber stored pretty-printed, say) would otherwise end the event's
 // fields at its first line, and clients would drop the rest.
-func writeEvent(w io.Writer, event string, data []byte) error {
-	var b bytes.Buffer
+func eventText(event string, data []byte) string {
+	var b strings.Builder
 	fmt.Fprintf(&b, "event: %s\n", event)
 	text := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(string(data))
 	for line := range strings.SplitSeq(strings.TrimRight(text, "\n"), "\n") {
 		fmt.Fprintf(&b, "data: %s\n", line)
 	}
 	b.WriteByte('\n')
-	_, err := w.Write(b.Bytes())
-	return err
+	return b.String()
 }
 
 // maxStreamLifetime is how long a watch stream stays open before the server
 // closes it (plus up to a quarter more, at random, so streams opened together
 // do not all reconnect together).
 var maxStreamLifetime = 20 * time.Minute
+
+// streamWriteTimeout bounds each write to a watch stream.
+var streamWriteTimeout = 30 * time.Second
+
+// streamRetryDelay is how long a stream waits before producing its payload
+// again after failures consecutive failures: doubling from one second to 30,
+// with jitter so streams on many paths do not retry together.
+func streamRetryDelay(failures int) time.Duration {
+	d := 30 * time.Second
+	if failures <= 5 {
+		d = time.Second << (failures - 1)
+	}
+	return d/2 + rand.N(d/2+1)
+}
+
+// sharedReads reads chambers for watch streams. A write wakes every stream at
+// or below it at once; rather than each reading (and, with inheritance,
+// merging) the chamber itself, the streams of a path share one read.
+type sharedReads struct {
+	strg storage.Storage
+	brk  *broker
+	// timeout bounds each shared read.
+	timeout time.Duration
+	group   singleflight.Group
+}
+
+// Get returns the entry at path. Callers share a read only when it started
+// after the latest change the broker announced before they called, so a
+// stream woken by a change never receives a read begun before that change.
+// Ordinary requests read storage directly: a change made through another
+// replica of a Watchable backend is announced only after it is read back
+// from the change feed, so a shared read could miss a client's own write.
+func (s *sharedReads) Get(ctx context.Context, path string) (*storage.StorageEntry, error) {
+	key := path + "\x00" + strconv.FormatUint(s.brk.Generation(), 10)
+	ch := s.group.DoChan(key, func() (any, error) {
+		// Detached from the caller: the stream that started the read may
+		// end before the others sharing it.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
+		defer cancel()
+		entry, err := s.strg.Get(rctx, path)
+		var nf *storage.NotFoundError
+		if err != nil && !errors.As(err, &nf) {
+			logging.Ctx(ctx).WarnCtx(ctx).Str("path", path).Str("error", err.Error()).Msg("watch streams could not read the chamber; they will retry")
+		}
+		return entry, err
+	})
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		return res.Val.(*storage.StorageEntry), nil
+	}
+}
 
 // handleHealth reports that the server is up and serving requests.
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -815,9 +951,44 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 // readyTimeout bounds the storage check behind GET /readyz.
 const readyTimeout = 2 * time.Second
 
+// readyCacheFor is how long a storage check answers GET /readyz: the route is
+// public, so frequent probes (or anyone else) must not each reach storage.
+var readyCacheFor = time.Second
+
 // handleReady reports whether this server should receive traffic: it is not
-// draining for shutdown and its storage answers a read of the root chamber.
+// draining for shutdown, its storage answers a read of the root chamber, and
+// a storage that reports its own health (such as a change feed) is healthy.
 func handleReady(strg storage.Storage, draining <-chan struct{}) http.HandlerFunc {
+	var (
+		mu        sync.Mutex
+		checkedAt time.Time
+		lastErr   error
+	)
+	// check runs the storage check, or returns the last one's result while
+	// it is recent; concurrent probes wait for the check under way.
+	check := func(ctx context.Context) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !checkedAt.IsZero() && time.Since(checkedAt) < readyCacheFor {
+			return lastErr
+		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), readyTimeout)
+		defer cancel()
+		lastErr = nil
+		if _, err := strg.Get(ctx, "/"); err != nil {
+			var nf *storage.NotFoundError
+			if !errors.As(err, &nf) {
+				lastErr = fmt.Errorf("storage unavailable: %w", err)
+			}
+		}
+		if hr, ok := strg.(interface{ Health() error }); ok && lastErr == nil {
+			if err := hr.Health(); err != nil {
+				lastErr = fmt.Errorf("storage unhealthy: %w", err)
+			}
+		}
+		checkedAt = time.Now()
+		return lastErr
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		select {
@@ -827,16 +998,12 @@ func handleReady(strg storage.Storage, draining <-chan struct{}) http.HandlerFun
 			return
 		default:
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
-		defer cancel()
-		if _, err := strg.Get(ctx, "/"); err != nil {
-			var nf *storage.NotFoundError
-			if !errors.As(err, &nf) {
-				logging.Ctx(ctx).WarnCtx(ctx).Str("error", err.Error()).Msg("readiness check: storage unavailable")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_, _ = w.Write([]byte("storage unavailable\n"))
-				return
-			}
+		if err := check(r.Context()); err != nil {
+			logging.Ctx(r.Context()).WarnCtx(r.Context()).Str("error", err.Error()).Msg("readiness check failed")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			// the cause can name storage internals: it is logged, not sent
+			_, _ = w.Write([]byte("storage unavailable\n"))
+			return
 		}
 		_, _ = w.Write([]byte("ok\n"))
 	}

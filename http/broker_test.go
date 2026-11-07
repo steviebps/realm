@@ -16,7 +16,7 @@ func received(ch <-chan struct{}) bool {
 
 func TestBrokerNotifyExactPath(t *testing.T) {
 	b := newBroker(0)
-	ch, unsub, _ := b.Subscribe("root/")
+	ch, unsub, _ := b.Subscribe("root/", false)
 	defer unsub()
 
 	b.Notify("root/")
@@ -29,7 +29,7 @@ func TestBrokerNotifyParentWakesChild(t *testing.T) {
 	b := newBroker(0)
 	// A watcher on the child must be notified when the parent changes, because
 	// under inheritable storage the child's merged view changes too.
-	ch, unsub, _ := b.Subscribe("a/b/")
+	ch, unsub, _ := b.Subscribe("a/b/", false)
 	defer unsub()
 
 	b.Notify("a/")
@@ -40,7 +40,7 @@ func TestBrokerNotifyParentWakesChild(t *testing.T) {
 
 func TestBrokerNotifyChildDoesNotWakeParent(t *testing.T) {
 	b := newBroker(0)
-	ch, unsub, _ := b.Subscribe("a/")
+	ch, unsub, _ := b.Subscribe("a/", false)
 	defer unsub()
 
 	b.Notify("a/b/c/")
@@ -51,7 +51,7 @@ func TestBrokerNotifyChildDoesNotWakeParent(t *testing.T) {
 
 func TestBrokerNotifyUnrelatedPath(t *testing.T) {
 	b := newBroker(0)
-	ch, unsub, _ := b.Subscribe("a/b/")
+	ch, unsub, _ := b.Subscribe("a/b/", false)
 	defer unsub()
 
 	b.Notify("x/y/")
@@ -62,7 +62,7 @@ func TestBrokerNotifyUnrelatedPath(t *testing.T) {
 
 func TestBrokerUnsubscribeStopsSignals(t *testing.T) {
 	b := newBroker(0)
-	ch, unsub, _ := b.Subscribe("root/")
+	ch, unsub, _ := b.Subscribe("root/", false)
 	unsub()
 
 	b.Notify("root/")
@@ -73,7 +73,7 @@ func TestBrokerUnsubscribeStopsSignals(t *testing.T) {
 
 func TestBrokerNotifyIsNonBlockingAndCoalesces(t *testing.T) {
 	b := newBroker(0)
-	ch, unsub, _ := b.Subscribe("root/")
+	ch, unsub, _ := b.Subscribe("root/", false)
 	defer unsub()
 
 	// Many notifies with no reader must not block; they coalesce into the
@@ -93,7 +93,7 @@ func TestBrokerNotifyIsNonBlockingAndCoalesces(t *testing.T) {
 func TestBrokerNormalizesTrailingSlash(t *testing.T) {
 	b := newBroker(0)
 	// Subscribe without a trailing slash; Notify without one either.
-	ch, unsub, _ := b.Subscribe("root")
+	ch, unsub, _ := b.Subscribe("root", false)
 	defer unsub()
 
 	b.Notify("root")
@@ -104,19 +104,48 @@ func TestBrokerNormalizesTrailingSlash(t *testing.T) {
 
 func TestBrokerMaxSubscriptions(t *testing.T) {
 	b := newBroker(1)
-	_, unsub, ok := b.Subscribe("a/")
+	_, unsub, ok := b.Subscribe("a/", false)
 	if !ok {
 		t.Fatal("first subscription refused")
 	}
-	if _, _, ok := b.Subscribe("b/"); ok {
+	if _, _, ok := b.Subscribe("b/", false); ok {
 		t.Fatal("subscription beyond the cap was accepted")
 	}
 	unsub()
 	unsub() // idempotent: must not free a second slot
-	if _, _, ok := b.Subscribe("b/"); !ok {
+	if _, _, ok := b.Subscribe("b/", false); !ok {
 		t.Fatal("subscription refused after a slot was freed")
 	}
-	if _, _, ok := b.Subscribe("c/"); ok {
+	if _, _, ok := b.Subscribe("c/", false); ok {
 		t.Fatal("double unsubscribe freed two slots")
+	}
+}
+
+// TestBrokerReservesStreamsForSDKs verifies that public subscriptions cannot
+// take the whole cap: a quarter stays free for the others.
+func TestBrokerReservesStreamsForSDKs(t *testing.T) {
+	b := newBroker(8)
+	var unsubs []func()
+	for i := range 6 {
+		_, unsub, ok := b.Subscribe("web/", true)
+		if !ok {
+			t.Fatalf("public subscription %d refused", i+1)
+		}
+		unsubs = append(unsubs, unsub)
+	}
+	if _, _, ok := b.Subscribe("web/", true); ok {
+		t.Fatal("a public subscription took a reserved slot")
+	}
+	for i := range 2 {
+		if _, _, ok := b.Subscribe("api/", false); !ok {
+			t.Fatalf("subscription %d refused while public ones were capped", i+1)
+		}
+	}
+	if _, _, ok := b.Subscribe("api/", false); ok {
+		t.Fatal("subscription beyond the cap was accepted")
+	}
+	unsubs[0]()
+	if _, _, ok := b.Subscribe("web/", true); !ok {
+		t.Fatal("public subscription refused after one ended")
 	}
 }

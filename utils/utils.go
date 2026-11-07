@@ -64,6 +64,41 @@ func OpenFile(fileName string) (io.ReadCloser, error) {
 	return file, nil
 }
 
+// ExpandEnvRef returns the value of the environment variable that s names as
+// ${NAME} (or $NAME), or s itself when it is not such a reference. Only a
+// reference that is the whole of s expands, so a literal secret containing
+// "$" is used as written. An unset variable expands to "".
+func ExpandEnvRef(s string) string {
+	name, ok := strings.CutPrefix(s, "$")
+	if !ok {
+		return s
+	}
+	if inner, braced := strings.CutPrefix(name, "{"); braced {
+		if name, ok = strings.CutSuffix(inner, "}"); !ok {
+			return s
+		}
+	}
+	if !isEnvName(name) {
+		return s
+	}
+	return os.Getenv(name)
+}
+
+// isEnvName reports whether s is a portable environment variable name.
+func isEnvName(s string) bool {
+	if s == "" || ('0' <= s[0] && s[0] <= '9') {
+		return false
+	}
+	for _, c := range []byte(s) {
+		switch {
+		case c == '_', 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func EnsureTrailingSlash(s string) string {
 	s = strings.TrimSpace(s)
 

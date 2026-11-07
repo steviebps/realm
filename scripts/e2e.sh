@@ -142,8 +142,8 @@ put_as "$token" /prod/app/ || fail "minted key could not write in its scope"
 cli "$token" get /prod/app/ | grep -q '"beta"' || fail "minted key could not read in its scope"
 if put_as "$token" /staging/; then fail "minted key wrote outside its scope"; fi
 if cli "$token" keys list >/dev/null 2>&1; then fail "minted key managed keys"; fi
-curl -s -H "Authorization: Bearer $admin" "$auth_addr/v1/history/prod/app/" | grep -q '"key:e2e"' ||
-  fail "history does not attribute the write to key:e2e"
+curl -s -H "Authorization: Bearer $admin" "$auth_addr/v1/history/prod/app/" | grep -q "\"key:e2e ($id)\"" ||
+  fail "history does not attribute the write to key:e2e ($id)"
 
 cli "$admin" keys revoke "$id" 2>/dev/null || fail "admin key could not revoke $id"
 [ "$(tok=$token status GET "$auth_addr/v1/chambers/prod/app/")" = 401 ] || fail "revoked key still works"

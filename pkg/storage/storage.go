@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -27,6 +27,16 @@ type Storage interface {
 	List(ctx context.Context, prefix string) ([]string, error)
 	// Close releases any resources held by the storage backend
 	Close(ctx context.Context) error
+}
+
+// HealthReporter is implemented by storage that can tell whether it works as
+// it should beyond answering reads: for example, whether the change feed that
+// keeps this server's streams current is keeping up with the database.
+// Capabilities like this belong to the innermost storage (see Raw).
+type HealthReporter interface {
+	// Health returns nil when the storage is healthy, or an error saying
+	// what is wrong.
+	Health() error
 }
 
 // StorageCreator is a factory function to be used for all storage types
@@ -56,10 +66,11 @@ var SourcableStorageOptions = map[string]StorageCreator{
 	"boltdb":   NewBoltStorage,
 }
 
-// ValidatePath ensures the provided path is valid. no parent references allowed.
+// ValidatePath ensures the provided path is valid: no parent references are
+// allowed. Its error wraps ErrInvalidPath.
 func ValidatePath(path string) error {
 	if strings.Contains(path, "..") {
-		return errors.New("path cannot reference parents")
+		return fmt.Errorf("%w: it cannot reference parents (\"..\")", ErrInvalidPath)
 	}
 
 	return nil
@@ -103,9 +114,12 @@ func ReadJSON(ctx context.Context, s Storage, key string, v any) (found bool, er
 
 // getOptional returns the entry at key, or nil when it does not exist.
 func getOptional(ctx context.Context, s Storage, key string) (*StorageEntry, error) {
-	entry, err := s.Get(ctx, key)
-	var nf *NotFoundError
-	if errors.As(err, &nf) {
+	return optional(s.Get(ctx, key))
+}
+
+// optional passes on the result of a read, with a missing entry as nil.
+func optional(entry *StorageEntry, err error) (*StorageEntry, error) {
+	if isNotFoundErr(err) {
 		return nil, nil
 	}
 	return entry, err

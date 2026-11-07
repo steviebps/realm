@@ -94,6 +94,11 @@ func SetupOtelInstrumentation(ctx context.Context, withStdOut bool, version stri
 	shutdownFuncs = append(shutdownFuncs, tp.Shutdown)
 	otel.SetTracerProvider(tp)
 
+	if withStdOut {
+		// Only traces are printed: metrics have no OTLP collector to go to,
+		// and exporting them would fail (and warn) every minute.
+		return shutdown, nil
+	}
 	meterProvider, err := newMeterProvider(ctx, res)
 	if err != nil {
 		return shutdown, fmt.Errorf("creating meter provider: %w", err)

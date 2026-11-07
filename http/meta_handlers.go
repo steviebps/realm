@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"github.com/steviebps/realm/auth"
-	"github.com/steviebps/realm/helper/logging"
 	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel/attribute"
@@ -24,7 +23,6 @@ func handleHistory(meta *metaStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
-		errorLog := logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
 		if r.Method != http.MethodGet {
@@ -34,6 +32,10 @@ func handleHistory(meta *metaStore) http.Handler {
 
 		chamberPath := logicalPath(r, "/v1/history")
 		span.SetAttributes(attribute.String("realm.server.logicalPath", chamberPath))
+		if err := storage.ValidatePath(chamberPath); err != nil {
+			handleError(ctx, w, http.StatusBadRequest, createResponseWithErrors(nil, []string{err.Error()}))
+			return
+		}
 		if !auth.FromContext(ctx).CanRead(chamberPath) {
 			forbidden(w, r, fmt.Sprintf("not allowed to read %s", chamberPath))
 			return
@@ -53,12 +55,15 @@ func handleHistory(meta *metaStore) http.Handler {
 		}
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
-			errorLog.Msg(err.Error())
 			status := http.StatusInternalServerError
 			var nf *storage.NotFoundError
-			if errors.As(err, &nf) {
+			switch {
+			case errors.As(err, &nf):
 				status = http.StatusNotFound
+			case errors.Is(err, storage.ErrInvalidPath):
+				status = http.StatusBadRequest
 			}
+			noteFailure(ctx, status, err)
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 			return
 		}
@@ -84,7 +89,6 @@ func handleCatalog(meta *metaStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
-		errorLog := logging.Ctx(ctx).ErrorCtx(ctx).Str("method", r.Method).Str("path", r.URL.Path)
 		span := trace.SpanFromContext(ctx)
 
 		attr := routeParam(r, "/v1/catalog")
@@ -92,7 +96,7 @@ func handleCatalog(meta *metaStore) http.Handler {
 
 		fail := func(status int, err error) {
 			span.SetStatus(codes.Error, err.Error())
-			errorLog.Msg(err.Error())
+			noteFailure(ctx, status, err)
 			handleError(ctx, w, status, createResponseWithErrors(nil, []string{err.Error()}))
 		}
 		p := auth.FromContext(ctx)
