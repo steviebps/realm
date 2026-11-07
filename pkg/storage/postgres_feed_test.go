@@ -409,10 +409,13 @@ func TestPostgresStartsWithoutCreatePrivilege(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := u.Query().Get("search_path")
-	b := make([]byte, 4)
+	b := make([]byte, 20)
 	_, _ = rand.Read(b)
-	role := "realm_app_" + hex.EncodeToString(b)
-	exec("CREATE ROLE " + role + " LOGIN")
+	role := "realm_app_" + hex.EncodeToString(b[:4])
+	// a password, so the role can sign in to servers that require one for
+	// TCP connections (like CI's), not only to ones that trust local users
+	password := hex.EncodeToString(b[4:])
+	exec("CREATE ROLE " + role + " LOGIN PASSWORD '" + password + "'")
 	t.Cleanup(func() {
 		if conn, err := pgx.Connect(ctx, base); err == nil {
 			_, _ = conn.Exec(ctx, "DROP OWNED BY "+role)
@@ -423,7 +426,7 @@ func TestPostgresStartsWithoutCreatePrivilege(t *testing.T) {
 	exec("GRANT USAGE ON SCHEMA " + schema + " TO " + role)
 	exec("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA " + schema + " TO " + role)
 
-	u.User = url.User(role)
+	u.User = url.UserPassword(role, password)
 	s := newPostgres(t, u.String())
 	if err := s.Put(ctx, StorageEntry{Key: "/a/", Value: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("Put as a role without CREATE: %v", err)
