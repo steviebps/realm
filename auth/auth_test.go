@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -453,6 +454,46 @@ func TestCrossOriginWritesAreRefused(t *testing.T) {
 	}
 }
 
+// TestSafeReturnTo checks that no returnTo can send a browser to another site
+// after sign-in. Browsers drop tabs and line breaks from a URL before parsing
+// it, so "/<tab>/evil.example" in a Location header means "//evil.example".
+func TestSafeReturnTo(t *testing.T) {
+	const fallback = "/ui/"
+	tests := []struct {
+		target string
+		want   string
+	}{
+		{"/ui/chambers/prod/", "/ui/chambers/prod/"},
+		{"/ui/chambers/prod/?tab=history#top", "/ui/chambers/prod/?tab=history#top"},
+		{"/ui/a b/", "/ui/a b/"},
+
+		// only the UI is a place to return to
+		{"/", fallback},
+		{"/a b/", fallback},
+		{"/v1/keys", fallback},
+
+		{"", fallback},
+		{"ui/", fallback},
+		{"https://evil.example/", fallback},
+		{"//evil.example/", fallback},
+		{`/\evil.example/`, fallback},
+		{"/\t/evil.example/", fallback},
+		{"/\t\t/evil.example", fallback},
+		{"/\n/evil.example", fallback},
+		{"/\r/evil.example", fallback},
+		{"/\v/evil.example", fallback},
+		{"/\x00/evil.example", fallback},
+		{"/ui/\x7f", fallback},
+	}
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%q", tt.target), func(t *testing.T) {
+			if got := safeReturnTo(tt.target); got != tt.want {
+				t.Errorf("safeReturnTo(%q) = %q, want %q", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBearerTokens(t *testing.T) {
 	const adminKey = "admin-0123456789abcdef0123456789abcdef"
 	a, _ := realmServer(t, func(c *Config) {
@@ -474,8 +515,14 @@ func TestBearerTokens(t *testing.T) {
 		want    string
 	}{
 		{"Bearer " + token, nil, "key:ci (" + key.ID + ")"},
+		// the authentication scheme is case-insensitive (RFC 7235, section 2.1)
+		{"bearer " + token, nil, "key:ci (" + key.ID + ")"},
+		{"BEARER " + token, nil, "key:ci (" + key.ID + ")"},
 		{"Bearer " + impostorToken, nil, "key:admin (" + impostor.ID + ")"},
 		{"Bearer " + adminKey, nil, "key:admin"},
+		{"bearer " + adminKey, nil, "key:admin"},
+		{"Bearer", ErrInvalidKey, ""},
+		{"Bearer ", ErrInvalidKey, ""},
 		{"Bearer " + adminKey + "x", ErrInvalidKey, ""},
 		{"Bearer realm_bogus_token", ErrInvalidKey, ""},
 		{"Basic " + token, ErrInvalidKey, ""},
