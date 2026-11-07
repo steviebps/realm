@@ -678,7 +678,8 @@ func streamChamber(w http.ResponseWriter, r *http.Request, strg storage.Storage,
 // current as a single event: once at the start, then again whenever the broker
 // signals a change at or above path and the payload differs from the last one
 // sent. It emits periodic heartbeats so dead connections and idle
-// intermediaries are handled. Payloads must be single-line (compact JSON).
+// intermediaries are handled. A payload spanning several lines is sent as
+// several data fields (see writeEvent).
 //
 // current may also return a time at which the payload changes by itself (a
 // schedule boundary of an evaluated flag); the payload is produced again then.
@@ -746,7 +747,7 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		if last != nil && bytes.Equal(data, last) {
 			return true
 		}
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		if err := writeEvent(w, event, data); err != nil {
 			return false
 		}
 		flusher.Flush()
@@ -782,6 +783,22 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 			flusher.Flush()
 		}
 	}
+}
+
+// writeEvent writes data as one server-sent event. Each line of data becomes a
+// data field, which clients join back with newlines: a payload spanning lines
+// (a chamber stored pretty-printed, say) would otherwise end the event's
+// fields at its first line, and clients would drop the rest.
+func writeEvent(w io.Writer, event string, data []byte) error {
+	var b bytes.Buffer
+	fmt.Fprintf(&b, "event: %s\n", event)
+	text := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(string(data))
+	for line := range strings.SplitSeq(strings.TrimRight(text, "\n"), "\n") {
+		fmt.Fprintf(&b, "data: %s\n", line)
+	}
+	b.WriteByte('\n')
+	_, err := w.Write(b.Bytes())
+	return err
 }
 
 // maxStreamLifetime is how long a watch stream stays open before the server
