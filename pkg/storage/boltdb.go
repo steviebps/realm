@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"path"
@@ -19,13 +20,32 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// BoltStorage stores entries in a bbolt database file, which only one process
+// can open at a time. It is Transactional: every write commits in one bbolt
+// transaction at the next value of a revision counter, so an Update's ops
+// (a chamber and its history, say) are applied together or not at all.
+//
+// Values live in the chambers bucket, keyed by the cleaned path, exactly as
+// in databases written before versions existed; each entry's revision lives
+// under the same key in the versions bucket, and the counter in the meta
+// bucket. Opening a database gives entries without a revision one (see
+// upgradeVersions).
 type BoltStorage struct {
 	db     *bolt.DB
 	tracer trace.Tracer
 }
 
 var (
-	_ Storage = (*BoltStorage)(nil)
+	_ Storage       = (*BoltStorage)(nil)
+	_ Transactional = (*BoltStorage)(nil)
+)
+
+var (
+	chambersBucket = []byte("chambers")
+	versionsBucket = []byte("versions")
+	metaBucket     = []byte("meta")
+	// revisionKey holds the last revision issued, in metaBucket.
+	revisionKey = []byte("revision")
 )
 
 // boltLockTimeout bounds how long opening the database waits for another
@@ -50,13 +70,15 @@ func NewBoltStorage(conf map[string]string) (Storage, error) {
 	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("chambers"))
-		if err != nil {
-			return fmt.Errorf("create bucket: %w", err)
+		for _, name := range [][]byte{chambersBucket, versionsBucket, metaBucket} {
+			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
+				return fmt.Errorf("create bucket %s: %w", name, err)
+			}
 		}
-		return nil
+		return upgradeVersions(boltBucketsOf(tx))
 	})
 	if err != nil {
+		_ = db.Close()
 		return nil, err
 	}
 
@@ -81,12 +103,14 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	path := path.Clean(logicalPath)
 
 	var file []byte
+	var version uint64
 	err := b.db.View(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket([]byte("chambers"))
+		bk := boltBucketsOf(tx)
 		// the slice returned by Get points into the memory-mapped database and
 		// is only valid for the life of the transaction, so copy it out
-		if v := bucket.Get([]byte(path)); v != nil {
+		if v := bk.chambers.Get([]byte(path)); v != nil {
 			file = bytes.Clone(v)
+			version = bk.version([]byte(path))
 		}
 		return nil
 	})
@@ -107,7 +131,7 @@ func (b *BoltStorage) Get(ctx context.Context, logicalPath string) (*StorageEntr
 	default:
 	}
 
-	return &StorageEntry{Key: logicalPath, Value: file}, nil
+	return &StorageEntry{Key: logicalPath, Value: file, Version: version}, nil
 }
 
 func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
@@ -131,10 +155,13 @@ func (b *BoltStorage) Put(ctx context.Context, e StorageEntry) error {
 	default:
 	}
 
+	value := e.Value
+	if value == nil {
+		// a nil Value deletes in a transaction; Put always stores
+		value = []byte{}
+	}
 	err := b.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("chambers"))
-		err := b.Put([]byte(path), []byte(e.Value))
-		return err
+		return boltBucketsOf(tx).apply([]Op{{Key: path, Value: value}})
 	})
 	if err != nil {
 		recordError(span, err)
@@ -166,11 +193,11 @@ func (b *BoltStorage) Delete(ctx context.Context, logicalPath string) error {
 	}
 
 	err := b.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("chambers"))
-		if b.Get([]byte(path)) == nil {
+		bk := boltBucketsOf(tx)
+		if bk.chambers.Get([]byte(path)) == nil {
 			return &NotFoundError{logicalPath}
 		}
-		return b.Delete([]byte(path))
+		return bk.apply([]Op{{Key: path}})
 	})
 
 	if err != nil {
@@ -201,7 +228,7 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	names := make([]string, 0)
 	if err := b.db.View(func(tx *bolt.Tx) error {
 		// Assume bucket exists and has keys
-		c := tx.Bucket([]byte("chambers")).Cursor()
+		c := tx.Bucket(chambersBucket).Cursor()
 
 		cleanPrefix := []byte(path)
 		set := make(map[string]struct{})
@@ -237,6 +264,140 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	return names, nil
 }
 
+// Txn applies ops in one bbolt transaction if every check holds, giving
+// every key it writes the next revision. A check fails, and nothing is
+// applied, unless its key is at the checked version (0: absent).
+func (b *BoltStorage) Txn(ctx context.Context, checks []Check, ops []Op) error {
+	ctx, span := b.tracer.Start(ctx, "BoltStorage Txn", trace.WithAttributes(attribute.Int("realm.bolt.checks", len(checks)), attribute.Int("realm.bolt.ops", len(ops))))
+	defer span.End()
+
+	for _, k := range append(checkKeys(checks), opKeys(ops)...) {
+		if err := ValidatePath(k); err != nil {
+			recordError(span, err)
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		recordError(span, err)
+		return err
+	}
+
+	err := b.db.Update(func(tx *bolt.Tx) error {
+		bk := boltBucketsOf(tx)
+		for _, c := range checks {
+			if bk.version([]byte(path.Clean(c.Key))) != c.Version {
+				return ErrConflict
+			}
+		}
+		cleaned := make([]Op, len(ops))
+		for i, op := range ops {
+			cleaned[i] = Op{Key: path.Clean(op.Key), Value: op.Value}
+		}
+		return bk.apply(cleaned)
+	})
+	if err != nil && !errors.Is(err, ErrConflict) {
+		recordError(span, err)
+	}
+	return err
+}
+
 func (b *BoltStorage) Close(ctx context.Context) error {
 	return b.db.Close()
+}
+
+// boltBuckets are the buckets of one bbolt transaction.
+type boltBuckets struct {
+	chambers, versions, meta *bolt.Bucket
+}
+
+func boltBucketsOf(tx *bolt.Tx) boltBuckets {
+	return boltBuckets{
+		chambers: tx.Bucket(chambersBucket),
+		versions: tx.Bucket(versionsBucket),
+		meta:     tx.Bucket(metaBucket),
+	}
+}
+
+// version returns the revision of the entry at the cleaned key, or 0 when
+// there is no entry.
+func (bk boltBuckets) version(key []byte) uint64 {
+	if bk.chambers.Get(key) == nil {
+		return 0
+	}
+	v := bk.versions.Get(key)
+	if len(v) != 8 {
+		return 0
+	}
+	return binary.BigEndian.Uint64(v)
+}
+
+// nextRevision advances the revision counter and returns its new value.
+func (bk boltBuckets) nextRevision() ([]byte, error) {
+	var rev uint64
+	if v := bk.meta.Get(revisionKey); len(v) == 8 {
+		rev = binary.BigEndian.Uint64(v)
+	}
+	next := binary.BigEndian.AppendUint64(nil, rev+1)
+	return next, bk.meta.Put(revisionKey, next)
+}
+
+// apply writes ops, whose keys are cleaned, at the next revision; a later op
+// on a key replaces an earlier one. It takes no revision when there are no ops.
+func (bk boltBuckets) apply(ops []Op) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	rev, err := bk.nextRevision()
+	if err != nil {
+		return err
+	}
+	for _, op := range ops {
+		key := []byte(op.Key)
+		if op.Value == nil {
+			if err := errors.Join(bk.chambers.Delete(key), bk.versions.Delete(key)); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := errors.Join(bk.chambers.Put(key, op.Value), bk.versions.Put(key, rev)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// upgradeVersions gives every entry without a revision, such as those written
+// before versions existed, one new revision, and drops the revisions of
+// entries that no longer exist. It writes nothing when every entry has one.
+func upgradeVersions(bk boltBuckets) error {
+	var rev []byte
+	c := bk.chambers.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if len(bk.versions.Get(k)) == 8 {
+			continue
+		}
+		if rev == nil {
+			var err error
+			if rev, err = bk.nextRevision(); err != nil {
+				return err
+			}
+		}
+		if err := bk.versions.Put(bytes.Clone(k), rev); err != nil {
+			return err
+		}
+	}
+
+	var orphans [][]byte
+	c = bk.versions.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if bk.chambers.Get(k) == nil {
+			orphans = append(orphans, bytes.Clone(k))
+		}
+	}
+	for _, k := range orphans {
+		if err := bk.versions.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
 }

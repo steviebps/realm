@@ -231,7 +231,7 @@ Server settings:
 | `storage` | Options | Notes |
 |---|---|---|
 | `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so other processes can share the directory. Chamber names may not contain `\` or `:` or end in `.` or a space, which some file systems would read as other names. A chamber's history is kept under one file name that holds its whole path, so chamber paths are limited to about 200 bytes. |
-| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
+| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. Each change, such as a chamber and its history entry, is saved in one transaction, so a crash never leaves half of it. |
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory, for development and tests: data is lost when the server stops, and memory grows with every write. Entries are kept until then, unless you set `life_window` (a duration such as `"24h"`), which deletes each entry that long after it was written. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
 | `s3` | `bucket`, `region`, `prefix`, `endpoint`, `force_path_style` | Amazon S3 or an S3-compatible service. Uses the standard AWS credential chain. |

@@ -162,7 +162,7 @@ those backends.
 | Backend | File | Notes |
 |---|---|---|
 | `file` | `file.go` | JSON files on disk |
-| `boltdb` | `boltdb.go` | embedded bbolt key/value store |
+| `boltdb` | `boltdb.go` | embedded bbolt key/value store; `Transactional` (one process) |
 | `bigcache` | `bigcache.go` | in-memory (dev / cache tier) |
 | `gcs` | `gcs.go` | Google Cloud Storage |
 | `s3` | `s3.go` | Amazon S3 or S3-compatible (`bucket`, `region`, `prefix`, `endpoint`, `force_path_style`) |
@@ -202,6 +202,19 @@ sharing the directory cannot lose each other's writes. `file`
 also writes each entry to a temporary file and renames it into place, so
 readers never see a partial entry. `boltdb` gives up after 1 second when
 another process holds the database's lock.
+
+`boltdb` is `Transactional` although only one process can open it: each
+write commits in one bbolt transaction, so an `Update`'s ops (a chamber and
+its history entry) land together or not at all, and every entry has a
+`Version`. Values stay in the `chambers` bucket as before; revisions live
+under the same keys in `versions`, and the counter in `meta`. Opening a
+database gives every entry that has no revision (one written before
+versions existed) a new one. `cacheable` over a `Transactional` source
+(`boltdb`) is `Transactional` too: its `Txn` applies to the source and then
+drops the written keys from the cache. Its reads carry no `Version`, since
+the cache may answer (and a `boltdb` cache would report its own revisions);
+`ReadForUpdate` reads the source, with versions, which is what `Update`
+checks.
 
 The `postgres` backend keeps every entry in one table (`realm_entries`: key,
 value as bytes, revision), so its keys are the same as every other backend's.

@@ -39,7 +39,9 @@ func sharedBackends() map[string]func(t *testing.T) func() Storage {
 // transactionalBackends maps every locally testable Transactional backend to
 // a function opening a fresh, empty instance of it.
 func transactionalBackends() map[string]func(t *testing.T) Transactional {
-	out := map[string]func(t *testing.T) Transactional{}
+	out := map[string]func(t *testing.T) Transactional{
+		"boltdb": func(t *testing.T) Transactional { return newBolt(t, t.TempDir()) },
+	}
 	for name, prepare := range sharedBackends() {
 		out[name] = func(t *testing.T) Transactional {
 			s, ok := prepare(t)().(Transactional)
@@ -93,7 +95,7 @@ var txnContract = []struct {
 		}
 		mustPut(t, s, "/c/", `2`)
 		vc2 := versionOf(t, s, "/c/")
-		if !(va < vc && vc < va2 && va2 < vc2) {
+		if va >= vc || vc >= va2 || va2 >= vc2 {
 			t.Errorf("revisions %d, %d, %d, %d of successive writes do not increase", va, vc, va2, vc2)
 		}
 		if got := versionOf(t, s, "/b/"); got != vb {
