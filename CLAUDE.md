@@ -181,7 +181,12 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   `http/handler.go` persists chambers by unmarshaling into `realm.Chamber` and
   re-marshaling, so tagged fields round-trip automatically.
 - **Add a storage backend:** implement `storage.Storage`, register it in
-  `StorageOptions` (and `SourcableStorageOptions` if it can be a cache source).
+  `StorageOptions` (and `SourcableStorageOptions` if it can be a cache source),
+  and add it to `backends` in `pkg/storage/backends_test.go`. A
+  `Transactional` backend joins `transactionalBackends` in
+  `pkg/storage/conformance_test.go`; one that several servers can share
+  (`Transactional` and `Watchable`) joins `sharedBackends` there instead, so
+  the shared contract tests hold it to what `Update` and the change feed need.
 - **Add a CLI subcommand:** add a `*cobra.Command` in `cmd/`, register it in an
   `init()` with `rootCmd.AddCommand(...)`.
 
