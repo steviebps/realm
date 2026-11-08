@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/steviebps/realm/pkg/storage/etcdtest"
 	"github.com/steviebps/realm/pkg/storage/pgtest"
 )
 
@@ -21,6 +22,9 @@ func backends(t *testing.T) map[string]Storage {
 	}
 	if os.Getenv(pgtest.EnvURL) != "" {
 		confs["postgres"] = map[string]string{"url": pgtest.URL(t)}
+	}
+	if os.Getenv(etcdtest.EnvEndpoints) != "" {
+		confs["etcd"] = etcdtest.Options(t)
 	}
 	for name, conf := range confs {
 		s, err := StorageOptions[name](conf)
@@ -50,7 +54,7 @@ func TestListImmediateChildren(t *testing.T) {
 	ctx := context.Background()
 	// these backends share the "." / "child/" listing format
 	all := backends(t)
-	for _, name := range []string{"file", "bigcache", "postgres"} {
+	for _, name := range []string{"file", "bigcache", "postgres", "etcd"} {
 		s, ok := all[name]
 		if !ok {
 			continue

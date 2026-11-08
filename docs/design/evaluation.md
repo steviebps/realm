@@ -156,5 +156,5 @@ wrote them. The conformance file has a case for each.
 
 - A per-key allowlist of flags for evaluate keys (they see every flag's value
   beneath their path).
-- Cross-replica fanout with backends other than `postgres`: there, like
+- Cross-replica fanout with backends other than `postgres` and `etcd`: there, like
   chamber streams, evaluation streams only see writes made on the same replica.

@@ -148,7 +148,7 @@ rejects a payload that is not a chamber (null, or no `rules`), keeping the
 last snapshot.
 
 Where the broker hears about writes depends on the backend. A `Watchable`
-backend (`postgres`) reports every committed change, including other replicas'
+backend (`postgres`, `etcd`) reports every committed change, including other replicas'
 writes, and that feed alone drives the broker, so every replica pushes every
 change. With other backends the handler notifies the broker after its own
 writes, which only reaches watchers on the same replica; run one replica with
@@ -162,11 +162,12 @@ those backends.
 | Backend | File | Notes |
 |---|---|---|
 | `file` | `file.go` | JSON files on disk |
-| `boltdb` | `boltdb.go` | embedded bbolt key/value store |
+| `boltdb` | `boltdb.go` | embedded bbolt key/value store; `Transactional` (one process) |
 | `bigcache` | `bigcache.go` | in-memory (dev / cache tier) |
 | `gcs` | `gcs.go` | Google Cloud Storage |
 | `s3` | `s3.go` | Amazon S3 or S3-compatible (`bucket`, `region`, `prefix`, `endpoint`, `force_path_style`) |
 | `postgres` | `postgres.go` | PostgreSQL (`url`, `max_conns`); `Transactional` and `Watchable`, safe for many replicas |
+| `etcd` | `etcd.go` | etcd v3 (`endpoints`, `prefix`, auth and TLS options); `Transactional` and `Watchable`, safe for many replicas |
 
 ### Capabilities and multi-replica safety
 
@@ -187,21 +188,36 @@ Backends can implement optional interfaces (`pkg/storage/txn.go`,
   applying any; the error wraps `ErrInvalidPath`, which the server answers
   with 400.
 - **`HealthReporter`** — `Health()` reports trouble beyond failing reads
-  (`postgres`: a change feed that has not caught up for 30 seconds), which
+  (`postgres`, `etcd`: a change feed that has not caught up for 30 seconds), which
   fails `/readyz`.
 
 All read-modify-write sequences go through `storage.Update` (or
 `UpdateJSON`): a chamber write with its If-Match check and history entry, the
-catalog, and API keys. On a `Transactional` backend, `Update` version-checks
-the keys it read and retries with jittered backoff on conflict, so replicas
-need no shared lock. On other backends it holds a process-wide lock instead,
-which is why those backends are single-replica. A backend can also implement
+catalog, and API keys. `Update` holds a process-wide lock on the keys, so
+writers in one process take turns rather than conflict. On a `Transactional`
+backend it also version-checks the keys it read and retries with jittered
+backoff on conflict with another process, so replicas need no shared lock.
+On other backends the process-wide lock is all there is, which is why those
+backends are single-replica. A backend can also implement
 **`Locker`** to extend that lock to other processes: `file` takes an exclusive
 lock file (`.realm-lock`, `flock` or `LockFileEx`) for the update, so processes
 sharing the directory cannot lose each other's writes. `file`
 also writes each entry to a temporary file and renames it into place, so
 readers never see a partial entry. `boltdb` gives up after 1 second when
 another process holds the database's lock.
+
+`boltdb` is `Transactional` although only one process can open it: each
+write commits in one bbolt transaction, so an `Update`'s ops (a chamber and
+its history entry) land together or not at all, and every entry has a
+`Version`. Values stay in the `chambers` bucket as before; revisions live
+under the same keys in `versions`, and the counter in `meta`. Opening a
+database gives every entry that has no revision (one written before
+versions existed) a new one. `cacheable` over a `Transactional` source
+(`boltdb`) is `Transactional` too: its `Txn` applies to the source and then
+drops the written keys from the cache. Its reads carry no `Version`, since
+the cache may answer (and a `boltdb` cache would report its own revisions);
+`ReadForUpdate` reads the source, with versions, which is what `Update`
+checks.
 
 The `postgres` backend keeps every entry in one table (`realm_entries`: key,
 value as bytes, revision), so its keys are the same as every other backend's.
@@ -218,6 +234,24 @@ statement, lock, and idle-in-transaction timeouts, and transactions run at
 READ COMMITTED; serialization failures and deadlocks are retried as
 conflicts.
 
+The `etcd` backend stores each entry at `<prefix><key>` (keys begin and end
+with `/`) and uses etcd's own revisions: an entry's `Version` is its
+`mod_revision`, so revisions increase but skip numbers taken by other keys in
+the cluster. `Txn` compares each checked key's `mod_revision` (a missing key
+compares as 0) and applies the ops, at most one per key (a later op wins), in
+key order; a change over etcd's `--max-txn-ops` or `--max-request-bytes`
+comes back as an error naming the limit and wrapping `storage.ErrTooLarge`,
+which the server answers with 413. `List` reads keys only, a page at a time, skipping the
+rest of a child's keys once it has seen the child. A watcher holds an etcd
+watch on the prefix from the revision after the last it reported, with
+`WithRequireLeader` (a member that loses its leader ends the watch rather
+than going silent), and restarts it with backoff when it ends; it reports a
+change to `/` when the revisions it needed were compacted or the cluster went
+back to an earlier revision. Every 5 seconds it reads the cluster's revision:
+the feed is current when nothing was committed past what etcd confirmed
+delivering (an event, or a progress notification, which it requests when the
+revision has moved). Health fails after 30 seconds without being current.
+
 Two wrappers compose backends:
 
 - **`cacheable`** (`cacheable.go`) — a `cache` over a `source` (e.g.
@@ -225,8 +259,8 @@ Two wrappers compose backends:
   then drop the entry from the cache, even when the write failed (it may have
   landed). A generation counter keeps a fill that read the source before a
   write from landing after it, and `Update` reads the source (`UpdateReader`).
-  It refuses a `postgres` source: another replica's write would leave this
-  replica's cache stale.
+  It refuses a `postgres` or `etcd` source: another replica's write would
+  leave this replica's cache stale.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
   `Get`, merges a chamber with every ancestor along the path, up to and
   including the root chamber `/`, so child chambers inherit parent rules and
@@ -238,7 +272,7 @@ Two wrappers compose backends:
   cannot disagree. It implements `Unwrap()` so the server can reach the raw
   storage for ETags, history, and the catalog.
 
-Recommended production setups: `postgres` for several replicas, or
+Recommended production setups: `postgres` (or `etcd`) for several replicas, or
 `cacheable` (`bigcache` over `s3`) as a single replica. SDKs evaluate in
 memory, so storage latency only affects writes and cold start.
 
@@ -296,6 +330,7 @@ log line of their own.
 | Optimistic concurrency, change history, attribute catalog | ✅ Done | `http/meta.go`, `http/meta_handlers.go` |
 | S3 storage | ✅ Done | `pkg/storage/s3.go` |
 | Postgres storage + multi-replica safety | ✅ Done | `pkg/storage/postgres.go`, `storage.Update` in `pkg/storage/txn.go` |
+| etcd storage (multi-replica) | ✅ Done | `pkg/storage/etcd.go`; shared contract tests in `pkg/storage/conformance_test.go` |
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
 | Cross-replica stream fanout (multi-instance) | ✅ Done | `Watchable` storage feeds the broker (`http/handler.go`) |
 | Revisioned streams (resume with `Last-Event-ID`, SDKs reject stale data) | ⬜ Next | builds on `StorageEntry.Version` |

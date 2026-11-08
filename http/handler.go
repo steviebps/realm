@@ -379,6 +379,9 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 			case errors.Is(err, storage.ErrInvalidPath):
 				// refused before anything was written
 				fail(http.StatusBadRequest, err)
+			case errors.Is(err, storage.ErrTooLarge):
+				// refused before anything was written
+				fail(http.StatusRequestEntityTooLarge, err)
 			case err != nil:
 				// Backends without transactions apply a write's changes one
 				// at a time, so part of it may have landed: let streams look.
@@ -486,6 +489,8 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 				fail(http.StatusConflict, errors.New("the chambers are being changed by others; try again"))
 			case errors.Is(err, storage.ErrInvalidPath):
 				fail(http.StatusBadRequest, err)
+			case errors.Is(err, storage.ErrTooLarge):
+				fail(http.StatusRequestEntityTooLarge, fmt.Errorf("%w; delete fewer chambers at once", err))
 			case err != nil:
 				// part of the deletion may have landed (see commit)
 				notify(req.Path)

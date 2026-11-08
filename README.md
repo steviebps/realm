@@ -22,8 +22,8 @@ services and in browsers, with hooks for React.
 - **Scheduled rules:** limit a rule to a window of time, such as three hours on a Wednesday.
 - **Real-time updates:** the SDK polls, or receives changes over server-sent events.
 - **Safe editing:** ETag optimistic concurrency and per-chamber change history.
-- **Storage:** file, BoltDB, in-memory, Google Cloud Storage, Amazon S3, and
-  PostgreSQL (which supports running several replicas).
+- **Storage:** file, BoltDB, in-memory, Google Cloud Storage, Amazon S3,
+  PostgreSQL, and etcd (the last two support running several replicas).
 - **Optional auth:** OIDC or GitHub sign-in with roles, and path-scoped API keys.
 - **Browsers and other languages:** the server evaluates flags for a context and
   returns only the values, never the rules.
@@ -231,20 +231,22 @@ Server settings:
 | `storage` | Options | Notes |
 |---|---|---|
 | `file` | `path` | JSON files on disk, in the directory `path`. Writes replace files atomically, and a lock file serializes changes, so other processes can share the directory. Chamber names may not contain `\` or `:` or end in `.` or a space, which some file systems would read as other names. A chamber's history is kept under one file name that holds its whole path, so chamber paths are limited to about 200 bytes. |
-| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. |
+| `boltdb` | `path` | An embedded key/value database, `realm.db` in the directory `path`. The directory must exist. Only one process can open the database: another fails after 1 second. Each change, such as a chamber and its history entry, is saved in one transaction, so a crash never leaves half of it. |
 | `bigcache` | `shards`, `life_window`, `clean_window` | In memory, for development and tests: data is lost when the server stops, and memory grows with every write. Entries are kept until then, unless you set `life_window` (a duration such as `"24h"`), which deletes each entry that long after it was written. |
 | `gcs` | `bucket` | Google Cloud Storage. Uses the standard Google credential chain. |
 | `s3` | `bucket`, `region`, `prefix`, `endpoint`, `force_path_style` | Amazon S3 or an S3-compatible service. Uses the standard AWS credential chain. |
 | `postgres` | `url`, `max_conns` | PostgreSQL. Supports several server replicas. Refer to [Run several replicas](#run-several-replicas). |
-| `cacheable` | `cache`, `source`, plus the options of both | A `cache` in front of a `source`. Reads fill the cache; writes go to the source and drop the entry from the cache. A `bigcache` cache keeps entries for `life_window` (default 5 minutes). The source cannot be `postgres`. |
+| `etcd` | `endpoints`, `prefix`, `username`, `password`, `ca_file`, `cert_file`, `key_file` | An etcd v3 cluster. Supports several server replicas. Refer to [Run several replicas on etcd](#run-several-replicas-on-etcd). |
+| `cacheable` | `cache`, `source`, plus the options of both | A `cache` in front of a `source`. Reads fill the cache; writes go to the source and drop the entry from the cache. A `bigcache` cache keeps entries for `life_window` (default 5 minutes). The source cannot be `postgres` or `etcd`. |
 
-For production, we recommend `postgres`. For a single replica, `cacheable`
-with `bigcache` in front of `s3` also works.
+For production, we recommend `postgres`, or `etcd` if you already run a
+cluster (on Kubernetes, say). For a single replica, `cacheable` with
+`bigcache` in front of `s3` also works.
 
 > [!IMPORTANT]
-> With any backend other than `postgres`, run only one server replica. Other
-> backends check concurrent changes and send real-time updates only within one
-> server.
+> With any backend other than `postgres` and `etcd`, run only one server
+> replica. Other backends check concurrent changes and send real-time updates
+> only within one server.
 
 ### Run several replicas
 
@@ -281,6 +283,45 @@ Use the `postgres` backend. The server creates its tables on startup.
   is. After a restore or failover that rewinds the database, every stream
   re-reads its chamber.
 
+### Run several replicas on etcd
+
+Use the `etcd` backend with an etcd v3 cluster (tested with etcd 3.7).
+
+```json
+{
+  "server": {
+    "storage": "etcd",
+    "options": {
+      "endpoints": "https://etcd-0.internal:2379,https://etcd-1.internal:2379,https://etcd-2.internal:2379",
+      "ca_file": "/etc/realm/etcd-ca.pem",
+      "username": "realm",
+      "password": "${REALM_ETCD_PASSWORD}"
+    },
+    "port": "8080",
+    "inheritable": true
+  }
+}
+```
+
+- Entries live under `prefix` (default `/realm`), so other applications, or
+  other realm installations with their own prefix, can share the cluster.
+  With etcd authentication, give realm's user read and write on that prefix.
+- `password` may name an environment variable as `${NAME}`. With `https://`
+  endpoints or `ca_file`, realm uses TLS; `cert_file` and `key_file` add a
+  client certificate for `--client-cert-auth`.
+- Every replica sees every change within milliseconds: etcd checks each
+  write's versions (so `If-Match` works across replicas), and each replica
+  watches realm's prefix and pushes changes to its streams.
+- etcd caps each transaction at `--max-txn-ops` operations (128 by default)
+  and each request at `--max-request-bytes` (1.5 MiB). Deleting a chamber
+  together with the chambers below it takes two or three operations per
+  chamber, so a large tree may need deleting in parts, or a higher limit. A
+  change over either limit is refused with 413, and nothing is written.
+- If the cluster compacts away revisions a replica's watch still needed, or
+  is restored from an older backup, every stream re-reads its chamber.
+  `/readyz` fails when the change feed has not been current for 30 seconds,
+  and the `realm.etcd.feed.age` metric reports how long it has not been.
+
 ### With Docker
 
 The image reads its config from `/etc/realm/realm.json`, a default location.
@@ -311,7 +352,7 @@ docker run -p 8080:8080 \
   no more configuration.
 - Use `GET /healthz` for liveness probes and `GET /readyz` for readiness
   probes. `/readyz` reports 503 when storage does not answer within 2 seconds,
-  when the `postgres` change feed has stalled, and while the server drains for
+  when the `postgres` or `etcd` change feed has stalled, and while the server drains for
   shutdown. It checks storage at most once a second, however often it is
   probed.
 
@@ -338,7 +379,8 @@ docker run -p 8080:8080 \
   `OTEL_SERVICE_NAME` (default `realm`), `OTEL_RESOURCE_ATTRIBUTES`,
   `OTEL_TRACES_SAMPLER`; `OTEL_SDK_DISABLED=true` overrides `--traces`. Every
   request except probes and streams gets a span, and the server records
-  `realm.server.streams.active` and `realm.postgres.feed.reconnects`.
+  `realm.server.streams.active`, `realm.postgres.feed.reconnects`, and
+  `realm.etcd.feed.restarts`.
 - **Streams.** Each server holds at most 10,000 streams (`maxStreams`);
   beyond that, new streams get 503 and clients retry with backoff. Evaluation
   streams, which anyone holding a published evaluate key can open, may take

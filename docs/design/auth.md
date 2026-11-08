@@ -279,7 +279,7 @@ identity (an email, `key:<name> (<key id>)`, or `key:admin`) and ignores the sel
   immediately, because memberships are cached in the session.
 - **Replicas.** Sessions work on any replica that shares `sessionSecret`. Key
   verification caches keys for up to 30 seconds per process. With the
-  `postgres` backend, writes (concurrency checks, history, catalog, key
+  `postgres` or `etcd` backend, writes (concurrency checks, history, catalog, key
   creation) are checked in the database, so any number of replicas is safe;
   with other backends they are serialized per process (and, with `file`, across
   processes on one machine through a lock file), so run one replica.

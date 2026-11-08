@@ -23,6 +23,13 @@ import (
 // to an older value. When the cache cannot drop a key, reads of it bypass the
 // cache until a later attempt succeeds. Update reads the source directly (see
 // UpdateReader), so a read-modify-write never starts from a cached copy.
+//
+// Over a Transactional source (boltdb), NewCacheableStorage returns storage
+// that is Transactional too: Txn applies to the source and then drops each
+// written key from the cache, as Put and Delete do. Either way, the entries
+// cacheable reads carry no Version, since the cache may answer, and one served
+// from a versioned cache (boltdb) would carry the cache's revision rather than
+// the source's. ReadForUpdate's carry the source's, which is all Update needs.
 type CacheableStorage struct {
 	cache  Storage
 	source Storage
@@ -46,16 +53,48 @@ var (
 )
 
 // NewCacheableStorage returns storage that caches source's entries in cache.
+// It is Transactional when source is.
 func NewCacheableStorage(cache Storage, source Storage) (Storage, error) {
 	if cache == nil || source == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
 	}
 
-	return &CacheableStorage{
+	c := &CacheableStorage{
 		cache:  cache,
 		source: source,
 		tracer: otel.Tracer("github.com/steviebps/realm"),
-	}, nil
+	}
+	if t, ok := source.(Transactional); ok {
+		return &transactionalCacheable{CacheableStorage: c, source: t}, nil
+	}
+	return c, nil
+}
+
+// transactionalCacheable is a CacheableStorage over a Transactional source.
+type transactionalCacheable struct {
+	*CacheableStorage
+	source Transactional
+}
+
+var _ Transactional = (*transactionalCacheable)(nil)
+
+// Txn applies to the source, then drops every key it may have written from
+// the cache, unless it failed a check and so wrote nothing.
+func (c *transactionalCacheable) Txn(ctx context.Context, checks []Check, ops []Op) error {
+	ctx, span := c.tracer.Start(ctx, "CacheableStorage Txn", trace.WithAttributes(attribute.Int("realm.cacheable.checks", len(checks)), attribute.Int("realm.cacheable.ops", len(ops))))
+	defer span.End()
+
+	err := c.source.Txn(ctx, checks, ops)
+	if errors.Is(err, ErrConflict) {
+		return err
+	}
+	if err != nil {
+		recordError(span, err)
+	}
+	for _, op := range ops {
+		c.invalidate(ctx, span, op.Key)
+	}
+	return err
 }
 
 func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
@@ -94,8 +133,8 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 }
 
 // sourcable returns the creator of a storage type that can be cached or act as
-// a cache. Backends shared by several servers (postgres) are not: another
-// server's write would leave this server's cache stale.
+// a cache. Backends shared by several servers (postgres, etcd) are not:
+// another server's write would leave this server's cache stale.
 func sourcable(name string) (StorageCreator, error) {
 	if create, ok := SourcableStorageOptions[name]; ok {
 		return create, nil
@@ -138,7 +177,7 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 		}
 		if entry != nil {
 			span.AddEvent("realm.cacheable.cacheHit")
-			return entry, nil
+			return unversioned(entry), nil
 		}
 	} else {
 		span.AddEvent("realm.cacheable.cacheBypassed")
@@ -156,7 +195,15 @@ func (c *CacheableStorage) Get(ctx context.Context, logicalPath string) (*Storag
 	if cached {
 		c.fill(ctx, span, gen, logicalPath, entry)
 	}
-	return entry, nil
+	return unversioned(entry), nil
+}
+
+// unversioned returns a copy of entry without its Version (see
+// CacheableStorage).
+func unversioned(entry *StorageEntry) *StorageEntry {
+	e := *entry
+	e.Version = 0
+	return &e
 }
 
 // beginRead returns the write generation a read of key starts at, and whether

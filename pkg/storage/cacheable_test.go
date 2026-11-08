@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // stallingSource wraps a Storage. After stallNextGet, the next Get reads its
@@ -410,4 +413,91 @@ func TestCacheableDelete(t *testing.T) {
 			t.Errorf("Update = %v, want the source's error", err)
 		}
 	})
+}
+
+// TestCacheableReadsCarryNoVersion checks that reads through cacheable, which
+// is not Transactional, carry no version, whether the cache or the source
+// answers and whichever is versioned, while ReadForUpdate carries the
+// source's.
+func TestCacheableReadsCarryNoVersion(t *testing.T) {
+	ctx := context.Background()
+	for name, open := range map[string]func(t *testing.T) (c Storage, source Storage){
+		"bigcache over boltdb": func(t *testing.T) (Storage, Storage) {
+			source := newBolt(t, t.TempDir())
+			c, _ := newCacheableOver(t, source)
+			return c, source
+		},
+		"boltdb over file": func(t *testing.T) (Storage, Storage) {
+			source := newFileSource(t)
+			c, err := NewCacheableStorage(newBolt(t, t.TempDir()), source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return c, source
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, source := open(t)
+			mustPut(t, c, "/a/", `{}`)
+			for _, read := range []string{"from the source", "from the cache"} {
+				if v := versionOf(t, c, "/a/"); v != 0 {
+					t.Errorf("Get %s: Version = %d, want 0", read, v)
+				}
+			}
+			e, err := c.(UpdateReader).ReadForUpdate(ctx, "/a/")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := versionOf(t, source, "/a/"); e.Version != want {
+				t.Errorf("ReadForUpdate: Version = %d, want the source's %d", e.Version, want)
+			}
+		})
+	}
+}
+
+// TestCacheableOverTransactionalSource checks that cacheable over a
+// Transactional source applies an Update all or nothing and drops what it
+// wrote from the cache, and only then, over another source, falls back to
+// applying ops one at a time.
+func TestCacheableOverTransactionalSource(t *testing.T) {
+	ctx := context.Background()
+	if c, _ := newCacheableOver(t, newFileSource(t)); isTransactional(c) {
+		t.Error("cacheable over file is Transactional")
+	}
+	c, _ := newCacheableOver(t, newBolt(t, t.TempDir()))
+	if !isTransactional(c) {
+		t.Fatal("cacheable over boltdb is not Transactional")
+	}
+
+	// fill the cache, then change the entry with a transaction
+	mustPut(t, c, "/a/", `1`)
+	if got := valueOf(t, c, "/a/"); got != "1" {
+		t.Fatalf("/a/ = %s, want 1", got)
+	}
+	got, err := UpdateJSON(ctx, c, "/a/", func(n *int) error {
+		*n++
+		return nil
+	})
+	if err != nil || got != 2 {
+		t.Fatalf("UpdateJSON = %d, %v; want 2", got, err)
+	}
+	if got := valueOf(t, c, "/a/"); got != "2" {
+		t.Errorf("/a/ = %s after the transaction, want 2: the cache kept the old copy", got)
+	}
+
+	// a failed transaction applies nothing
+	err = Update(ctx, c, []string{"/a/"}, func(map[string]*StorageEntry) ([]Op, error) {
+		return []Op{put("/a/", `3`), put("/"+strings.Repeat("b", bolt.MaxKeySize)+"/", `{}`)}, nil
+	})
+	if err == nil {
+		t.Fatal("Update with a key bbolt refuses succeeded")
+	}
+	if got := valueOf(t, c, "/a/"); got != "2" {
+		t.Errorf("/a/ = %s after the failed update, want 2", got)
+	}
+}
+
+func isTransactional(s Storage) bool {
+	_, ok := s.(Transactional)
+	return ok
 }
