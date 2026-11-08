@@ -133,8 +133,8 @@ func NewCacheableStorageWithConf(conf map[string]string) (Storage, error) {
 }
 
 // sourcable returns the creator of a storage type that can be cached or act as
-// a cache. Backends shared by several servers (postgres) are not: another
-// server's write would leave this server's cache stale.
+// a cache. Backends shared by several servers (postgres, etcd) are not:
+// another server's write would leave this server's cache stale.
 func sourcable(name string) (StorageCreator, error) {
 	if create, ok := SourcableStorageOptions[name]; ok {
 		return create, nil

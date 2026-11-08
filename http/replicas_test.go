@@ -7,27 +7,62 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/steviebps/realm/pkg/storage"
+	"github.com/steviebps/realm/pkg/storage/etcdtest"
 	"github.com/steviebps/realm/pkg/storage/pgtest"
 )
 
-// newReplicas starts n servers that share one PostgreSQL database, as replicas
-// behind a load balancer would.
-func newReplicas(t *testing.T, n int) []*httptest.Server {
+// sharedBackends maps every locally testable backend that several servers
+// can share to a function that prepares fresh, empty data for a test and
+// returns a function opening one server's storage over it.
+func sharedBackends(t *testing.T) map[string]func(t *testing.T) func() (storage.Storage, error) {
+	out := map[string]func(t *testing.T) func() (storage.Storage, error){}
+	if os.Getenv(pgtest.EnvURL) != "" {
+		out["postgres"] = func(t *testing.T) func() (storage.Storage, error) {
+			url := pgtest.URL(t)
+			return func() (storage.Storage, error) { return storage.NewPostgresStorage(map[string]string{"url": url}) }
+		}
+	}
+	if os.Getenv(etcdtest.EnvEndpoints) != "" {
+		out["etcd"] = func(t *testing.T) func() (storage.Storage, error) {
+			conf := etcdtest.Options(t)
+			return func() (storage.Storage, error) { return storage.NewEtcdStorage(conf) }
+		}
+	}
+	if len(out) == 0 {
+		t.Skipf("set %s or %s to run replica tests", pgtest.EnvURL, etcdtest.EnvEndpoints)
+	}
+	return out
+}
+
+// forEachSharedBackend runs test for every backend several servers can
+// share, with a pair of servers sharing fresh data, as replicas behind a
+// load balancer would.
+func forEachSharedBackend(t *testing.T, test func(t *testing.T, a, b *httptest.Server)) {
+	for name, prepare := range sharedBackends(t) {
+		t.Run(name, func(t *testing.T) {
+			s := newReplicas(t, 2, prepare(t))
+			test(t, s[0], s[1])
+		})
+	}
+}
+
+// newReplicas starts n servers whose storage open opens over shared data.
+func newReplicas(t *testing.T, n int, open func() (storage.Storage, error)) []*httptest.Server {
 	t.Helper()
-	url := pgtest.URL(t)
 	servers := make([]*httptest.Server, n)
 	for i := range servers {
-		pg, err := storage.NewPostgresStorage(map[string]string{"url": url})
+		strg, err := open()
 		if err != nil {
-			t.Fatalf("postgres: %v", err)
+			t.Fatalf("storage: %v", err)
 		}
-		inh, err := storage.NewInheritableStorage(pg)
+		inh, err := storage.NewInheritableStorage(strg)
 		if err != nil {
 			t.Fatalf("inheritable: %v", err)
 		}
@@ -38,14 +73,17 @@ func newReplicas(t *testing.T, n int) []*httptest.Server {
 		servers[i] = httptest.NewServer(h)
 		t.Cleanup(func() {
 			servers[i].Close()
-			_ = pg.Close(context.Background())
+			_ = strg.Close(context.Background())
 		})
 	}
 	return servers
 }
 
 func TestReplicasStreamEachOthersWrites(t *testing.T) {
-	a, b := pair(t)
+	forEachSharedBackend(t, testReplicasStreamEachOthersWrites)
+}
+
+func testReplicasStreamEachOthersWrites(t *testing.T, a, b *httptest.Server) {
 	putChamber(t, a.URL, "app", fmt.Sprintf(flagBody, "false"))
 	putChamber(t, a.URL, "app/web", `{"rules":{}}`)
 
@@ -61,14 +99,17 @@ func TestReplicasStreamEachOthersWrites(t *testing.T) {
 	}
 
 	putChamber(t, a.URL, "app", fmt.Sprintf(flagBody, "true"))
-	// well within the change feed's poll interval, so NOTIFY delivered it
+	// well within any poll interval, so the change feed pushed it
 	if next := waitData(t, events, 2*time.Second); !strings.Contains(next, `"value":true`) {
 		t.Fatalf("update event = %s", next)
 	}
 }
 
 func TestReplicasEnforceIfMatchTogether(t *testing.T) {
-	a, b := pair(t)
+	forEachSharedBackend(t, testReplicasEnforceIfMatchTogether)
+}
+
+func testReplicasEnforceIfMatchTogether(t *testing.T, a, b *httptest.Server) {
 	putChamber(t, a.URL, "app", fmt.Sprintf(flagBody, "false"))
 
 	resp, _ := do(t, http.MethodGet, b.URL+"/v1/chambers/app?inherit=false", "", nil)
@@ -100,7 +141,10 @@ func TestReplicasEnforceIfMatchTogether(t *testing.T) {
 }
 
 func TestReplicasKeepCompleteHistory(t *testing.T) {
-	a, b := pair(t)
+	forEachSharedBackend(t, testReplicasKeepCompleteHistory)
+}
+
+func testReplicasKeepCompleteHistory(t *testing.T, a, b *httptest.Server) {
 
 	const perServer = 10
 	var wg sync.WaitGroup
@@ -151,10 +195,4 @@ func TestReplicasKeepCompleteHistory(t *testing.T) {
 	if len(catalog.Values) != 2*perServer {
 		t.Fatalf("catalog has %d values, want %d", len(catalog.Values), 2*perServer)
 	}
-}
-
-func pair(t *testing.T) (*httptest.Server, *httptest.Server) {
-	t.Helper()
-	s := newReplicas(t, 2)
-	return s[0], s[1]
 }

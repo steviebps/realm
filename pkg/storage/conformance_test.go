@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/steviebps/realm/pkg/storage/etcdtest"
 	"github.com/steviebps/realm/pkg/storage/pgtest"
 )
 
@@ -31,6 +32,12 @@ func sharedBackends() map[string]func(t *testing.T) func() Storage {
 		out["postgres"] = func(t *testing.T) func() Storage {
 			url := pgtest.URL(t)
 			return func() Storage { return newPostgres(t, url) }
+		}
+	}
+	if os.Getenv(etcdtest.EnvEndpoints) != "" {
+		out["etcd"] = func(t *testing.T) func() Storage {
+			conf := etcdtest.Options(t)
+			return func() Storage { return newEtcd(t, conf) }
 		}
 	}
 	return out
@@ -373,7 +380,7 @@ func TestWatchContract(t *testing.T) {
 // backend several servers share: another server's write would leave this
 // server's cache stale.
 func TestCacheableRefusesSharedBackends(t *testing.T) {
-	for _, name := range []string{"postgres"} {
+	for _, name := range []string{"postgres", "etcd"} {
 		if _, ok := StorageOptions[name]; !ok {
 			t.Fatalf("%s is not a storage type", name)
 		}

@@ -25,9 +25,10 @@ limited to a **deterministic percentage rollout** and/or a one-off **schedule**
 (a time window). The SDK stays current by
 **polling** (default 15 min) or **real-time streaming** (SSE). The server
 offers ETag optimistic concurrency, per-chamber change history, and an
-attribute catalog (value → label) for the UI; storage includes S3 and
-Postgres, which is safe for many replicas (writes are version-checked in the
-database and every replica streams every change via LISTEN/NOTIFY). Optional
+attribute catalog (value → label) for the UI; storage includes S3,
+Postgres, and etcd, the last two safe for many replicas (writes are
+version-checked in the database, and every replica streams every change via
+LISTEN/NOTIFY or an etcd watch). Optional
 auth: path-scoped read/write **API keys** for SDKs and automation, an
 optional **admin key** declared in the config (for headless installs; it
 manages keys over `/v1/keys`), and optional OIDC / GitHub **sign-in** with
@@ -36,7 +37,7 @@ Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
 public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
 which also evaluates locally for Node services. Not yet built: revisioned
 streams (resume with `Last-Event-ID`, SDKs rejecting stale data); with
-backends other than Postgres, run one replica. See
+backends other than Postgres and etcd, run one replica. See
 `docs/ARCHITECTURE.md`, `docs/design/targeting.md`, `docs/design/auth.md`, and
 `docs/design/evaluation.md`.
 
@@ -104,7 +105,7 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `main.go` | Entry point → `cmd.Execute()` |
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
 | `pkg/` | Core domain + SDK (package `realm`) |
-| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking |
+| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`, `etcd`) and wrappers (`cacheable`, `inheritable`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
 | `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`) |
@@ -199,9 +200,13 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   `pkg/targeting_test.go`); evaluation is allocation-free — keep it that way.
 - The S3 integration test runs only when `REALM_S3_TEST_ENDPOINT` and
   `REALM_S3_TEST_BUCKET` are set (see `pkg/storage/s3_test.go`).
-- Postgres tests (`pkg/storage/postgres_test.go`, `http/postgres_test.go`) run
-  only when `REALM_POSTGRES_TEST_URL` is set; each gets a throwaway schema from
-  `pkg/storage/pgtest`.
+- Postgres tests (`pkg/storage/postgres*_test.go`) run only when
+  `REALM_POSTGRES_TEST_URL` is set; each gets a throwaway schema from
+  `pkg/storage/pgtest`. etcd tests (`pkg/storage/etcd_test.go`) run only when
+  `REALM_ETCD_TEST_ENDPOINTS` (comma-separated client URLs) is set; each gets
+  a throwaway key prefix from `pkg/storage/etcdtest`. The shared contract
+  tests (`pkg/storage/conformance_test.go`) and the replica tests
+  (`http/replicas_test.go`) run against whichever of the two is set.
 - Test data is inlined as literals; there is no `testdata/` fixture convention.
 
 ## Verifying changes

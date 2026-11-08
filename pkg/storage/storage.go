@@ -50,6 +50,7 @@ var StorageOptions = map[string]StorageCreator{
 	"s3":       NewS3Storage,
 	"boltdb":   NewBoltStorage,
 	"postgres": NewPostgresStorage,
+	"etcd":     NewEtcdStorage,
 }
 
 func init() {

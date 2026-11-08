@@ -22,6 +22,11 @@ func (nf *NotFoundError) Error() string {
 // the file backend's file system. It is the caller's mistake, not a failure.
 var ErrInvalidPath = errors.New("invalid path")
 
+// ErrTooLarge is wrapped by the errors for a change a backend refuses for its
+// size, such as an etcd transaction with more operations than the cluster's
+// --max-txn-ops. The backend wrote nothing; the server answers 413.
+var ErrTooLarge = errors.New("the change is larger than the storage accepts")
+
 // isNotFoundErr reports whether err reports a missing entry.
 func isNotFoundErr(err error) bool {
 	var nf *NotFoundError

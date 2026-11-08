@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -346,5 +347,50 @@ func TestEmptyBodyIsRejected(t *testing.T) {
 	resp, _ := do(t, http.MethodPost, srv.URL+"/v1/catalog/region", "", map[string]string{ActorHeader: "tester"})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("catalog POST with empty body: expected 400, got %d", resp.StatusCode)
+	}
+}
+
+// opLimitStorage refuses, as too large, any transaction with more than max
+// ops, as an etcd cluster does past its --max-txn-ops.
+type opLimitStorage struct {
+	storage.Transactional
+	max int
+}
+
+func (s opLimitStorage) Txn(ctx context.Context, checks []storage.Check, ops []storage.Op) error {
+	if len(ops) > s.max {
+		return fmt.Errorf("%w: %d ops (test limit %d)", storage.ErrTooLarge, len(ops), s.max)
+	}
+	return s.Transactional.Txn(ctx, checks, ops)
+}
+
+// TestChangeTooLargeForStorage checks that a change the storage refuses for
+// its size answers 413 with the reason, and changes nothing.
+func TestChangeTooLargeForStorage(t *testing.T) {
+	bolt, err := storage.NewBoltStorage(map[string]string{"path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bolt.Close(context.Background()) })
+	// enough for one chamber and its history, not for deleting three
+	srv := newInheritableTestServerOn(t, opLimitStorage{Transactional: bolt.(storage.Transactional), max: 3})
+	for _, p := range []string{"tree/a", "tree/b", "tree/c"} {
+		putChamber(t, srv.URL, p, `{"rules":{}}`)
+	}
+
+	resp, out := do(t, http.MethodDelete, srv.URL+"/v1/chambers/tree/?recursive=true", "", nil)
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("DELETE of the tree = %d, want 413", resp.StatusCode)
+	}
+	if len(out.Errors) == 0 || !strings.Contains(out.Errors[0], "test limit") || !strings.Contains(out.Errors[0], "delete fewer chambers") {
+		t.Errorf("errors = %q, want the storage's reason and what to do", out.Errors)
+	}
+	if resp, _ := do(t, http.MethodGet, srv.URL+"/v1/chambers/tree/a?inherit=false", "", nil); resp.StatusCode != http.StatusOK {
+		t.Errorf("GET tree/a after the refused delete = %d, want 200", resp.StatusCode)
+	}
+
+	srv = newInheritableTestServerOn(t, opLimitStorage{Transactional: bolt.(storage.Transactional), max: 1})
+	if resp, _ := do(t, http.MethodPost, srv.URL+"/v1/chambers/tree/a", `{"rules":{"x":{"type":"boolean","value":true}}}`, nil); resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("POST over the limit = %d, want 413", resp.StatusCode)
 	}
 }

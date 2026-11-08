@@ -60,6 +60,35 @@ jobs:
       - name: Test against Postgres (race)
         run: go test -race -count=1 ./pkg/storage/... ./http/...
 
+  etcd:
+    runs-on: ubuntu-latest
+    services:
+      etcd:
+        image: gcr.io/etcd-development/etcd:v3.7.3
+        # etcd reads every flag from an ETCD_* variable; the image has no
+        # shell for a health command, so a step waits for it instead
+        env:
+          ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+          ETCD_ADVERTISE_CLIENT_URLS: http://127.0.0.1:2379
+        ports:
+          - 2379:2379
+    env:
+      REALM_ETCD_TEST_ENDPOINTS: http://127.0.0.1:2379
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Wait for etcd
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:2379/health && exit 0
+            sleep 1
+          done
+          exit 1
+      - name: Test against etcd (race)
+        run: go test -race -count=1 ./pkg/storage/... ./http/...
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -185,7 +214,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [go, postgres, lint, typescript-sdk, typescript-sdk-node18, ui, e2e]
+    needs: [go, postgres, etcd, lint, typescript-sdk, typescript-sdk-node18, ui, e2e]
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed
