@@ -111,21 +111,22 @@ const maxUpdateAttempts = 10
 // returned as is.
 //
 // Update works on the entries as stored (see Raw), beneath any wrapper that
-// transforms reads. On a Transactional backend each read key is
-// version-checked when the ops are applied, and fn is retried when another
-// writer got there first; after repeated conflicts Update returns
-// ErrConflict. On other backends Update holds a process-wide lock on the keys,
-// plus the backend's own lock when it is a Locker (which extends the guarantee
-// to other processes on the same machine), and applies the ops one at a time.
+// transforms reads. It holds a process-wide lock on the keys, so Updates in
+// one process take turns rather than conflict. On a Transactional backend each
+// read key is also version-checked when the ops are applied, and fn is
+// retried when a writer in another process got there first; after repeated
+// conflicts Update returns ErrConflict. On other backends Update also takes
+// the backend's own lock when it is a Locker (which extends the guarantee to
+// other processes on the same machine), and applies the ops one at a time.
 // Either way it reads through UpdateReader when the storage implements it,
 // and checks every op's key with KeyValidator before applying any.
 func Update(ctx context.Context, s Storage, keys []string, fn func(map[string]*StorageEntry) ([]Op, error)) error {
 	s = Raw(s)
+	unlock := localLocks.lock(keys)
+	defer unlock()
 	if t, ok := s.(Transactional); ok {
 		return updateTransactional(ctx, t, keys, fn)
 	}
-	unlock := localLocks.lock(keys)
-	defer unlock()
 	if l, ok := s.(Locker); ok {
 		release, err := l.LockUpdate(ctx, keys)
 		if err != nil {
@@ -231,8 +232,8 @@ func lockOrder(keys []string) []uint32 {
 	return slices.Compact(ids)
 }
 
-// localLocks serializes Updates of the same keys within this process, for
-// backends that are not Transactional. Locks are striped to bound memory.
+// localLocks serializes Updates of the same keys within this process. Locks
+// are striped to bound memory.
 var localLocks stripedLocks
 
 type stripedLocks struct {

@@ -94,12 +94,14 @@ func TestValidatePathWrapsErrInvalidPath(t *testing.T) {
 }
 
 // TestUpdateWithinOneProcess checks that Update serializes concurrent
-// read-modify-writes on backends that are not Transactional.
+// read-modify-writes within one process on every backend: none is lost, and,
+// since writers in one process take turns, none gives up after conflicts on a
+// Transactional backend either.
 func TestUpdateWithinOneProcess(t *testing.T) {
 	ctx := context.Background()
 	for name, s := range backends(t) {
 		t.Run(name, func(t *testing.T) {
-			const n = 50
+			const n = 200
 			var wg sync.WaitGroup
 			for range n {
 				wg.Add(1)

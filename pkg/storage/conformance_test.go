@@ -207,30 +207,25 @@ var txnContract = []struct {
 			t.Errorf("Get(/ok/) = %v, want NotFoundError: an invalid transaction was applied", err)
 		}
 	}},
-	{"Update serializes concurrent writers", func(t *testing.T, s Transactional) {
-		const n = 30
+	{"Update serializes concurrent writers in one process", func(t *testing.T, s Transactional) {
+		const n = 100
 		var wg sync.WaitGroup
-		var gaveUp sync.Map
-		for i := range n {
+		for range n {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_, err := UpdateJSON(context.Background(), s, "/counter/", func(v *int) error {
+				// writers in one process take turns, so none conflicts
+				if _, err := UpdateJSON(context.Background(), s, "/counter/", func(v *int) error {
 					*v++
 					return nil
-				})
-				if errors.Is(err, ErrConflict) {
-					gaveUp.Store(i, true)
-				} else if err != nil {
+				}); err != nil {
 					t.Errorf("UpdateJSON: %v", err)
 				}
 			}()
 		}
 		wg.Wait()
-		conflicts := 0
-		gaveUp.Range(func(any, any) bool { conflicts++; return true })
-		if got, want := valueOf(t, s, "/counter/"), strconv.Itoa(n-conflicts); got != want {
-			t.Errorf("counter = %s, want %s (%d updates gave up)", got, want, conflicts)
+		if got, want := valueOf(t, s, "/counter/"), strconv.Itoa(n); got != want {
+			t.Errorf("counter = %s, want %s", got, want)
 		}
 	}},
 }

@@ -193,10 +193,12 @@ Backends can implement optional interfaces (`pkg/storage/txn.go`,
 
 All read-modify-write sequences go through `storage.Update` (or
 `UpdateJSON`): a chamber write with its If-Match check and history entry, the
-catalog, and API keys. On a `Transactional` backend, `Update` version-checks
-the keys it read and retries with jittered backoff on conflict, so replicas
-need no shared lock. On other backends it holds a process-wide lock instead,
-which is why those backends are single-replica. A backend can also implement
+catalog, and API keys. `Update` holds a process-wide lock on the keys, so
+writers in one process take turns rather than conflict. On a `Transactional`
+backend it also version-checks the keys it read and retries with jittered
+backoff on conflict with another process, so replicas need no shared lock.
+On other backends the process-wide lock is all there is, which is why those
+backends are single-replica. A backend can also implement
 **`Locker`** to extend that lock to other processes: `file` takes an exclusive
 lock file (`.realm-lock`, `flock` or `LockFileEx`) for the update, so processes
 sharing the directory cannot lose each other's writes. `file`
