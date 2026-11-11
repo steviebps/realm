@@ -992,7 +992,10 @@ func eventText(event string, rev uint64, data []byte) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "event: %s\n", event)
 	if rev != 0 {
-		fmt.Fprintf(&b, "id: %d\n", rev)
+		var buf [20]byte
+		b.WriteString("id: ")
+		b.Write(strconv.AppendUint(buf[:0], rev, 10))
+		b.WriteByte('\n')
 	}
 	text := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(string(data))
 	for line := range strings.SplitSeq(strings.TrimRight(text, "\n"), "\n") {

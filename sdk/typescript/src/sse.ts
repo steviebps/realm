@@ -25,11 +25,7 @@ export async function readEvents(
 
   const line = (l: string) => {
     if (l === '') {
-      if (data.length > 0) {
-        const ev: ServerSentEvent = { event: event || 'message', data: data.join('\n') };
-        if (id !== undefined) ev.id = id;
-        onEvent(ev);
-      }
+      if (data.length > 0) onEvent({ event: event || 'message', data: data.join('\n'), id });
       event = '';
       id = undefined;
       data = [];

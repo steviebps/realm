@@ -384,14 +384,16 @@ describe('revision', () => {
     expect(client.revision()).toBe(41);
 
     await vi.waitFor(() => expect(realm.streams.size).toBe(1));
-    realm.publish(betaOn, '42');
+    realm.setRevision('42');
+    realm.publish(betaOn);
     await vi.waitFor(() => expect(client.revision()).toBe(42));
     expect(client.bool('beta', {}, false)).toBe(true);
 
     // the same chamber at a newer revision updates only the revision
     const changed = vi.fn();
     client.subscribe(changed);
-    realm.publish(betaOn, '43');
+    realm.setRevision('43');
+    realm.publish(betaOn);
     await vi.waitFor(() => expect(client.revision()).toBe(43));
     expect(changed).not.toHaveBeenCalled();
 
@@ -422,7 +424,8 @@ describe('revision', () => {
     expect(client.revision()).toBe(5);
 
     await vi.waitFor(() => expect(realm.streams.size).toBe(1));
-    realm.publish(betaOn, '6');
+    realm.setRevision('6');
+    realm.publish(betaOn);
     await vi.waitFor(() => expect(client.revision()).toBe(6));
 
     // until the new context's evaluation arrives, its values are not the server's

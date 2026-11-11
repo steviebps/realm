@@ -430,11 +430,11 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		// A server that predates streaming ignores ?watch=true and answers
 		// with the chamber. Anything else (a proxy's sign-in page, say) is a
 		// failed attempt, retried as a stream.
-		c, err := readChamberResponse(resp.Body)
+		c, rev, err := readChamberResponse(resp)
 		if err != nil {
 			return false, idleErr(fmt.Errorf("chamber stream: the server answered with neither an event stream nor a chamber: %w", err))
 		}
-		rlm.setChamberIf(c, parseRevision(resp.Header.Get(api.RevisionHeader)), version)
+		rlm.setChamberIf(c, rev, version)
 		return false, errNotStreaming
 	}
 
@@ -534,11 +534,10 @@ func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber,
 	if res.StatusCode != http.StatusOK {
 		return nil, 0, fmt.Errorf("could not get %q: %w", path, newStatusError(res))
 	}
-	c, err := readChamberResponse(res.Body)
+	c, rev, err := readChamberResponse(res)
 	if err != nil {
 		return nil, 0, fmt.Errorf("could not read %q: %w", path, err)
 	}
-	rev = parseRevision(res.Header.Get(api.RevisionHeader))
 	if rev != 0 {
 		// as decimal text, like the header: an int64 cannot hold every revision
 		span.SetAttributes(attribute.String("realm.revision", strconv.FormatUint(rev, 10)))
@@ -547,25 +546,30 @@ func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber,
 }
 
 // readChamberResponse reads a response envelope holding a chamber, of at
-// most maxChamberBytes.
-func readChamberResponse(body io.Reader) (*Chamber, error) {
-	b, err := io.ReadAll(io.LimitReader(body, maxChamberBytes+1))
+// most maxChamberBytes, and the server's revision of it (0 when the server
+// reports none).
+func readChamberResponse(res *http.Response) (*Chamber, uint64, error) {
+	b, err := io.ReadAll(io.LimitReader(res.Body, maxChamberBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(b) > maxChamberBytes {
-		return nil, fmt.Errorf("the response is larger than %d bytes", maxChamberBytes)
+		return nil, 0, fmt.Errorf("the response is larger than %d bytes", maxChamberBytes)
 	}
 	// Decoded leniently: fields added to the envelope by newer servers must
 	// not break older SDKs.
 	var envelope api.HTTPErrorAndDataResponse
 	if err := json.Unmarshal(b, &envelope); err != nil {
-		return nil, fmt.Errorf("the response is not a realm response: %w", err)
+		return nil, 0, fmt.Errorf("the response is not a realm response: %w", err)
 	}
 	if len(envelope.Errors) > 0 {
-		return nil, errors.New(strings.Join(envelope.Errors, "; "))
+		return nil, 0, errors.New(strings.Join(envelope.Errors, "; "))
 	}
-	return decodeChamber(envelope.Data)
+	c, err := decodeChamber(envelope.Data)
+	if err != nil {
+		return nil, 0, err
+	}
+	return c, parseRevision(res.Header.Get(api.RevisionHeader)), nil
 }
 
 // decodeChamber decodes a chamber the server sent. Anything else (null, a

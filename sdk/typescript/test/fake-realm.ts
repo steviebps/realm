@@ -82,10 +82,8 @@ export async function fakeRealm() {
     },
     /** Sets the revision reported from now on, or none. */
     setRevision: (r: string | undefined) => (revision = r),
-    /** Replaces the chamber, at revision rev when given, and sends it to every open stream. */
-    publish(next: unknown, rev?: string) {
+    publish(next: unknown) {
       chamber = next;
-      if (rev !== undefined) revision = rev;
       for (const s of streams) s.send();
     },
     dropStreams() {

@@ -479,64 +479,41 @@ func TestReadLineage(t *testing.T) {
 // tracks revisions, and 0 on storage that does not.
 func TestInheritedRevision(t *testing.T) {
 	ctx := context.Background()
-	bolt, err := NewBoltStorage(map[string]string{"path": t.TempDir()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = bolt.Close(ctx) })
-	inh, _ := NewInheritableStorage(bolt)
-	put := func(key string) uint64 {
-		t.Helper()
-		if err := bolt.Put(ctx, StorageEntry{Key: key, Value: []byte(`{"rules":{}}`)}); err != nil {
-			t.Fatal(err)
-		}
-		e, err := bolt.Get(ctx, key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return e.Version
-	}
-	revision := func() uint64 {
-		t.Helper()
-		e, err := inh.Get(ctx, "/a/b/")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return e.Version
-	}
+	for name, open := range transactionalBackends() {
+		t.Run(name, func(t *testing.T) {
+			s := open(t)
+			inh, _ := NewInheritableStorage(s)
+			// put writes a chamber at key and returns its revision.
+			put := func(key string) uint64 {
+				t.Helper()
+				mustPut(t, s, key, `{"rules":{}}`)
+				return versionOf(t, s, key)
+			}
 
-	own := put("/a/b/")
-	if got := revision(); got != own {
-		t.Errorf("without parents: %d, want the chamber's own %d", got, own)
-	}
-	parent := put("/a/")
-	if got := revision(); got != parent {
-		t.Errorf("after a parent write: %d, want %d", got, parent)
-	}
-	root := put("/")
-	if got := revision(); got != root {
-		t.Errorf("after a root write: %d, want %d", got, root)
-	}
-	own = put("/a/b/")
-	if got := revision(); got != own {
-		t.Errorf("after the chamber's write: %d, want %d", got, own)
-	}
-	lin, err := ReadLineage(ctx, inh, "/a/b/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := lin.Revision(); got != own {
-		t.Errorf("lineage revision %d, want %d", got, own)
+			own := put("/a/b/")
+			if got := versionOf(t, inh, "/a/b/"); got != own {
+				t.Errorf("without parents: %d, want the chamber's own %d", got, own)
+			}
+			for _, parent := range []string{"/a/", "/", "/a/b/"} {
+				rev := put(parent)
+				if got := versionOf(t, inh, "/a/b/"); got != rev {
+					t.Errorf("after writing %s: %d, want %d", parent, got, rev)
+				}
+				lin, err := ReadLineage(ctx, inh, "/a/b/")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := lin.Revision(); got != rev {
+					t.Errorf("after writing %s: lineage revision %d, want %d", parent, got, rev)
+				}
+			}
+		})
 	}
 
 	// storage without revisions has none to report
 	plain, _ := NewInheritableStorage(newLineageTree(nil))
-	e, err := plain.Get(ctx, "/a/b/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e.Version != 0 {
-		t.Errorf("unversioned storage: revision %d, want 0", e.Version)
+	if got := versionOf(t, plain, "/a/b/"); got != 0 {
+		t.Errorf("unversioned storage: revision %d, want 0", got)
 	}
 }
 

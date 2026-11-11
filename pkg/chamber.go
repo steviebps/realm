@@ -108,13 +108,6 @@ type ChamberEntry struct {
 	revision uint64
 }
 
-// Revision returns the server's storage revision of the chamber the entry
-// was built from (see Realm.Revision), or 0 when the server did not report
-// one.
-func (c *ChamberEntry) Revision() uint64 {
-	return c.revision
-}
-
 // NewChamberEntry creates a new ChamberEntry. The provided attributes are
 // process-wide defaults (for example "environment" or "version") consulted
 // when an evaluation context does not set them.

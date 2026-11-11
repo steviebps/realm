@@ -58,9 +58,6 @@ export class BrowserClient {
   // Where the snapshot's values came from; undefined while it is empty and
   // getters return fallbacks. They are always the current context's.
   #source: FlagSource | undefined;
-  // The server's revision of the values, while they came from the server
-  // and it reported one.
-  #revision: number | undefined;
   // What storage is known to hold under #storageKey, so unchanged values are
   // not written again.
   #stored: string | undefined;
@@ -150,7 +147,8 @@ export class BrowserClient {
    * values.
    */
   revision(): number | undefined {
-    return this.#revision;
+    // values not from the server are set without one
+    return this.#evaluation.revision;
   }
 
   /**
@@ -243,7 +241,6 @@ export class BrowserClient {
   // else none. Storage that answers asynchronously applies its values later,
   // if the context is unchanged and the server has not answered by then.
   #restore(): void {
-    this.#revision = undefined;
     const contextKey = this.#contextKey;
     const storage = this.#options.storage;
     this.#stored = undefined;
@@ -279,7 +276,7 @@ export class BrowserClient {
     const flags = decodeFlags(raw);
     if (!flags) return false;
     this.#stored = raw!;
-    this.#show('cache', () => this.#evaluation.setRaw(raw!, () => ({ flags })));
+    this.#show('cache', () => this.#evaluation.setRaw(raw!, undefined, () => ({ flags })));
     return true;
   }
 
@@ -324,9 +321,8 @@ export class BrowserClient {
     // receive serves the server's values for the current context (a
     // superseded evaluation is aborted before it can deliver), applied by
     // update, and stores them.
-    const receive = (update: () => boolean, revision: number | undefined) => {
+    const receive = (update: () => boolean) => {
       this.#show('network', update);
-      this.#revision = revision;
       this.#persist();
     };
     const following = this.#transport.follow(
@@ -335,8 +331,8 @@ export class BrowserClient {
       { method: 'POST', body: JSON.stringify(normalizeContext(this.#context)) },
       'flags',
       {
-        set: (data, revision) => receive(() => this.#evaluation.set(data), revision),
-        setRaw: (raw, revision) => receive(() => this.#evaluation.setRaw(raw), revision),
+        set: (data, revision) => receive(() => this.#evaluation.set(data, revision)),
+        setRaw: (raw, revision) => receive(() => this.#evaluation.setRaw(raw, revision)),
       },
       this.#options.streaming ?? true,
       pollingInterval(this.#options.pollingInterval, defaultPollingInterval),

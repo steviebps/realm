@@ -31,8 +31,6 @@ export class ServerClient {
   readonly #options: ServerClientOptions;
   readonly #defaults: Record<string, string>;
   readonly #chamber = new Snapshot<Chamber>({ rules: {} }, asChamber);
-  // The server's revision of the chamber, if it reported one.
-  #revision: number | undefined;
   // The background refresh, while started.
   #running: { controller: AbortController; following: Following } | undefined;
 
@@ -60,16 +58,7 @@ export class ServerClient {
       'chambers',
       { method: 'GET' },
       'chamber',
-      {
-        set: (data, revision) => {
-          this.#chamber.set(data);
-          this.#revision = revision;
-        },
-        setRaw: (raw, revision) => {
-          this.#chamber.setRaw(raw);
-          this.#revision = revision;
-        },
-      },
+      this.#chamber,
       this.#options.streaming ?? true,
       pollingInterval(this.#options.pollingInterval, defaultPollingInterval),
       controller.signal,
@@ -110,7 +99,7 @@ export class ServerClient {
    * it alongside the flags it describes.
    */
   revision(): number | undefined {
-    return this.#revision;
+    return this.#chamber.revision;
   }
 
   /** Calls listener whenever the chamber changes. Returns a function that unsubscribes. */

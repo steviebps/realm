@@ -729,9 +729,6 @@ func TestLoadedRevision(t *testing.T) {
 	if got := rlm.Revision(ctx); got != 12 {
 		t.Errorf("revision = %d, want 12", got)
 	}
-	if got := rlm.getChamber().Revision(); got != 12 {
-		t.Errorf("entry revision = %d, want 12", got)
-	}
 	// an unchanged chamber at a newer revision still updates it
 	rev.Store("13")
 	if !eventually(5*time.Second, func() bool { return rlm.Revision(ctx) == 13 }) {

@@ -6,6 +6,7 @@
  */
 export class Snapshot<T> {
   value: T;
+  #revision: number | undefined;
   #raw = '';
   readonly #check: (data: unknown) => T;
   readonly #listeners = new Set<() => void>();
@@ -16,32 +17,46 @@ export class Snapshot<T> {
     this.#check = check;
   }
 
+  /**
+   * The server's revision of the value (see parseRevision), or undefined
+   * when it reported none or the value did not come from it.
+   */
+  get revision(): number | undefined {
+    return this.#revision;
+  }
+
   /** The JSON text of the value, or '' before the first set. */
   get raw(): string {
     return this.#raw;
   }
 
   /**
-   * Replaces the value with the one raw (JSON text) holds, unless raw is
-   * unchanged. It reports whether the value changed, and throws, keeping the
-   * value, when raw does not parse or its data fails the check.
+   * Replaces the value with the one raw (JSON text) holds, at revision,
+   * unless raw is unchanged: then only the revision is replaced, and
+   * listeners are not told. It reports whether the value changed, and
+   * throws, keeping the value and revision, when raw does not parse or its
+   * data fails the check.
    */
-  setRaw(raw: string, parse: (raw: string) => unknown = JSON.parse): boolean {
-    if (raw === this.#raw) return false;
+  setRaw(raw: string, revision?: number, parse: (raw: string) => unknown = JSON.parse): boolean {
+    if (raw === this.#raw) {
+      this.#revision = revision;
+      return false;
+    }
     this.value = this.#check(parse(raw));
     this.#raw = raw;
+    this.#revision = revision;
     this.notify();
     return true;
   }
 
   /**
-   * Replaces the value with already-parsed data, unless it is unchanged. It
-   * reports whether the value changed, and throws, keeping the value, when
-   * the data fails the check.
+   * Replaces the value with already-parsed data, at revision, as setRaw
+   * does. It throws, keeping the value and revision, when the data fails
+   * the check.
    */
-  set(data: unknown): boolean {
+  set(data: unknown, revision?: number): boolean {
     const value = this.#check(data);
-    return this.setRaw(JSON.stringify(value), () => value);
+    return this.setRaw(JSON.stringify(value), revision, () => value);
   }
 
   /**

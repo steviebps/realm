@@ -213,17 +213,12 @@ export class Transport {
   }
 
   /**
-   * Performs a request and returns the data in the response envelope, or
-   * undefined when there is none. It rejects when no complete response
+   * Performs a request and returns the data in the response envelope (or
+   * undefined when there is none) and the server's revision of it (see
+   * parseRevision). It rejects when no complete response
    * arrives within the request timeout.
    */
-  async request(route: 'chambers' | 'evaluate', init: RequestInit, signal?: AbortSignal): Promise<unknown> {
-    return (await this.#request(route, init, signal)).data;
-  }
-
-  // request performs a request as request does, and also returns the
-  // revision the server reported.
-  async #request(
+  async request(
     route: 'chambers' | 'evaluate',
     init: RequestInit,
     signal?: AbortSignal,
@@ -284,7 +279,7 @@ export class Transport {
   ): Promise<void> {
     // load requests the data and delivers it, unless its signal aborted first.
     const load = async (signal: AbortSignal) => {
-      const { data, revision } = await this.#request(route, init, signal);
+      const { data, revision } = await this.request(route, init, signal);
       if (!signal.aborted) sink.set(data, revision);
     };
     let failure: Error | undefined;
