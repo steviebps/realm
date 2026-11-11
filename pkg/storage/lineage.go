@@ -20,6 +20,10 @@ type Layer struct {
 	// Err says why the chamber cannot be parsed. The inherited view cannot be
 	// built while any layer has one.
 	Err error
+	// Version is the storage revision that last wrote the chamber (see
+	// StorageEntry.Version); 0 when there is none at Path or the storage
+	// does not track revisions.
+	Version uint64
 }
 
 // Lineage is what the inherited view of a path is built from: the chamber
@@ -94,6 +98,21 @@ func (l *Lineage) merge(sources map[string]string) (*realm.Chamber, error) {
 	return merged, nil
 }
 
+// Revision returns the highest Version among the layers: the revision of the
+// inherited view, which changes whenever any layer it is built from does. It
+// is 0 when the storage does not track revisions.
+//
+// Deleting an ancestor changes the view but takes its revision away, so the
+// view's revision can go down: it names a version of the view rather than
+// ordering versions.
+func (l *Lineage) Revision() uint64 {
+	var rev uint64
+	for _, layer := range l.Layers {
+		rev = max(rev, layer.Version)
+	}
+	return rev
+}
+
 // ReadLineage returns the lineage of the chamber at logicalPath: s.Layers
 // when s applies inheritance, otherwise the chamber alone (Inheritable is
 // false). It returns a NotFoundError when there is no chamber at logicalPath.
@@ -105,7 +124,7 @@ func ReadLineage(ctx context.Context, s Storage, logicalPath string) (*Lineage, 
 	if err != nil {
 		return nil, err
 	}
-	return &Lineage{Layers: []Layer{parseLayer(canonicalChamberPath(logicalPath), entry.Value)}}, nil
+	return &Lineage{Layers: []Layer{parseLayer(canonicalChamberPath(logicalPath), entry)}}, nil
 }
 
 // ChamberError reports a stored chamber that cannot be parsed. Its message
@@ -123,12 +142,12 @@ func (e *ChamberError) Unwrap() error { return e.Err }
 
 // parseLayer parses a stored chamber into a layer at p; a chamber that cannot
 // be parsed sets the layer's Err to a ChamberError.
-func parseLayer(p string, value []byte) Layer {
+func parseLayer(p string, entry *StorageEntry) Layer {
 	c := &realm.Chamber{}
-	if err := json.Unmarshal(value, c); err != nil {
-		return Layer{Path: p, Err: &ChamberError{Path: p, Err: err}}
+	if err := json.Unmarshal(entry.Value, c); err != nil {
+		return Layer{Path: p, Err: &ChamberError{Path: p, Err: err}, Version: entry.Version}
 	}
-	return Layer{Path: p, Chamber: c}
+	return Layer{Path: p, Chamber: c, Version: entry.Version}
 }
 
 // canonicalChamberPath returns logicalPath cleaned, with a trailing slash.

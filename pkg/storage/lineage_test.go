@@ -470,3 +470,69 @@ func TestReadLineage(t *testing.T) {
 		t.Error("a path with .. was accepted")
 	}
 }
+
+// TestInheritedRevision verifies that the inherited view's revision is the
+// highest among the chamber and the parents it merges, on storage that
+// tracks revisions, and 0 on storage that does not.
+func TestInheritedRevision(t *testing.T) {
+	ctx := context.Background()
+	bolt, err := NewBoltStorage(map[string]string{"path": t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bolt.Close(ctx) })
+	inh, _ := NewInheritableStorage(bolt)
+	put := func(key string) uint64 {
+		t.Helper()
+		if err := bolt.Put(ctx, StorageEntry{Key: key, Value: []byte(`{"rules":{}}`)}); err != nil {
+			t.Fatal(err)
+		}
+		e, err := bolt.Get(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e.Version
+	}
+	revision := func() uint64 {
+		t.Helper()
+		e, err := inh.Get(ctx, "/a/b/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e.Version
+	}
+
+	own := put("/a/b/")
+	if got := revision(); got != own {
+		t.Errorf("without parents: %d, want the chamber's own %d", got, own)
+	}
+	parent := put("/a/")
+	if got := revision(); got != parent {
+		t.Errorf("after a parent write: %d, want %d", got, parent)
+	}
+	root := put("/")
+	if got := revision(); got != root {
+		t.Errorf("after a root write: %d, want %d", got, root)
+	}
+	own = put("/a/b/")
+	if got := revision(); got != own {
+		t.Errorf("after the chamber's write: %d, want %d", got, own)
+	}
+	lin, err := ReadLineage(ctx, inh, "/a/b/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lin.Revision(); got != own {
+		t.Errorf("lineage revision %d, want %d", got, own)
+	}
+
+	// storage without revisions has none to report
+	plain, _ := NewInheritableStorage(newLineageTree(nil))
+	e, err := plain.Get(ctx, "/a/b/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Version != 0 {
+		t.Errorf("unversioned storage: revision %d, want 0", e.Version)
+	}
+}

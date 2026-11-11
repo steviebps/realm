@@ -103,6 +103,16 @@ type ChamberEntry struct {
 	// version caches the "version" attribute and its canonical semver form,
 	// so semver clauses on the process-wide version do not allocate.
 	version semverCache
+	// revision is the server's storage revision of the chamber; 0 when
+	// unknown.
+	revision uint64
+}
+
+// Revision returns the server's storage revision of the chamber the entry
+// was built from (see Realm.Revision), or 0 when the server did not report
+// one.
+func (c *ChamberEntry) Revision() uint64 {
+	return c.revision
 }
 
 // NewChamberEntry creates a new ChamberEntry. The provided attributes are

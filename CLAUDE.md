@@ -35,7 +35,10 @@ manages keys over `/v1/keys`), and optional OIDC / GitHub **sign-in** with
 viewer / editor / admin roles for the UI.
 Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
 public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
-which also evaluates locally for Node services. Not yet built: revisioned
+which also evaluates locally for Node services. Reads, evaluations, and
+stream events carry the storage revision of the (inherited) chamber
+(`X-Realm-Revision`, event `id`), which the SDKs expose (`Realm.Revision(ctx)`,
+`revision()`). Not yet built: revisioned
 streams (resume with `Last-Event-ID`, SDKs rejecting stale data); with
 backends other than Postgres and etcd, run one replica. See
 `docs/ARCHITECTURE.md`, `docs/design/targeting.md`, `docs/design/auth.md`, and

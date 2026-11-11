@@ -31,6 +31,8 @@ export class ServerClient {
   readonly #options: ServerClientOptions;
   readonly #defaults: Record<string, string>;
   readonly #chamber = new Snapshot<Chamber>({ rules: {} }, asChamber);
+  // The server's revision of the chamber, if it reported one.
+  #revision: number | undefined;
   // The background refresh, while started.
   #running: { controller: AbortController; following: Following } | undefined;
 
@@ -58,7 +60,16 @@ export class ServerClient {
       'chambers',
       { method: 'GET' },
       'chamber',
-      this.#chamber,
+      {
+        set: (data, revision) => {
+          this.#chamber.set(data);
+          this.#revision = revision;
+        },
+        setRaw: (raw, revision) => {
+          this.#chamber.setRaw(raw);
+          this.#revision = revision;
+        },
+      },
       this.#options.streaming ?? true,
       pollingInterval(this.#options.pollingInterval, defaultPollingInterval),
       controller.signal,
@@ -83,6 +94,23 @@ export class ServerClient {
    */
   isReady(): boolean {
     return this.#chamber.raw !== '';
+  }
+
+  /**
+   * The server's storage revision of the chamber the client evaluates, for
+   * example to record on spans or logs which configuration a request ran
+   * under. It is the highest revision among the chamber and the parents it
+   * inherits from, so it changes whenever any of them does. It is undefined
+   * until a chamber arrives, and when the server does not report revisions
+   * (only servers on transactional storage, such as postgres, etcd, or
+   * boltdb, do). Revisions name a version of the chamber rather than order
+   * versions: deleting a parent chamber can lower it.
+   *
+   * A chamber that changes during a request changes the revision too; read
+   * it alongside the flags it describes.
+   */
+  revision(): number | undefined {
+    return this.#revision;
   }
 
   /** Calls listener whenever the chamber changes. Returns a function that unsubscribes. */

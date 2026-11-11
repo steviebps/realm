@@ -43,6 +43,7 @@ realm.string('banner', context, '');
 realm.number('max-items', context, 50);
 realm.json<{ limit: number }>('quota', context, { limit: 10 }); // a copy
 realm.allFlags(context); // every flag's value, for example to bootstrap a page
+realm.revision(); // the server's revision of the chamber, for example to tag spans and logs
 
 realm.stop();
 ```
@@ -62,9 +63,19 @@ await flags.start(); // rejects if the first evaluation fails, then keeps retryi
 
 flags.bool('new-checkout', false);
 flags.isReady(); // whether the values are the evaluation for the current context
+flags.revision(); // the server's revision of the chamber the values came from
 const unsubscribe = flags.subscribe(() => render()); // called when any value changes
 await flags.identify({ key: otherUser.id }); // re-evaluates for a new context
 ```
+
+`revision()` returns the server's storage revision of the chamber the client
+uses: the highest revision among the chamber and the parents it inherits
+from, so any of their writes changes it. It is `undefined` until the server's
+data arrives (a `BrowserClient` serving bootstrap or stored values has none),
+and when the server's storage does not track revisions; only transactional
+backends (`postgres`, `etcd`, `boltdb`) do. A revision names a version of the
+chamber; it does not order versions, since deleting a parent chamber can
+lower it.
 
 Use only an `evaluate` key in a browser. The server refuses `read` and
 `write` keys on browser requests (`start` rejects with a 403), so shipping one

@@ -322,21 +322,23 @@ func (rlm *Realm) snapshotVersion() uint64 {
 	return rlm.version
 }
 
-// setChamber replaces the snapshot with c.
-func (rlm *Realm) setChamber(c *Chamber) {
-	rlm.replace(c, false, 0)
+// setChamber replaces the snapshot with c, at the server's revision rev (0
+// when unknown).
+func (rlm *Realm) setChamber(c *Chamber, rev uint64) {
+	rlm.replace(c, rev, false, 0)
 }
 
-// setChamberIf replaces the snapshot with c, which was fetched while the
-// snapshot was at version, unless the snapshot has changed since: a newer
-// chamber (from the stream, say) arrived while c was in flight. It reports
-// whether it replaced the snapshot.
-func (rlm *Realm) setChamberIf(c *Chamber, version uint64) bool {
-	return rlm.replace(c, true, version)
+// setChamberIf replaces the snapshot with c, at the server's revision rev,
+// which was fetched while the snapshot was at version, unless the snapshot
+// has changed since: a newer chamber (from the stream, say) arrived while c
+// was in flight. It reports whether it replaced the snapshot.
+func (rlm *Realm) setChamberIf(c *Chamber, rev uint64, version uint64) bool {
+	return rlm.replace(c, rev, true, version)
 }
 
-func (rlm *Realm) replace(c *Chamber, conditional bool, version uint64) bool {
+func (rlm *Realm) replace(c *Chamber, rev uint64, conditional bool, version uint64) bool {
 	entry := NewChamberEntry(c, rlm.attributes)
+	entry.revision = rev
 	unsupported := c.unsupportedFlags()
 	rlm.mu.Lock()
 	if conditional && rlm.version != version {
@@ -389,6 +391,25 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 	c := rlm.getChamber()
 	ctx = context.WithValue(ctx, RequestContextKey, c)
 	return ctx
+}
+
+// Revision returns the server's storage revision of the chamber snapshot
+// pinned to ctx (see NewContext), or of the current snapshot when ctx has
+// none, so a service can record which configuration a request ran under (on
+// its spans or logs, say). It is the highest revision among the chamber and
+// the parents its inherited view merges, so it changes whenever any of them
+// does.
+//
+// It is 0 before a chamber has loaded, and when the server does not report
+// revisions: only servers on transactional storage (such as postgres, etcd,
+// or boltdb) do. Revisions identify a version of the chamber rather than
+// order versions: deleting a parent chamber can lower it.
+func (rlm *Realm) Revision(ctx context.Context) uint64 {
+	c := rlm.chamberFromContext(ctx)
+	if c == nil {
+		return 0
+	}
+	return c.revision
 }
 
 // NewContextWithEvaluation pins the current chamber snapshot (like NewContext)

@@ -34,7 +34,10 @@ func NewInheritableStorage(source Storage) (Storage, error) {
 	}, nil
 }
 
-// Get gets the entry at the specified logical path, inheriting all parent chambers if they exist
+// Get gets the entry at the specified logical path, inheriting all parent
+// chambers if they exist. The entry's Version is the revision of the
+// inherited view (see Lineage.Revision): the highest among the chamber and
+// the parents it merges.
 func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*StorageEntry, error) {
 	ctx, span := s.tracer.Start(ctx, "InheritableStorage Get", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
@@ -59,7 +62,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		return nil, err
 	}
 
-	return &StorageEntry{Key: logicalPath, Value: buf.Bytes()}, nil
+	return &StorageEntry{Key: logicalPath, Value: buf.Bytes(), Version: lin.Revision()}, nil
 }
 
 // Layers returns the chamber at logicalPath and each ancestor its inherited
@@ -118,7 +121,7 @@ func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*
 		return nil, err
 	}
 
-	layers := []Layer{parseLayer(canonicalChamberPath(logicalPath), leafEntry.Value)}
+	layers := []Layer{parseLayer(canonicalChamberPath(logicalPath), leafEntry)}
 	for _, p := range consultedAncestors(logicalPath) {
 		entry, err := s.source.Get(ctx, p)
 		if err != nil {
@@ -131,7 +134,7 @@ func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*
 			}
 			return nil, err
 		}
-		layer := parseLayer(p, entry.Value)
+		layer := parseLayer(p, entry)
 		if layer.Err != nil {
 			// skipping it would silently drop its flags (kill switches
 			// included) from every chamber below it

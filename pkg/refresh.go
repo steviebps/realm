@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -224,7 +225,7 @@ func (l *failureLog) ok() (int, bool) {
 // it was being fetched. Failures are logged, rate-limited.
 func (rlm *Realm) load(ctx context.Context) error {
 	version := rlm.snapshotVersion()
-	c, err := rlm.retrieveChamber(ctx, rlm.path)
+	c, rev, err := rlm.retrieveChamber(ctx, rlm.path)
 	if err != nil {
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			if log, n := rlm.loadFailures.fail(time.Now()); log {
@@ -238,7 +239,7 @@ func (rlm *Realm) load(ctx context.Context) error {
 		}
 		return err
 	}
-	rlm.setChamberIf(c, version)
+	rlm.setChamberIf(c, rev, version)
 	if n, reported := rlm.loadFailures.ok(); reported {
 		rlm.logger.InfoCtx(ctx).Str("path", rlm.path).Int("failures", n).Msg("flags loaded after earlier failures")
 	}
@@ -434,7 +435,7 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		if err != nil {
 			return false, idleErr(fmt.Errorf("chamber stream: the server answered with neither an event stream nor a chamber: %w", err))
 		}
-		rlm.setChamberIf(c, version)
+		rlm.setChamberIf(c, parseRevision(resp.Header.Get(api.RevisionHeader)), version)
 		return false, errNotStreaming
 	}
 
@@ -442,6 +443,7 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 	scanner.Buffer(make([]byte, 0, 64*1024), maxChamberBytes)
 	var (
 		event   string
+		id      string
 		data    []byte
 		hasData bool
 	)
@@ -452,11 +454,11 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 			// A blank line dispatches the event. Only chamber events (or
 			// unnamed ones) carry a chamber; others, which a newer server may
 			// send, are skipped.
-			if hasData && (event == "" || event == "chamber") && rlm.applyEvent(ctx, data) && !received {
+			if hasData && (event == "" || event == "chamber") && rlm.applyEvent(ctx, data, parseRevision(id)) && !received {
 				received = true
 				delivered()
 			}
-			event, data, hasData = "", data[:0], false
+			event, id, data, hasData = "", "", data[:0], false
 			continue
 		}
 		field, value, _ := bytes.Cut(line, []byte(":"))
@@ -464,6 +466,9 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		switch string(field) {
 		case "event":
 			event = string(value)
+		case "id":
+			// the revision the event's chamber was read at
+			id = string(value)
 		case "data":
 			if hasData {
 				data = append(data, '\n')
@@ -471,8 +476,7 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 			data = append(data, value...)
 			hasData = true
 		}
-		// Comments (": ping" heartbeats) and the id and retry fields need
-		// nothing.
+		// Comments (": ping" heartbeats) and the retry field need nothing.
 	}
 
 	err = scanner.Err()
@@ -482,10 +486,10 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 	return received, idleErr(err)
 }
 
-// applyEvent applies the chamber an event carries, reporting whether it did.
-// One that does not hold a chamber is skipped (the last one stays) and
-// logged, rate-limited.
-func (rlm *Realm) applyEvent(ctx context.Context, data []byte) bool {
+// applyEvent applies the chamber an event carries, at the server's revision
+// rev (0 when unknown), reporting whether it did. One that does not hold a
+// chamber is skipped (the last one stays) and logged, rate-limited.
+func (rlm *Realm) applyEvent(ctx context.Context, data []byte, rev uint64) bool {
 	c, err := decodeChamber(data)
 	if err != nil {
 		if log, n := rlm.badEvents.fail(time.Now()); log {
@@ -494,11 +498,23 @@ func (rlm *Realm) applyEvent(ctx context.Context, data []byte) bool {
 		return false
 	}
 	_, _ = rlm.badEvents.ok()
-	rlm.setChamber(c)
+	rlm.setChamber(c, rev)
 	return true
 }
 
-func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber, err error) {
+// parseRevision parses a revision the server sent (see api.RevisionHeader),
+// returning 0 when there is none or it is not a revision.
+func parseRevision(s string) uint64 {
+	rev, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return rev
+}
+
+// retrieveChamber fetches the chamber at path, with the server's revision of
+// it (0 when the server reports none).
+func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber, rev uint64, err error) {
 	ctx, span := rlm.tracer.Start(ctx, "retrieveChamber", trace.WithAttributes(attribute.String("realm.path", path)))
 	defer func() {
 		if err != nil {
@@ -513,17 +529,21 @@ func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber,
 
 	res, err := rlm.client.PerformRequest(ctx, http.MethodGet, strings.TrimPrefix(path, "/"), nil)
 	if err != nil {
-		return nil, fmt.Errorf("could not get %q: %w", path, err)
+		return nil, 0, fmt.Errorf("could not get %q: %w", path, err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("could not get %q: %w", path, newStatusError(res))
+		return nil, 0, fmt.Errorf("could not get %q: %w", path, newStatusError(res))
 	}
 	c, err := readChamberResponse(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("could not read %q: %w", path, err)
+		return nil, 0, fmt.Errorf("could not read %q: %w", path, err)
 	}
-	return c, nil
+	rev = parseRevision(res.Header.Get(api.RevisionHeader))
+	if rev != 0 {
+		span.SetAttributes(attribute.Int64("realm.revision", int64(min(rev, math.MaxInt64))))
+	}
+	return c, rev, nil
 }
 
 // readChamberResponse reads a response envelope holding a chamber, of at

@@ -2,6 +2,8 @@
 export interface ServerSentEvent {
   event: string;
   data: string;
+  /** The event's own id field, if it had one; ids do not carry over between events. */
+  id?: string;
 }
 
 /**
@@ -18,12 +20,18 @@ export async function readEvents(
   const decoder = new TextDecoder();
   let buffer = '';
   let event = '';
+  let id: string | undefined;
   let data: string[] = [];
 
   const line = (l: string) => {
     if (l === '') {
-      if (data.length > 0) onEvent({ event: event || 'message', data: data.join('\n') });
+      if (data.length > 0) {
+        const ev: ServerSentEvent = { event: event || 'message', data: data.join('\n') };
+        if (id !== undefined) ev.id = id;
+        onEvent(ev);
+      }
       event = '';
+      id = undefined;
       data = [];
       return;
     }
@@ -34,6 +42,7 @@ export async function readEvents(
     if (value[0] === ' ') value = value.slice(1);
     if (field === 'event') event = value;
     else if (field === 'data') data.push(value);
+    else if (field === 'id') id = value;
   };
 
   try {

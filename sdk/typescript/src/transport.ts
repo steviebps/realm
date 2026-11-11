@@ -44,10 +44,27 @@ export interface ClientOptions {
  * refresh that keeps the last data.
  */
 export interface Sink {
-  /** Receives already-parsed data, from a request. */
-  set(data: unknown): void;
-  /** Receives JSON text, from an event stream. */
-  setRaw(raw: string): void;
+  /**
+   * Receives already-parsed data, from a request, with the server's revision
+   * of it (see parseRevision), if the server reported one.
+   */
+  set(data: unknown, revision: number | undefined): void;
+  /** Receives JSON text, from an event stream, with its revision as set does. */
+  setRaw(raw: string, revision: number | undefined): void;
+}
+
+/** The response header carrying the server's storage revision of a read. */
+const revisionHeader = 'X-Realm-Revision';
+
+/**
+ * Parses a revision the server sent (its revision header, or an event's id):
+ * a positive integer, or undefined when there is none or it is not one.
+ * Revisions JavaScript cannot represent exactly are treated as missing.
+ */
+export function parseRevision(value: string | null | undefined): number | undefined {
+  if (!value || !/^\d+$/.test(value.trim())) return undefined;
+  const revision = Number(value.trim());
+  return Number.isSafeInteger(revision) && revision > 0 ? revision : undefined;
 }
 
 /** A route a Transport keeps current; see Transport.follow. */
@@ -201,6 +218,16 @@ export class Transport {
    * arrives within the request timeout.
    */
   async request(route: 'chambers' | 'evaluate', init: RequestInit, signal?: AbortSignal): Promise<unknown> {
+    return (await this.#request(route, init, signal)).data;
+  }
+
+  // request performs a request as request does, and also returns the
+  // revision the server reported.
+  async #request(
+    route: 'chambers' | 'evaluate',
+    init: RequestInit,
+    signal?: AbortSignal,
+  ): Promise<{ data: unknown; revision: number | undefined }> {
     const d = deadline(this.#timeout, signal);
     try {
       const res = await this.#fetch(this.url(route), this.#init(init, 'application/json', d.signal));
@@ -209,7 +236,7 @@ export class Transport {
       if (!res.ok) throw await errorFrom(res, body);
       // For example, a captive portal's login page.
       if (body === undefined) throw new RealmError('the server did not return JSON', res.status);
-      return isRecord(body) ? body.data : undefined;
+      return { data: isRecord(body) ? body.data : undefined, revision: parseRevision(res.headers.get(revisionHeader)) };
     } catch (e) {
       throw d.expired() ? d.error() : e;
     } finally {
@@ -257,8 +284,8 @@ export class Transport {
   ): Promise<void> {
     // load requests the data and delivers it, unless its signal aborted first.
     const load = async (signal: AbortSignal) => {
-      const data = await this.request(route, init, signal);
-      if (!signal.aborted) sink.set(data);
+      const { data, revision } = await this.#request(route, init, signal);
+      if (!signal.aborted) sink.set(data, revision);
     };
     let failure: Error | undefined;
     try {
@@ -338,7 +365,7 @@ export class Transport {
           (ev) => {
             if (ev.event !== event || signal.aborted) return;
             try {
-              sink.setRaw(ev.data);
+              sink.setRaw(ev.data, parseRevision(ev.id));
             } catch (e) {
               // The stream stays open, and the last data in use.
               const notJSON = e instanceof SyntaxError;
