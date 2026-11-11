@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"math/rand/v2"
 	"net/http"
 	"strconv"
@@ -541,7 +540,8 @@ func (rlm *Realm) retrieveChamber(ctx context.Context, path string) (_ *Chamber,
 	}
 	rev = parseRevision(res.Header.Get(api.RevisionHeader))
 	if rev != 0 {
-		span.SetAttributes(attribute.Int64("realm.revision", int64(min(rev, math.MaxInt64))))
+		// as decimal text, like the header: an int64 cannot hold every revision
+		span.SetAttributes(attribute.String("realm.revision", strconv.FormatUint(rev, 10)))
 	}
 	return c, rev, nil
 }

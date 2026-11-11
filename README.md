@@ -616,7 +616,7 @@ storage does not track revisions.
 
 ```go
 ctx = rlm.NewContext(ctx)
-span.SetAttributes(attribute.Int64("realm.revision", int64(rlm.Revision(ctx))))
+span.SetAttributes(attribute.String("realm.revision", strconv.FormatUint(rlm.Revision(ctx), 10)))
 ```
 
 The SDK reads flags written by newer realm servers: a targeting rule that uses
