@@ -18,7 +18,8 @@ binary is three things at once:
 switches, synchronized across application zones, with progressive rollout.
 
 **Honest current state:** flags are grouped into hierarchical **chambers** that
-inherit from their parents. Each flag has a default value and ordered
+inherit from their parents; a parent can **seal** a flag so chambers below it
+cannot override it. Each flag has a default value and ordered
 **targeting rules** matched against context attributes (tenant, location,
 environment, service, semver `version`, `buildSha`, …), each optionally
 limited to a **deterministic percentage rollout** and/or a one-off **schedule**
@@ -58,6 +59,10 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   `overrides`/`rollout` fields. A flag of a type this version does not know
   decodes (kept raw, re-marshaled unchanged) but cannot be served: getters
   return the caller's default with an error, and `Chamber.Evaluate` omits it.
+  `Sealed` keeps chambers below the flag's chamber from overriding it:
+  `Lineage.Merge` serves the farthest sealing ancestor's definition and hides
+  nearer ones, and the server refuses writes below it that add or change
+  the flag (an unchanged definition stored before the seal may stay).
 - **TargetingRule** — `Clauses` (ANDed), a `Value`, an optional `Rollout`, and
   an optional `Schedule`.
 - **Clause** — `{attribute, op, values}`; ops `in`, `notIn`, `startsWith`,

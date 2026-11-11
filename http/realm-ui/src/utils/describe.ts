@@ -55,6 +55,9 @@ export const describeDefinition = (flag: Flag, catalog: Catalog): string[] =>
     ? describeFlag(flag, catalog)
     : [`No targeting: every context gets ${formatValue(flag.value)}.`];
 
+/** How a change describes a flag's seal. */
+const SEALED = "Sealed: chambers below this one can't override it";
+
 /**
  * Computes a human-readable diff between two chambers, flag by flag, so an
  * editor can confirm exactly what will change before saving.
@@ -74,6 +77,7 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
         kind: 'added',
         lines: [
           { kind: 'info', text: `Type: ${now.type}` },
+          ...(now.sealed ? [{ kind: 'info' as const, text: SEALED }] : []),
           ...describeFlag(now, catalog).map((text) => ({ kind: 'add' as const, text })),
         ],
       });
@@ -92,6 +96,9 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
     }
 
     const lines: FlagChange['lines'] = [];
+    if (Boolean(was.sealed) !== Boolean(now.sealed)) {
+      lines.push({ kind: now.sealed ? 'add' : 'remove', text: SEALED });
+    }
     if (!same(was.value, now.value)) {
       lines.push({ kind: 'remove', text: `Default: ${formatValue(was.value)}` });
       lines.push({ kind: 'add', text: `Default: ${formatValue(now.value)}` });

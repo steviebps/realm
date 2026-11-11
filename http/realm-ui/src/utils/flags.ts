@@ -1,4 +1,5 @@
-import { Flag, FlagValue, RuleType } from '../models/response';
+// Type imports only, so node:test can run this file with Node's type stripping.
+import type { Flag, FlagValue, RuleType } from '../models/response';
 
 /** The initial value for a new flag or rule of the given type. */
 export const defaultValueFor = (type: RuleType): FlagValue => {
@@ -30,4 +31,17 @@ export const validateFlag = (flag: Flag): string[] => {
     }
   });
   return problems;
+};
+
+/**
+ * Returns flag sealed or not. The seal sits where the server writes it (after the default value), and an unsealed
+ * flag has no `sealed` key, so toggling the seal off and on again leaves the flag as it was.
+ */
+export const withSealed = (flag: Flag, sealed: boolean): Flag => {
+  const next: Flag = { type: flag.type, value: flag.value, ...(sealed ? { sealed: true } : {}) };
+  // the other fields, in their order, after the seal
+  for (const [key, v] of Object.entries(flag)) {
+    if (key !== 'sealed' && !(key in next)) Object.assign(next, { [key]: v });
+  }
+  return next;
 };

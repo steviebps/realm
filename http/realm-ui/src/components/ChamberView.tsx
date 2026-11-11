@@ -87,6 +87,9 @@ export const ChamberView = ({ path }: { path: string }) => {
   ).sort();
   const typed = newName.trim();
   const typedInherited = typed in own.rules ? undefined : get(prov?.inherited, typed);
+  // a parent that seals the typed key: this chamber cannot define it
+  const typedSealedBy = typed in own.rules ? undefined : get(prov?.sealedBy, typed);
+  const cannotAdd = !typed || typed in own.rules || typedSealedBy !== undefined;
 
   const propose = (title: string, apply: Proposal['apply']) => {
     setProposal({ title, apply, base: data, after: apply(structuredClone(own)), saving: false });
@@ -173,25 +176,31 @@ export const ChamberView = ({ path }: { path: string }) => {
             <FlagTable labelledBy="flags-heading">
               {ownNames.map((name) => {
                 const flag = own.rules[name];
+                // a definition saved before a parent sealed the flag: not served, and the server refuses changes
+                const hiddenBy = get(prov?.sealedBy, name);
                 return (
                   <FlagRow
                     key={name}
                     name={name}
                     flag={flag}
-                    served={prov?.own[name]}
+                    served={get(prov?.own, name)}
                     here={here}
                     catalog={catalog}
+                    muted={hiddenBy !== undefined}
+                    hiddenBy={hiddenBy}
                     actions={
                       canEdit && (
                         <>
-                          <Button
-                            size="xs"
-                            color="light"
-                            aria-label={`Edit ${name}`}
-                            onClick={() => setEditing({ name, flag, isNew: false })}
-                          >
-                            <HiPencil className="mr-1" /> Edit
-                          </Button>
+                          {hiddenBy === undefined && (
+                            <Button
+                              size="xs"
+                              color="light"
+                              aria-label={`Edit ${name}`}
+                              onClick={() => setEditing({ name, flag, isNew: false })}
+                            >
+                              <HiPencil className="mr-1" /> Edit
+                            </Button>
+                          )}
                           <Button
                             size="xs"
                             color="light"
@@ -226,7 +235,7 @@ export const ChamberView = ({ path }: { path: string }) => {
               onSubmit={(e) => {
                 e.preventDefault();
                 const name = newName.trim();
-                if (!name || name in own.rules) return;
+                if (cannotAdd) return;
                 setEditing({ name, flag: { type: newType, value: defaultValueFor(newType) }, isNew: true });
                 setNewName('');
               }}
@@ -239,16 +248,23 @@ export const ChamberView = ({ path }: { path: string }) => {
                   className="[&_input]:font-mono"
                   placeholder="checkout.newFlow"
                   value={newName}
-                  color={newName.trim() in own.rules ? 'failure' : undefined}
-                  aria-describedby={typedInherited ? 'new-flag-hint' : undefined}
+                  color={typed in own.rules || typedSealedBy !== undefined ? 'failure' : undefined}
+                  aria-describedby={typedInherited || typedSealedBy !== undefined ? 'new-flag-hint' : undefined}
                   onChange={(e) => setNewName(e.target.value)}
                 />
-                {typedInherited && (
-                  <p id="new-flag-hint" className="mt-1 text-xs text-gray-600 dark:text-gray-400">
-                    <span className="font-mono">{typed}</span> is inherited from{' '}
-                    <span className="font-mono">{typedInherited.source}</span> ({typedInherited.flag.type}). Adding it
-                    here overrides that definition.
+                {typedSealedBy !== undefined ? (
+                  <p id="new-flag-hint" className="mt-1 text-xs text-red-700 dark:text-red-400">
+                    <span className="font-mono">{typed}</span> is sealed by{' '}
+                    <span className="font-mono">{typedSealedBy}</span>, so chambers below it can&rsquo;t define it.
                   </p>
+                ) : (
+                  typedInherited && (
+                    <p id="new-flag-hint" className="mt-1 text-xs text-gray-600 dark:text-gray-400">
+                      <span className="font-mono">{typed}</span> is inherited from{' '}
+                      <span className="font-mono">{typedInherited.source}</span> ({typedInherited.flag.type}). Adding it
+                      here overrides that definition.
+                    </p>
+                  )
                 )}
               </div>
               <div>
@@ -265,7 +281,7 @@ export const ChamberView = ({ path }: { path: string }) => {
                   <option value="custom">custom (JSON)</option>
                 </Select>
               </div>
-              <Button type="submit" size="sm" disabled={!newName.trim() || newName.trim() in own.rules}>
+              <Button type="submit" size="sm" disabled={cannotAdd}>
                 <HiPlus className="mr-1" /> Add flag
               </Button>
             </form>

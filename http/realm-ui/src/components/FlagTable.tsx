@@ -1,6 +1,6 @@
 import { useId, useState } from 'react';
 import { Badge } from 'flowbite-react';
-import { HiChevronRight } from 'react-icons/hi';
+import { HiChevronRight, HiLockClosed } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
 import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
 import { describeDefinition, formatValue, same } from '../utils/describe';
@@ -170,6 +170,27 @@ const DefinitionChain = ({ served, here, catalog }: { served: Served; here: stri
   );
 };
 
+/** The chambers whose definitions a sealed flag's seal hides, nearest first. */
+const HiddenDefinitions = ({ served, here, catalog }: { served: Served; here: string; catalog: Catalog }) => (
+  <div className="flex flex-col gap-1.5">
+    <p>
+      Its seal hides the definitions these chambers saved before it, so they serve this one instead. Those definitions
+      can be deleted but not changed:
+    </p>
+    <ul className="flex flex-col gap-1">
+      {served.hidden.map(({ path, flag }) => (
+        <li key={path} className="flex flex-col gap-x-3 sm:flex-row">
+          <span className="shrink-0 sm:w-40">{path === here ? 'This chamber' : <PathLink path={path} />}</span>
+          <span className="text-gray-600 dark:text-gray-400">
+            {describeDefinition(flag, catalog).join(' · ')}
+            {flag.type !== served.flag.type && ` (${flag.type})`}
+          </span>
+        </li>
+      ))}
+    </ul>
+  </div>
+);
+
 /**
  * One flag: its key and type, the value it serves by default, and its
  * targeting at a glance. The key opens the flag's details: its definition in
@@ -183,6 +204,7 @@ export const FlagRow = ({
   here,
   catalog,
   muted,
+  hiddenBy,
   actions,
   detailActions,
 }: {
@@ -194,6 +216,11 @@ export const FlagRow = ({
   here: string;
   catalog: Catalog;
   muted?: boolean;
+  /**
+   * The parent that seals the flag, when this row is the chamber's own definition of it: the definition is not
+   * served.
+   */
+  hiddenBy?: string;
   /** Controls at the end of the row. */
   actions?: React.ReactNode;
   /** Controls at the end of the details panel. */
@@ -205,6 +232,7 @@ export const FlagRow = ({
   const rollouts = rules.filter((r) => r.rollout).length;
   const scheduled = rules.filter((r) => r.schedule && !scheduleEnded(r.schedule)).length;
   const overridden = served?.overrides[0]?.path;
+  const source = served?.source ?? here;
   return (
     <>
       <div
@@ -238,6 +266,29 @@ export const FlagRow = ({
                 title={`Replaces ${overridden}'s definition entirely: its default and all of its rules.`}
               >
                 Overrides <Mono>{overridden}</Mono>
+              </Badge>
+            )}
+            {flag.sealed && !hiddenBy && (
+              <Badge
+                color="purple"
+                size="xs"
+                className="inline-flex align-middle font-medium"
+                title={`Chambers below ${source} can't override it.`}
+              >
+                <span className="inline-flex items-center gap-1">
+                  <HiLockClosed aria-hidden="true" className="h-3 w-3" />
+                  Sealed
+                </span>
+              </Badge>
+            )}
+            {hiddenBy && (
+              <Badge
+                color="warning"
+                size="xs"
+                className="inline-flex align-middle font-medium"
+                title={`${hiddenBy} seals this flag, so its definition is served here instead of this one.`}
+              >
+                Hidden: sealed by <Mono>{hiddenBy}</Mono>
               </Badge>
             )}
           </div>
@@ -286,8 +337,22 @@ export const FlagRow = ({
                   <span key={line}>{line}</span>
                 ))}
               </div>
+              {hiddenBy && (
+                <p>
+                  Not served: <PathLink path={hiddenBy} /> seals <Mono>{name}</Mono>, so its definition is served here
+                  instead. This definition was saved before the seal. It can be deleted, but not changed.
+                </p>
+              )}
+              {flag.sealed && !hiddenBy && (
+                <p>
+                  Sealed: chambers below <ChamberRef path={source} here={here} /> can&rsquo;t override it.
+                </p>
+              )}
               {served && served.overrides.length > 0 && (
                 <DefinitionChain served={served} here={here} catalog={catalog} />
+              )}
+              {served && served.hidden.length > 0 && (
+                <HiddenDefinitions served={served} here={here} catalog={catalog} />
               )}
               {served && served.source === here && overridden && (
                 <p>

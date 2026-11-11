@@ -173,6 +173,12 @@ below the root lists the root chamber `/`, so a key scoped beneath `/` gets
 read chambers are unaffected. The inherited view (`GET /v1/chambers/<path>`)
 is unchanged: it serves the root's flags like any parent's.
 
+A seal binds every writer below the chamber that seals the flag, admins
+included: to change a sealed flag, write the chamber that seals it. A write
+key scoped beneath that chamber gets `400` naming it, even though the key
+cannot read it. The name is only a path, and the writer needs it to know whom
+to ask.
+
 The attribute catalog belongs to the whole realm, not to a chamber, and its
 labels can name every tenant or location. So only `read` and `write` keys
 scoped to `/` may read it. A key scoped to `/prod/` cannot, even though some
