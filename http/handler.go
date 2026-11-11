@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -361,10 +362,28 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 
 		// commit applies the write and responds with status on success.
 		commit := func(status int) {
-			etag, err := writeChamber(ctx, meta, r, req, &body)
+			// The flags parents seal are read before the write, not with it:
+			// a seal that lands meanwhile still hides what this write
+			// stores (Lineage.Merge enforces seals; this check explains them).
+			var seals map[string]string
+			if req.Operation == PutOperation || req.Operation == PatchOperation {
+				var err error
+				if seals, err = storage.ReadAncestorSeals(ctx, strg, req.Path); err != nil {
+					if errors.Is(err, storage.ErrInvalidPath) {
+						fail(http.StatusBadRequest, err)
+					} else {
+						fail(http.StatusInternalServerError, err)
+					}
+					return
+				}
+			}
+			etag, err := writeChamber(ctx, meta, r, req, &body, seals)
 			var pf *preconditionError
 			var nf *storage.NotFoundError
+			var se *sealedError
 			switch {
+			case errors.As(err, &se):
+				fail(http.StatusBadRequest, se)
 			case errors.As(err, &pf):
 				if pf.current != "" {
 					w.Header().Set("ETag", pf.current)
@@ -541,12 +560,75 @@ type preconditionError struct {
 
 func (e *preconditionError) Error() string { return "precondition failed" }
 
+// sealedFlag is a flag a write would define although a parent seals it.
+type sealedFlag struct {
+	key string
+	by  string
+}
+
+// sealedError refuses a write that adds or changes flags that parent
+// chambers seal.
+type sealedError struct {
+	flags []sealedFlag
+}
+
+func (e *sealedError) Error() string {
+	if len(e.flags) == 1 {
+		f := e.flags[0]
+		return fmt.Sprintf("flag %q is sealed by %s: chambers below it cannot define it", f.key, f.by)
+	}
+	parts := make([]string, len(e.flags))
+	for i, f := range e.flags {
+		parts[i] = fmt.Sprintf("%q (by %s)", f.key, f.by)
+	}
+	return "flags are sealed by parent chambers, which chambers below them cannot define: " + strings.Join(parts, ", ")
+}
+
+// checkSeals refuses next, the chamber a write would store, when it adds a
+// flag that a parent seals (seals is from AncestorSeals) or changes the
+// stored definition of one. A definition stored before the seal may stay as
+// it is, hidden, so the chamber can still be edited. stored is the chamber as
+// stored, or nil.
+func checkSeals(seals map[string]string, stored *storage.StorageEntry, next *realm.Chamber) error {
+	if len(seals) == 0 {
+		return nil
+	}
+	var before realm.Chamber
+	if stored != nil {
+		// a stored chamber that cannot be parsed keeps no definition
+		_ = json.Unmarshal(stored.Value, &before)
+	}
+	var refused []sealedFlag
+	for _, key := range slices.Sorted(maps.Keys(next.Rules)) {
+		by, ok := seals[key]
+		if !ok {
+			continue
+		}
+		if old, had := before.Rules[key]; had && sameFlag(old, next.Rules[key]) {
+			continue
+		}
+		refused = append(refused, sealedFlag{key: key, by: by})
+	}
+	if len(refused) > 0 {
+		return &sealedError{flags: refused}
+	}
+	return nil
+}
+
+// sameFlag reports whether a and b are written the same.
+func sameFlag(a, b *realm.Flag) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(x, y)
+}
+
 // writeChamber applies a PUT, PATCH, or DELETE of req.Path and records it in
 // the chamber's history, atomically, and returns the chamber's new ETag
 // (empty after a delete). Conditional headers are checked against the chamber
 // as stored, and a PATCH merges into it rather than its inherited view, so
-// inherited rules are never copied into the child.
-func writeChamber(ctx context.Context, meta *metaStore, r *http.Request, req *AgentRequest, body *realm.Chamber) (string, error) {
+// inherited rules are never copied into the child. A PUT or PATCH that adds or
+// changes a flag in seals (from AncestorSeals) is refused with a sealedError.
+func writeChamber(ctx context.Context, meta *metaStore, r *http.Request, req *AgentRequest, body *realm.Chamber, seals map[string]string) (string, error) {
 	var etag string
 	indexKey := historyIndexKey(req.Path)
 	err := storage.Update(ctx, meta.strg, []string{req.Path, indexKey}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
@@ -563,6 +645,9 @@ func writeChamber(ctx context.Context, meta *metaStore, r *http.Request, req *Ag
 		var err error
 		switch req.Operation {
 		case PutOperation:
+			if err := checkSeals(seals, stored, body); err != nil {
+				return nil, err
+			}
 			value, err = json.Marshal(body)
 		case PatchOperation:
 			if stored == nil {
@@ -573,6 +658,9 @@ func writeChamber(ctx context.Context, meta *metaStore, r *http.Request, req *Ag
 				return nil, fmt.Errorf("could not unmarshal current chamber while patching: %w", err)
 			}
 			merged.OverwriteFrom(body)
+			if err := checkSeals(seals, stored, &merged); err != nil {
+				return nil, err
+			}
 			value, err = json.Marshal(&merged)
 		case DeleteOperation:
 			if stored == nil {

@@ -191,3 +191,48 @@ void test('flag keys never match Object.prototype members', () => {
   );
   assert.deepEqual(a.overridden, []);
 });
+
+void test('a sealed flag is served from its seal, hiding nearer definitions', () => {
+  const sealed = { ...bool(false), sealed: true };
+  const p = provenance({
+    inheritable: true,
+    layers: [
+      { path: '/t/a/', status: 'ok', rules: { entitlement: bool(true), own: num(1) } },
+      { path: '/t/', status: 'ok', rules: { entitlement: bool(true), limit: num(5) } },
+      { path: '/', status: 'ok', rules: { entitlement: sealed, limit: num(1) } },
+    ],
+    sources: { entitlement: '/', limit: '/t/', own: '/t/a/' },
+    sealedBy: { entitlement: '/' },
+    hidden: { entitlement: ['/t/a/', '/t/'] },
+  });
+  assert.deepEqual(p.sealedBy, { entitlement: '/' });
+  // the chamber's own definition is hidden, not served
+  assert.deepEqual(Object.keys(p.own), ['own']);
+  const entitlement = p.inherited?.entitlement;
+  assert.equal(entitlement?.source, '/');
+  assert.equal(entitlement?.sealedBy, '/');
+  assert.deepEqual(entitlement?.hidden, [
+    { path: '/t/a/', flag: bool(true) },
+    { path: '/t/', flag: bool(true) },
+  ]);
+  assert.deepEqual(entitlement?.overrides, []);
+  assert.equal(p.inherited?.limit.sealedBy, undefined);
+  assert.deepEqual(p.inherited?.limit.hidden, []);
+
+  const [t, root] = p.stack;
+  assert.ok(t.kind === 'layer' && root.kind === 'layer');
+  assert.deepEqual(t.hidden, [{ name: 'entitlement', by: '/' }]);
+  assert.deepEqual(t.overridden, []);
+  assert.deepEqual(
+    t.served.map((s) => s.name),
+    ['limit']
+  );
+  assert.deepEqual(root.overridden, [{ name: 'limit', by: '/t/' }]);
+  assert.deepEqual(root.hidden, []);
+});
+
+void test('a server that predates seals seals nothing', () => {
+  const p = provenance(canary);
+  assert.deepEqual(p.sealedBy, {});
+  for (const served of Object.values(p.inherited ?? {})) assert.deepEqual(served.hidden, []);
+});

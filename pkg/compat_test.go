@@ -94,6 +94,7 @@ func TestParseChamberRejectsUnknownTypesAndOperators(t *testing.T) {
 		{"unknown operator, other values", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"clauses":[{"attribute":"n","op":"between","values":[1,2]}],"value":false}]}}}`, `flag "a": targeting rule #1: clause on "n": unsupported operator "between"`},
 		{"unknown type", `{"rules":{"a":{"type":"futureType","value":1}}}`, `flag "a": type "futureType" is currently not supported`},
 		{"no type", `{"rules":{"a":{"value":1}}}`, `flag "a": type "" is currently not supported`},
+		{"sealed", `{"rules":{"a":{"type":"boolean","value":true,"sealed":true}}}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

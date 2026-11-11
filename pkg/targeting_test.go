@@ -548,3 +548,47 @@ func TestProcessVersionMatchesAsGiven(t *testing.T) {
 		t.Errorf("semver clause on the process version allocated %v times", allocs)
 	}
 }
+
+func TestFlagSealed(t *testing.T) {
+	tests := []struct {
+		name       string
+		flag       string
+		wantSealed bool
+		wantOut    string
+		wantErr    string
+	}{
+		{name: "sealed", flag: `{"type":"boolean","value":false,"sealed":true}`, wantSealed: true, wantOut: `{"type":"boolean","value":false,"sealed":true}`},
+		{name: "not sealed is omitted", flag: `{"type":"boolean","value":false,"sealed":false}`, wantOut: `{"type":"boolean","value":false}`},
+		{name: "absent", flag: `{"type":"number","value":1}`, wantOut: `{"type":"number","value":1}`},
+		{name: "matched like other fields, case-insensitively", flag: `{"type":"boolean","value":false,"Sealed":true}`, wantSealed: true, wantOut: `{"type":"boolean","value":false,"sealed":true}`},
+		{name: "with targeting", flag: `{"type":"string","value":"a","sealed":true,"targeting":[{"value":"b"}]}`, wantSealed: true, wantOut: `{"type":"string","value":"a","sealed":true,"targeting":[{"value":"b"}]}`},
+		// a newer realm's flag still seals, and is kept as it was read
+		{name: "unknown type", flag: `{"type":"futureType","sealed":true,"value":{"v":1}}`, wantSealed: true, wantOut: `{"type":"futureType","sealed":true,"value":{"v":1}}`},
+		{name: "not a boolean", flag: `{"type":"boolean","value":false,"sealed":"yes"}`, wantErr: "sealed: "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var f Flag
+			err := json.Unmarshal([]byte(tt.flag), &f)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want one containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if f.Sealed != tt.wantSealed {
+				t.Errorf("Sealed = %v, want %v", f.Sealed, tt.wantSealed)
+			}
+			out, err := json.Marshal(&f)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(out) != tt.wantOut {
+				t.Errorf("marshaled %s, want %s", out, tt.wantOut)
+			}
+		})
+	}
+}

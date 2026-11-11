@@ -319,10 +319,10 @@ func TestLayers(t *testing.T) {
 				t.Errorf("layers =\n  %v\nwant\n  %v", got, tt.wantLayers)
 			}
 
-			sources, err := lin.Sources()
+			res, err := lin.Resolve()
 			if tt.wantMerge != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantMerge) {
-					t.Fatalf("Sources error = %v, want one containing %q", err, tt.wantMerge)
+					t.Fatalf("Resolve error = %v, want one containing %q", err, tt.wantMerge)
 				}
 				if _, mergeErr := lin.Merge(); mergeErr == nil || mergeErr.Error() != err.Error() {
 					t.Errorf("Merge error = %v, want %v", mergeErr, err)
@@ -330,10 +330,13 @@ func TestLayers(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("Sources: %v", err)
+				t.Fatalf("Resolve: %v", err)
 			}
-			if sources == nil || !maps.Equal(sources, tt.wantSources) {
-				t.Errorf("sources = %v, want %v", sources, tt.wantSources)
+			if res.Sources == nil || !maps.Equal(res.Sources, tt.wantSources) {
+				t.Errorf("sources = %v, want %v", res.Sources, tt.wantSources)
+			}
+			if len(res.SealedBy) != 0 || len(res.Hidden) != 0 {
+				t.Errorf("an unsealed tree reports seals %v, hidden %v", res.SealedBy, res.Hidden)
 			}
 			merged, err := lin.Merge()
 			if err != nil {
@@ -422,7 +425,7 @@ func TestMergeDoesNotMutateLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lin.Sources(); err != nil {
+	if _, err := lin.Resolve(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := lin.Merge(); err != nil {
@@ -468,5 +471,144 @@ func TestReadLineage(t *testing.T) {
 	}
 	if _, err := ReadLineage(ctx, bc, "/prod/../x/"); err == nil {
 		t.Error("a path with .. was accepted")
+	}
+}
+
+// sealTree is a hierarchy with seals: / seals "entitlement", which /t/ and
+// /t/a/ defined anyway; /t/ seals "limit", which /t/a/ defined anyway, and
+// "own", which nothing below it defines.
+var sealTree = map[string]string{
+	"/":       `{"rules":{"entitlement":{"type":"boolean","value":false,"sealed":true},"open":{"type":"number","value":1}}}`,
+	"/t/":     `{"rules":{"entitlement":{"type":"boolean","value":true,"sealed":true},"limit":{"type":"number","value":5,"sealed":true},"own":{"type":"string","value":"t","sealed":true},"open":{"type":"number","value":2}}}`,
+	"/t/a/":   `{"rules":{"entitlement":{"type":"boolean","value":true},"limit":{"type":"number","value":50},"open":{"type":"number","value":3},"nil":null}}`,
+	"/t/a/b/": `{"rules":{}}`,
+	// a chamber's own seal constrains only the chambers below it
+	"/u/": `{"rules":{"x":{"type":"number","value":1,"sealed":true}}}`,
+}
+
+func TestMergeSeals(t *testing.T) {
+	ctx := context.Background()
+	inh, _ := NewInheritableStorage(&mapStorage{entries: maps.Clone(sealTree)})
+
+	tests := []struct {
+		path         string
+		wantSources  map[string]string
+		wantSealedBy map[string]string
+		wantHidden   map[string][]string
+		wantValues   map[string]any
+	}{
+		{
+			path: "/t/a/b/",
+			wantSources: map[string]string{
+				"entitlement": "/", "limit": "/t/", "own": "/t/", "open": "/t/a/", "nil": "/t/a/",
+			},
+			wantSealedBy: map[string]string{"entitlement": "/", "limit": "/t/", "own": "/t/"},
+			wantHidden:   map[string][]string{"entitlement": {"/t/a/", "/t/"}, "limit": {"/t/a/"}},
+			wantValues:   map[string]any{"entitlement": false, "limit": float64(5), "open": float64(3)},
+		},
+		{
+			path:         "/t/",
+			wantSources:  map[string]string{"entitlement": "/", "limit": "/t/", "own": "/t/", "open": "/t/"},
+			wantSealedBy: map[string]string{"entitlement": "/"},
+			wantHidden:   map[string][]string{"entitlement": {"/t/"}},
+			wantValues:   map[string]any{"entitlement": false, "limit": float64(5)},
+		},
+		{
+			path:         "/",
+			wantSources:  map[string]string{"entitlement": "/", "open": "/"},
+			wantSealedBy: map[string]string{},
+			wantHidden:   map[string][]string{},
+		},
+		{
+			path:         "/u/",
+			wantSources:  map[string]string{"entitlement": "/", "open": "/", "x": "/u/"},
+			wantSealedBy: map[string]string{"entitlement": "/"},
+			wantHidden:   map[string][]string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			lin, err := inh.(Layered).Layers(ctx, tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := lin.Resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(res.Sources, tt.wantSources) {
+				t.Errorf("sources = %v, want %v", res.Sources, tt.wantSources)
+			}
+			if !maps.Equal(res.SealedBy, tt.wantSealedBy) {
+				t.Errorf("sealedBy = %v, want %v", res.SealedBy, tt.wantSealedBy)
+			}
+			if !maps.EqualFunc(res.Hidden, tt.wantHidden, slices.Equal) {
+				t.Errorf("hidden = %v, want %v", res.Hidden, tt.wantHidden)
+			}
+
+			// Get serves the same view
+			entry, err := inh.Get(ctx, tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got realm.Chamber
+			if err := json.Unmarshal(entry.Value, &got); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range tt.wantValues {
+				if f := got.Rules[key]; f == nil || f.Value != want {
+					t.Errorf("%s served %+v, want value %v", key, f, want)
+				}
+			}
+
+			// AncestorSeals agrees with the lineage
+			seals, err := inh.(Layered).AncestorSeals(ctx, tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(seals, tt.wantSealedBy) {
+				t.Errorf("AncestorSeals = %v, want %v", seals, tt.wantSealedBy)
+			}
+		})
+	}
+}
+
+func TestAncestorSeals(t *testing.T) {
+	ctx := context.Background()
+	entries := maps.Clone(sealTree)
+	entries["/broken/"] = `{"rules":{"entitlement":{"type":"boolean","value":"nope"},"x":{"type":"number","value":1,"sealed":true}}}`
+	src := &mapStorage{entries: entries}
+	inh, _ := NewInheritableStorage(src)
+
+	tests := []struct {
+		name string
+		path string
+		want map[string]string
+	}{
+		{"no chamber at the path", "/t/a/new/", map[string]string{"entitlement": "/", "limit": "/t/", "own": "/t/"}},
+		{"missing parents", "/nope/deeper/", map[string]string{"entitlement": "/"}},
+		{"a parent that cannot be parsed seals nothing", "/broken/child/", map[string]string{"entitlement": "/"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ReadAncestorSeals(ctx, inh, tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(got, tt.want) {
+				t.Errorf("seals = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	if got, err := ReadAncestorSeals(ctx, src, "/t/a/"); got != nil || err != nil {
+		t.Errorf("without inheritance: %v, %v; want nothing sealed", got, err)
+	}
+	if _, err := ReadAncestorSeals(ctx, inh, "/t/../x/"); err == nil {
+		t.Error("a path with .. was accepted")
+	}
+	src.failing = map[string]error{"/t/": errors.New("boom")}
+	if _, err := ReadAncestorSeals(ctx, inh, "/t/a/"); err == nil {
+		t.Error("a failed read of a parent was ignored")
 	}
 }

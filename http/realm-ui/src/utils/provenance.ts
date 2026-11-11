@@ -5,8 +5,19 @@ import type { Flag, LayerStatus, Lineage } from '../models/response';
 /** One chamber's definition of a flag. */
 export type Definition = { path: string; flag: Flag };
 
-/** A flag served at a chamber, where it comes from, and the definitions it overrides, nearest first. */
-export type Served = { name: string; flag: Flag; source: string; overrides: Definition[] };
+/**
+ * A flag served at a chamber, where it comes from, the definitions it overrides (farther than its source), and the
+ * definitions its seal hides (nearer than its source, written before the seal), each nearest first.
+ */
+export type Served = {
+  name: string;
+  flag: Flag;
+  source: string;
+  overrides: Definition[];
+  /** The farthest parent that seals the flag, when one does: the chamber cannot define it. */
+  sealedBy?: string;
+  hidden: Definition[];
+};
 
 /** An ancestor of a chamber, nearest first: a parent chamber the server consults, or one it does not. */
 export type StackEntry =
@@ -23,6 +34,8 @@ export type StackEntry =
       served: Served[];
       /** The flags it defines that a nearer chamber overrides, sorted by key. */
       overridden: { name: string; by: string }[];
+      /** The flags it defines that a farther chamber seals, hiding its definitions, sorted by key. */
+      hidden: { name: string; by: string }[];
     }
   | { kind: 'notInherited'; path: string; distance: number };
 
@@ -33,6 +46,8 @@ export type Provenance = {
   own: Record<string, Served>;
   /** Flags served from parent chambers; null exactly when the inherited view cannot be built. */
   inherited: Record<string, Served> | null;
+  /** Flag key → the farthest parent that seals it: flags the chamber cannot define (empty when the view is broken). */
+  sealedBy: Record<string, string>;
   /** Every ancestor of the chamber, nearest first. */
   stack: StackEntry[];
 };
@@ -65,6 +80,8 @@ export const provenance = (lineage: Lineage): Provenance => {
   const broken = lineage.error !== undefined;
   // a broken view attributes nothing
   const sources = broken ? {} : (lineage.sources ?? {});
+  const sealedBy = broken ? {} : (lineage.sealedBy ?? {});
+  const hiddenAt = broken ? {} : (lineage.hidden ?? {});
   const indexOf = new Map(layers.map((l, i) => [l.path, i]));
 
   const own: Record<string, Served> = {};
@@ -77,10 +94,18 @@ export const provenance = (lineage: Lineage): Provenance => {
       const definition = get(l.rules, name);
       return definition ? [{ path: l.path, flag: definition }] : [];
     });
-    const served = { name, flag, source, overrides };
+    const hidden = (get(hiddenAt, name) ?? []).flatMap((path) => {
+      const at = indexOf.get(path);
+      const definition = at === undefined ? undefined : get(layers[at].rules, name);
+      return definition ? [{ path, flag: definition }] : [];
+    });
+    const served: Served = { name, flag, source, overrides, sealedBy: get(sealedBy, name), hidden };
     if (i === 0) own[name] = served;
     else inherited[name] = served;
   }
+
+  /** Whether a seal hides the definition of key at path. */
+  const hides = (key: string, path: string) => get(hiddenAt, key)?.includes(path) === true;
 
   // ancestorsOf is nearest first, so the index says how many levels up
   const stack = ancestorsOf(layers[0].path).map((path, i): StackEntry => {
@@ -102,10 +127,14 @@ export const provenance = (lineage: Lineage): Provenance => {
       }),
       overridden: keys.flatMap((k) => {
         const by = get(sources, k);
-        return by !== undefined && by !== path ? [{ name: k, by }] : [];
+        return by !== undefined && by !== path && !hides(k, path) ? [{ name: k, by }] : [];
+      }),
+      hidden: keys.flatMap((k) => {
+        const by = get(sealedBy, k);
+        return by !== undefined && hides(k, path) ? [{ name: k, by }] : [];
       }),
     };
   });
 
-  return { inheritable: lineage.inheritable, own, inherited: broken ? null : inherited, stack };
+  return { inheritable: lineage.inheritable, own, inherited: broken ? null : inherited, sealedBy, stack };
 };

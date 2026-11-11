@@ -50,6 +50,8 @@ export type TargetingRule = {
 export type Flag = {
   type: RuleType;
   value: FlagValue;
+  /** Chambers below the one that defines the flag cannot override it. */
+  sealed?: boolean;
   targeting?: TargetingRule[];
 };
 
@@ -79,6 +81,16 @@ export type Lineage = {
   layers: Layer[];
   /** Flag key → path of the chamber whose definition is served here; null exactly when `error` is set. */
   sources: Record<string, string> | null;
+  /**
+   * Flag key → path of the farthest parent that seals it: this chamber cannot define those flags. Omitted when
+   * nothing is sealed (and by servers that predate seals).
+   */
+  sealedBy?: Record<string, string>;
+  /**
+   * Sealed flag key → paths of the chambers (this one included) whose definitions the seal hides, nearest first.
+   * Omitted when there are none.
+   */
+  hidden?: Record<string, string[]>;
   /** Why the inherited view cannot be built, as clients loading this chamber see it. */
   error?: string;
 };
