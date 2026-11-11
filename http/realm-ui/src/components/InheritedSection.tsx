@@ -38,6 +38,18 @@ const OverriddenList = ({ items, here }: { items: { name: string; by: string }[]
   </>
 );
 
+/** Flag keys in monospace, separated by commas, each with the chamber that seals it. */
+const SealedList = ({ items }: { items: { name: string; by: string }[] }) => (
+  <>
+    {items.map(({ name, by }, i) => (
+      <span key={name}>
+        {i > 0 && ', '}
+        <Mono>{name}</Mono> (sealed by <Mono>{by}</Mono>)
+      </span>
+    ))}
+  </>
+);
+
 /** A parent chamber that contributes no flags here, and why, on one line. */
 const StackLine = ({ entry, here, broken }: { entry: StackEntry; here: string; broken: boolean }) => {
   let label = 'not inherited';
@@ -54,11 +66,24 @@ const StackLine = ({ entry, here, broken }: { entry: StackEntry; here: string; b
       sentence = 'Has no flags, so nothing is inherited from it.';
     } else if (broken) {
       sentence = `Defines ${plural(entry.defined, 'flag')}.`;
-    } else {
+    } else if (entry.hidden.length === 0) {
       sentence = (
         <>
           Nothing is inherited from it. Every flag it defines is overridden nearer:{' '}
           <OverriddenList items={entry.overridden} here={here} />.
+        </>
+      );
+    } else {
+      sentence = (
+        <>
+          Nothing is inherited from it.
+          {entry.overridden.length > 0 && (
+            <>
+              {' '}
+              Overridden nearer: <OverriddenList items={entry.overridden} here={here} />.
+            </>
+          )}{' '}
+          Hidden by a seal: <SealedList items={entry.hidden} />.
         </>
       );
     }
@@ -90,7 +115,7 @@ const LayerCard = ({
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
         <PathLink path={served.source}>Open </PathLink>
-        {onOverride && (
+        {onOverride && !served.sealedBy && (
           <Button
             size="xs"
             color="light"
@@ -101,11 +126,18 @@ const LayerCard = ({
           </Button>
         )}
       </div>
-      {onOverride && (
+      {served.sealedBy ? (
         <p className="text-xs text-gray-600 dark:text-gray-400">
-          Copies this definition into <Mono>{here}</Mono> for editing. After you save, changes to{' '}
-          <Mono>{served.name}</Mono> in <Mono>{served.source}</Mono> no longer reach this chamber.
+          <Mono>{served.sealedBy}</Mono> seals <Mono>{served.name}</Mono>, so this chamber can&rsquo;t override it. To
+          change it, edit it in <Mono>{served.sealedBy}</Mono>.
         </p>
+      ) : (
+        onOverride && (
+          <p className="text-xs text-gray-600 dark:text-gray-400">
+            Copies this definition into <Mono>{here}</Mono> for editing. After you save, changes to{' '}
+            <Mono>{served.name}</Mono> in <Mono>{served.source}</Mono> no longer reach this chamber.
+          </p>
+        )
       )}
     </div>
   );
@@ -138,6 +170,11 @@ const LayerCard = ({
       {entry.overridden.length > 0 && (
         <p className="border-t border-dashed border-gray-300 px-4 py-2 text-xs text-gray-600 dark:border-gray-600 dark:text-gray-400">
           Also defines, overridden nearer: <OverriddenList items={entry.overridden} here={here} />
+        </p>
+      )}
+      {entry.hidden.length > 0 && (
+        <p className="border-t border-dashed border-gray-300 px-4 py-2 text-xs text-gray-600 dark:border-gray-600 dark:text-gray-400">
+          Also defines, hidden by a seal: <SealedList items={entry.hidden} />
         </p>
       )}
     </li>
@@ -195,7 +232,7 @@ export const InheritedSection = ({ here, prov, loadError, onRetry, catalog, onOv
         {count !== null && (
           <p className="text-sm text-gray-600 dark:text-gray-400">
             {count > 0
-              ? "Served here because this chamber doesn't define them. Parent chambers are checked nearest first, and the first that defines a flag wins."
+              ? "Served here because this chamber doesn't define them, or a parent seals them. Parent chambers are checked nearest first, and the first that defines a flag wins, unless a farther one seals it."
               : 'Nothing is inherited here.'}
           </p>
         )}

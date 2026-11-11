@@ -83,9 +83,17 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   `DELETE`→delete). `GET ?inherit=false` returns the chamber as stored,
   without inherited flags (editors use this). `GET ?inherit=layers`
   (`http/layers.go`) returns the lineage the inherited view is built from
-  (`storage.Layered`): the chamber, each parent chamber it consults, and which
-  of them serves each flag; the UI uses it to show where each flag comes from
-  and which flags override a parent's.
+  (`storage.Layered`): the chamber, each parent chamber it consults, which
+  of them serves each flag, which flags a parent seals (`sealedBy`), and the
+  definitions those seals hide (`hidden`); the UI uses it to show where each
+  flag comes from and which flags override a parent's.
+- **Sealed flags** — a PUT or PATCH that adds a flag a parent seals, or
+  changes the chamber's stored definition of one, is refused with 400 naming
+  the parent (`checkSeals` in `http/handler.go`, from
+  `storage.ReadAncestorSeals`). A definition stored before the seal may stay
+  as it is, so the chamber stays editable. The seals are read before the
+  write rather than inside its `Update`: `Lineage.Merge` is what enforces
+  them, so a seal that lands during a write still hides what it stores.
 - **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as
   stored at its path (the inherited view carries none); writes honor `If-Match` / `If-None-Match: *` and return `412` on
   mismatch, checked under a per-path lock (`http/meta.go`). Every write is
@@ -278,7 +286,8 @@ Two wrappers compose backends:
   `Get`, merges a chamber with every ancestor along the path, up to and
   including the root chamber `/`, so child chambers inherit parent rules and
   flags set at `/` reach every chamber; the nearest definition of a flag
-  wins, whole. A missing ancestor (including `/`) contributes nothing. This
+  wins, whole, unless an ancestor seals it (`"sealed": true`): then the
+  farthest ancestor that seals it wins, and nearer definitions are hidden. A missing ancestor (including `/`) contributes nothing. This
   hierarchy is the current stand-in for "environments / zones". `Get` is built
   from `Layers` (the chamber plus each consulted ancestor, nearest first, in
   `lineage.go`) and `Lineage.Merge`, so the layers view and the merged view

@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { Alert, Button, Label, Modal, ModalBody, ModalFooter, ModalHeader } from 'flowbite-react';
+import { Alert, Button, Checkbox, Label, Modal, ModalBody, ModalFooter, ModalHeader } from 'flowbite-react';
 import { HiPlus } from 'react-icons/hi';
 import { Catalog, Flag, TargetingRule } from '../../models/response';
-import { validateFlag } from '../../utils/flags';
+import { validateFlag, withSealed } from '../../utils/flags';
 import { RuleEditor } from './RuleEditor';
 import { ValueInput } from './ValueInput';
 
@@ -111,6 +111,23 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
               onChange={(value) => setDraft({ ...draft, value })}
               onValidityChange={setValidity('default')}
             />
+          </div>
+
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id="flag-sealed"
+              className="mt-0.5"
+              aria-describedby="flag-sealed-help"
+              checked={draft.sealed === true}
+              onChange={(e) => setDraft(withSealed(draft, e.target.checked))}
+            />
+            <div className="flex flex-col">
+              <Label htmlFor="flag-sealed">Seal</Label>
+              <p id="flag-sealed-help" className="text-sm text-gray-600 dark:text-gray-400">
+                Chambers below this one can&rsquo;t override <span className="font-mono">{name}</span>. Definitions they
+                saved earlier stop being served.
+              </p>
+            </div>
           </div>
 
           {showProblems && problems.length > 0 && (

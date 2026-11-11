@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"path"
 
 	realm "github.com/steviebps/realm/pkg"
@@ -43,28 +44,49 @@ type Layered interface {
 	// Layers returns the lineage of the chamber at logicalPath, or a
 	// NotFoundError when there is no chamber there.
 	Layers(ctx context.Context, logicalPath string) (*Lineage, error)
+	// AncestorSeals maps each flag that an ancestor of logicalPath seals to
+	// the path of the farthest ancestor that seals it: the flags a chamber
+	// at logicalPath cannot define, whether or not one exists there.
+	AncestorSeals(ctx context.Context, logicalPath string) (map[string]string, error)
 }
 
 // Merge builds the inherited view: the chamber's flags, plus each flag it
-// lacks from the nearest layer that defines it. It never mutates the layers.
-// It fails with the chamber's own Err, else the farthest ancestor's Err.
+// lacks from the nearest layer that defines it. A flag an ancestor seals is
+// served from the farthest ancestor that seals it, whatever nearer layers
+// define. It never mutates the layers. It fails with the chamber's own Err,
+// else the farthest ancestor's Err.
 func (l *Lineage) Merge() (*realm.Chamber, error) {
 	return l.merge(nil)
 }
 
-// Sources returns, for every flag in Merge's view, the path of the layer
-// whose definition it serves. The map is non-nil whenever err is nil.
-func (l *Lineage) Sources() (map[string]string, error) {
-	sources := map[string]string{}
-	if _, err := l.merge(sources); err != nil {
-		return nil, err
-	}
-	return sources, nil
+// Resolution says where each flag of a lineage's inherited view comes from.
+type Resolution struct {
+	// Sources maps each flag in the view to the path of the layer whose
+	// definition it serves.
+	Sources map[string]string
+	// SealedBy maps each flag that an ancestor seals to the path of the
+	// farthest ancestor that seals it: the chamber cannot define that flag.
+	SealedBy map[string]string
+	// Hidden maps each sealed flag that nearer layers (the chamber included)
+	// define anyway to their paths, nearest first. A seal hides those
+	// definitions: they were written before it, as the server refuses them
+	// after.
+	Hidden map[string][]string
 }
 
-// merge builds the inherited view, recording in sources (when non-nil) the
-// path of the layer each flag is served from.
-func (l *Lineage) merge(sources map[string]string) (*realm.Chamber, error) {
+// Resolve returns where each flag of Merge's view comes from. Its maps are
+// non-nil whenever err is nil.
+func (l *Lineage) Resolve() (*Resolution, error) {
+	res := &Resolution{Sources: map[string]string{}, SealedBy: map[string]string{}, Hidden: map[string][]string{}}
+	if _, err := l.merge(res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// merge builds the inherited view, recording in res (when non-nil) where
+// each flag comes from.
+func (l *Lineage) merge(res *Resolution) (*realm.Chamber, error) {
 	if len(l.Layers) == 0 {
 		return nil, errors.New("lineage has no layers")
 	}
@@ -78,20 +100,44 @@ func (l *Lineage) merge(sources map[string]string) (*realm.Chamber, error) {
 		}
 	}
 
+	// sealedAt maps each flag an ancestor seals to the index of the
+	// farthest such ancestor
+	sealedAt := map[string]int{}
+	for i := len(l.Layers) - 1; i > 0; i-- {
+		for key := range sealedIn(l.Layers[i].Chamber) {
+			if _, ok := sealedAt[key]; !ok {
+				sealedAt[key] = i
+			}
+		}
+	}
+	if res != nil {
+		for key, i := range sealedAt {
+			res.SealedBy[key] = l.Layers[i].Path
+		}
+	}
+
 	// Layers are nearest first, so each flag comes from the first layer that
-	// defines it, whole: the chamber's own flags, then each ancestor's.
+	// defines it, whole: the chamber's own flags, then each ancestor's. A
+	// sealed flag comes from the layer that seals it, and the definitions
+	// nearer than that are hidden.
 	merged := &realm.Chamber{Rules: map[string]*realm.Flag{}}
-	for _, layer := range l.Layers {
+	for i, layer := range l.Layers {
 		if layer.Chamber == nil {
 			continue
 		}
 		for key, flag := range layer.Chamber.Rules {
+			if s, ok := sealedAt[key]; ok && i < s {
+				if res != nil {
+					res.Hidden[key] = append(res.Hidden[key], layer.Path)
+				}
+				continue
+			}
 			if _, ok := merged.Rules[key]; ok {
 				continue
 			}
 			merged.Rules[key] = flag
-			if sources != nil {
-				sources[key] = layer.Path
+			if res != nil {
+				res.Sources[key] = layer.Path
 			}
 		}
 	}
@@ -111,6 +157,29 @@ func (l *Lineage) Revision() uint64 {
 		rev = max(rev, layer.Version)
 	}
 	return rev
+}
+
+// sealedIn returns the keys of the flags c seals; c may be nil.
+func sealedIn(c *realm.Chamber) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		if c == nil {
+			return
+		}
+		for key, flag := range c.Rules {
+			if flag != nil && flag.Sealed && !yield(key) {
+				return
+			}
+		}
+	}
+}
+
+// ReadAncestorSeals returns s.AncestorSeals when s applies inheritance, and
+// nil otherwise: without inheritance, nothing is sealed.
+func ReadAncestorSeals(ctx context.Context, s Storage, logicalPath string) (map[string]string, error) {
+	if layered, ok := s.(Layered); ok {
+		return layered.AncestorSeals(ctx, logicalPath)
+	}
+	return nil, nil
 }
 
 // ReadLineage returns the lineage of the chamber at logicalPath: s.Layers

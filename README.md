@@ -95,7 +95,7 @@ go get github.com/steviebps/realm
 | Term | Meaning |
 |---|---|
 | **Chamber** | A namespace of flags at a path, for example `/prod/checkout/`. A chamber inherits the flags of its parent chambers. |
-| **Flag** | A typed default `value` and an ordered list of `targeting` rules. |
+| **Flag** | A typed default `value` and an ordered list of `targeting` rules. A flag with `"sealed": true` cannot be overridden by the chambers below its chamber. |
 | **Targeting rule** | A list of clauses, a `value`, and an optional `rollout`. All clauses must match. |
 | **Clause** | `{ "attribute", "op", "values" }`. A clause on an attribute that is not set never matches. |
 | **Rollout** | `{ "percentage", "bucketBy", "seed" }`. Limits a rule to a sticky percentage of the matching contexts. |
@@ -426,13 +426,45 @@ realm client delete -r /prod/        # delete a chamber and every chamber below 
 > first: an unknown field anywhere (a misspelled `schedule`, say) is an error,
 > as it is for every write to the server.
 
+### Sealed flags
+
+With `inheritable`, the nearest chamber that defines a flag wins, so anyone
+who can write a child chamber can replace a parent's flag. To stop that, seal
+the flag in the parent:
+
+```json
+{
+  "rules": {
+    "entitlement.onlineOrders": {
+      "type": "boolean",
+      "value": false,
+      "sealed": true,
+      "targeting": [
+        { "clauses": [{ "attribute": "tenantId", "op": "in", "values": ["t-42"] }], "value": true }
+      ]
+    }
+  }
+}
+```
+
+- Every chamber below the parent serves the parent's definition. If several
+  parents seal the flag, the farthest one wins.
+- A write to a chamber below it that adds the flag, or changes the chamber's
+  definition of it, fails with `400 Bad Request`. The error names the chamber
+  that seals the flag. Admins get the same error.
+- A definition saved below the parent before the seal is not served. It stays
+  in its chamber until someone deletes it, and writes that leave it unchanged
+  still succeed. `?inherit=layers` lists these definitions under `hidden`.
+- To change the flag, edit it in the chamber that seals it, or unseal it there.
+- Without `inheritable`, `sealed` is stored but has no effect.
+
 ### HTTP API
 
 | Request | Result |
 |---|---|
 | `GET /v1/chambers/<path>` | Returns the chamber, with the flags that it inherits. |
 | `GET /v1/chambers/<path>?inherit=false` | Returns the chamber as stored, with an `ETag`. |
-| `GET /v1/chambers/<path>?inherit=layers` | Returns the chamber and each parent chamber its inherited view consults, nearest first, and which chamber serves each flag. Needs read access to each of those parent chambers. |
+| `GET /v1/chambers/<path>?inherit=layers` | Returns the chamber and each parent chamber its inherited view consults, nearest first, and which chamber serves each flag (`sources`). Also returns the flags that parents seal (`sealedBy`) and the definitions that those seals hide (`hidden`). Needs read access to each of those parent chambers. |
 | `GET /v1/chambers/<path>?list=true` | Lists the chambers below the path. |
 | `GET /v1/chambers/<path>?watch=true` | Streams the chamber as server-sent events. |
 | `POST /v1/chambers/<path>` | Creates or replaces the chamber. |

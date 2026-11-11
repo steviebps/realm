@@ -15,8 +15,15 @@ import (
 // caller's default with an error, and Chamber.Evaluate omits it. It is kept
 // exactly as it was read, so that marshaling it again (as a server does when
 // it patches a chamber) neither drops nor alters it.
+//
+// A sealed flag cannot be overridden by the chambers below the one that
+// defines it: with inheritance, their definitions of its key are ignored, and
+// the server refuses writes that add or change one.
 type Flag struct {
 	*Rule
+	// Sealed keeps chambers below the one that defines the flag from
+	// overriding it. It has no effect without inheritance.
+	Sealed    bool             `json:"sealed,omitempty"`
 	Targeting []*TargetingRule `json:"targeting,omitempty"`
 
 	// raw holds a flag of an unknown type as it was read.
@@ -34,13 +41,23 @@ var removedFlagFields = map[string]string{
 
 // UnmarshalJSON validates the flag's default value against its type, and each
 // targeting rule's clauses, rollout, and value. A flag of an unknown type is
-// kept as it is, unvalidated.
+// kept as it is, unvalidated, though its seal is still read, so that a newer
+// realm's sealed flag still seals.
 func (f *Flag) UnmarshalJSON(b []byte) error {
 	var rule Rule
 	if err := json.Unmarshal(b, &rule); err != nil {
 		return err
 	}
+	// decoded as encoding/json matches fields (case-insensitively), as
+	// ParseChamber's field check does, so no spelling of it is ignored
+	var seal struct {
+		Sealed bool `json:"sealed"`
+	}
+	if err := json.Unmarshal(b, &seal); err != nil {
+		return fmt.Errorf("sealed: %w", err)
+	}
 	f.Rule = &rule
+	f.Sealed = seal.Sealed
 	f.Targeting = nil
 	f.raw = nil
 

@@ -298,7 +298,7 @@ var (
 		fields: []string{"id", "description", "clauses", "value", "rollout", "schedule"},
 		nested: map[string]*shape{"clauses": clauseShape, "rollout": rolloutShape, "schedule": scheduleShape},
 	}
-	flagShape    = &shape{fields: []string{"type", "value", "targeting"}, nested: map[string]*shape{"targeting": ruleShape}}
+	flagShape    = &shape{fields: []string{"type", "value", "sealed", "targeting"}, nested: map[string]*shape{"targeting": ruleShape}}
 	chamberShape = &shape{fields: []string{"rules"}, nested: map[string]*shape{"rules": {each: flagShape}}}
 )
 

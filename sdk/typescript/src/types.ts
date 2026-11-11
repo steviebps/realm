@@ -48,6 +48,12 @@ export interface TargetingRule {
 export interface Flag {
   type: FlagType;
   value: unknown;
+  /**
+   * Whether chambers below the one that defines the flag are kept from
+   * overriding it. The server applies seals, so a fetched chamber already
+   * serves the sealed definition.
+   */
+  sealed?: boolean;
   targeting?: TargetingRule[];
 }
 

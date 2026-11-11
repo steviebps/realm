@@ -84,6 +84,40 @@ func (s *InheritableStorage) Layers(ctx context.Context, logicalPath string) (*L
 	return lin, nil
 }
 
+// AncestorSeals maps each flag that an ancestor of logicalPath seals to the
+// path of the farthest ancestor that seals it, as Lineage.Merge resolves
+// seals. Ancestors that are missing or cannot be parsed seal nothing here: one
+// that cannot be parsed fails every inherited read below it until it is fixed,
+// and Merge applies its seals then. A failed read is returned.
+func (s *InheritableStorage) AncestorSeals(ctx context.Context, logicalPath string) (map[string]string, error) {
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage AncestorSeals", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
+	defer span.End()
+
+	if err := ValidatePath(logicalPath); err != nil {
+		recordError(span, err)
+		return nil, err
+	}
+	seals := map[string]string{}
+	// farthest first, so the first ancestor to seal a flag is the farthest
+	for _, p := range consultedAncestors(logicalPath) {
+		entry, err := s.source.Get(ctx, p)
+		if err != nil {
+			var nfError *NotFoundError
+			if errors.As(err, &nfError) {
+				continue
+			}
+			recordError(span, err)
+			return nil, err
+		}
+		for key := range sealedIn(parseLayer(p, entry).Chamber) {
+			if _, ok := seals[key]; !ok {
+				seals[key] = p
+			}
+		}
+	}
+	return seals, nil
+}
+
 // consultedAncestors returns the ancestors of logicalPath whose flags its
 // inherited view includes, farthest first: the root chamber "/", then each
 // chamber along the path. The root chamber itself has none.
