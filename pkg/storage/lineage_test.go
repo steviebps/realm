@@ -474,6 +474,49 @@ func TestReadLineage(t *testing.T) {
 	}
 }
 
+// TestInheritedRevision verifies that the inherited view's revision is the
+// highest among the chamber and the parents it merges, on storage that
+// tracks revisions, and 0 on storage that does not.
+func TestInheritedRevision(t *testing.T) {
+	ctx := context.Background()
+	for name, open := range transactionalBackends() {
+		t.Run(name, func(t *testing.T) {
+			s := open(t)
+			inh, _ := NewInheritableStorage(s)
+			// put writes a chamber at key and returns its revision.
+			put := func(key string) uint64 {
+				t.Helper()
+				mustPut(t, s, key, `{"rules":{}}`)
+				return versionOf(t, s, key)
+			}
+
+			own := put("/a/b/")
+			if got := versionOf(t, inh, "/a/b/"); got != own {
+				t.Errorf("without parents: %d, want the chamber's own %d", got, own)
+			}
+			for _, parent := range []string{"/a/", "/", "/a/b/"} {
+				rev := put(parent)
+				if got := versionOf(t, inh, "/a/b/"); got != rev {
+					t.Errorf("after writing %s: %d, want %d", parent, got, rev)
+				}
+				lin, err := ReadLineage(ctx, inh, "/a/b/")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := lin.Revision(); got != rev {
+					t.Errorf("after writing %s: lineage revision %d, want %d", parent, got, rev)
+				}
+			}
+		})
+	}
+
+	// storage without revisions has none to report
+	plain, _ := NewInheritableStorage(newLineageTree(nil))
+	if got := versionOf(t, plain, "/a/b/"); got != 0 {
+		t.Errorf("unversioned storage: revision %d, want 0", got)
+	}
+}
+
 // sealTree is a hierarchy with seals: / seals "entitlement", which /t/ and
 // /t/a/ defined anyway; /t/ seals "limit", which /t/a/ defined anyway, and
 // "own", which nothing below it defines.

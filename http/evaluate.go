@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/auth"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
@@ -99,18 +100,18 @@ func handleEvaluate(strg storage.Storage, brk *broker, streamReads *sharedReads)
 		if isWatchRequest(r) {
 			// evaluate keys are published in web pages, so anyone can open
 			// these streams
-			streamEvents(w, r, brk, path, "flags", true, func(ctx context.Context) ([]byte, time.Time, error) {
-				flags, changesAt, err := chambers.evaluate(ctx, streamReads, path, ec)
+			streamEvents(w, r, brk, path, "flags", true, func(ctx context.Context) (streamPayload, error) {
+				ev, err := chambers.evaluate(ctx, streamReads, path, ec)
 				if err != nil {
-					return nil, time.Time{}, err
+					return streamPayload{}, err
 				}
-				data, err := json.Marshal(evaluateResponse{Flags: flags})
-				return data, changesAt, err
+				data, err := json.Marshal(evaluateResponse{Flags: ev.flags})
+				return streamPayload{data: data, revision: ev.revision, changesAt: ev.changesAt}, err
 			})
 			return
 		}
 
-		flags, _, err := chambers.evaluate(ctx, strg, path, ec)
+		ev, err := chambers.evaluate(ctx, strg, path, ec)
 		if err != nil {
 			var nf *storage.NotFoundError
 			if errors.As(err, &nf) {
@@ -124,7 +125,8 @@ func handleEvaluate(strg storage.Storage, brk *broker, streamReads *sharedReads)
 			fail(http.StatusInternalServerError, err)
 			return
 		}
-		handleOkJSON(ctx, w, evaluateResponse{Flags: flags})
+		setRevision(w, ev.revision)
+		handleOkJSON(ctx, w, evaluateResponse{Flags: ev.flags})
 	})
 }
 
@@ -150,20 +152,30 @@ type entryGetter interface {
 	Get(ctx context.Context, key string) (*storage.StorageEntry, error)
 }
 
+// evaluation is every flag of a chamber resolved for one context.
+type evaluation struct {
+	flags map[string]realm.EvaluatedFlag
+	// revision is the storage revision of the chamber evaluated (0 when the
+	// storage does not track revisions).
+	revision uint64
+	// changesAt is the next time a schedule could change the values, or the
+	// zero time when none can.
+	changesAt time.Time
+}
+
 // evaluate resolves every flag of the chamber at path (as inherited, read
-// from src) for ec. It also returns the next time a schedule could change
-// those values, or the zero time when none can.
-func (p *parsedChambers) evaluate(ctx context.Context, src entryGetter, path string, ec realm.EvaluationContext) (map[string]realm.EvaluatedFlag, time.Time, error) {
+// from src) for ec.
+func (p *parsedChambers) evaluate(ctx context.Context, src entryGetter, path string, ec realm.EvaluationContext) (evaluation, error) {
 	entry, err := src.Get(ctx, path)
 	if err != nil {
-		return nil, time.Time{}, err
+		return evaluation{}, err
 	}
 	c, err := p.parse(path, entry.Value)
 	if err != nil {
-		return nil, time.Time{}, err
+		return evaluation{}, err
 	}
 	flags, changesAt := c.Evaluate(ec)
-	return flags, changesAt, nil
+	return evaluation{flags: flags, revision: entry.Version, changesAt: changesAt}, nil
 }
 
 // parse returns the chamber stored as raw, reusing the last parse of path when
@@ -197,6 +209,8 @@ func withCORS(prefix string, h http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// let pages read the revision of their evaluation
+		w.Header().Set("Access-Control-Expose-Headers", api.RevisionHeader)
 		if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			w.Header().Set("Access-Control-Allow-Methods", "POST")
 			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")

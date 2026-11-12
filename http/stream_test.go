@@ -40,13 +40,20 @@ func putChamber(t *testing.T, baseURL, path, body string) {
 
 // dataEvents reads an SSE body and emits the payload of each `data:` line.
 func dataEvents(scanner *bufio.Scanner) <-chan string {
+	return fieldLines(scanner, "data")
+}
+
+// fieldLines reads an SSE body and emits the value of each line of the named
+// field (such as "data" or "id").
+func fieldLines(scanner *bufio.Scanner, field string) <-chan string {
+	prefix := field + ":"
 	out := make(chan string)
 	go func() {
 		defer close(out)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if strings.HasPrefix(line, "data:") {
-				out <- strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if strings.HasPrefix(line, prefix) {
+				out <- strings.TrimSpace(strings.TrimPrefix(line, prefix))
 			}
 		}
 	}()

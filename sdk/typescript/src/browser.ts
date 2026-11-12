@@ -136,6 +136,22 @@ export class BrowserClient {
   }
 
   /**
+   * The server's storage revision of the chamber the current values were
+   * evaluated from, for example to record which configuration a page ran
+   * under. It is the highest revision among the chamber and the parents it
+   * inherits from. It is undefined while the values are not the server's
+   * (see source), and when the server does not report revisions (only
+   * servers on transactional storage, such as postgres, etcd, or boltdb, do).
+   * A write that leaves this context's values unchanged is not sent, so the
+   * revision can be older than the chamber's while describing the same
+   * values.
+   */
+  revision(): number | undefined {
+    // values not from the server are set without one
+    return this.#evaluation.revision;
+  }
+
+  /**
    * The context flags are evaluated for, as JSON: compare it to tell whether
    * the values are for a given context.
    */
@@ -260,7 +276,7 @@ export class BrowserClient {
     const flags = decodeFlags(raw);
     if (!flags) return false;
     this.#stored = raw!;
-    this.#show('cache', () => this.#evaluation.setRaw(raw!, () => ({ flags })));
+    this.#show('cache', () => this.#evaluation.setRaw(raw!, undefined, () => ({ flags })));
     return true;
   }
 
@@ -315,8 +331,8 @@ export class BrowserClient {
       { method: 'POST', body: JSON.stringify(normalizeContext(this.#context)) },
       'flags',
       {
-        set: (data) => receive(() => this.#evaluation.set(data)),
-        setRaw: (raw) => receive(() => this.#evaluation.setRaw(raw)),
+        set: (data, revision) => receive(() => this.#evaluation.set(data, revision)),
+        setRaw: (raw, revision) => receive(() => this.#evaluation.setRaw(raw, revision)),
       },
       this.#options.streaming ?? true,
       pollingInterval(this.#options.pollingInterval, defaultPollingInterval),

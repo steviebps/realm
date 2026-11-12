@@ -476,6 +476,16 @@ the flag in the parent:
 | `POST /v1/evaluate/<path>?watch=true` | Streams the evaluated values as server-sent events. |
 | `GET /healthz` | Returns the health of the server. |
 
+On storage that tracks revisions (`postgres`, `etcd`, and `boltdb` without a
+cache), chamber reads and evaluations carry an `X-Realm-Revision` header, and
+each event of a stream carries the same revision as its `id`. It is the
+highest storage revision among the chamber and the parents its inherited view
+merges, so a write to any of them changes it. A write that leaves a stream's
+payload unchanged sends nothing, so a stream's last `id` may be older than the
+chamber's revision while describing the same data. The revision names a
+version of the chamber but does not order versions: deleting a parent chamber
+can lower it.
+
 To prevent lost updates, send `If-Match: <etag>` with a write. If the chamber
 changed after you read it, the server returns `412 Precondition Failed`. To make
 sure that you do not replace an existing chamber, send `If-None-Match: *`.
@@ -597,6 +607,17 @@ honoring `Retry-After`. A refused key (401, 403) or a missing chamber (404) is
 retried after minutes rather than seconds. It logs at `info` and above (set
 your own logger with `WithLogger`), with a `component=realm` field: the first
 failure and the recovery, and repeated failures at most every 5 minutes.
+
+To record which configuration a request ran under (on its spans or logs, for
+example), call `Revision` with the request's context. It returns the server's
+revision of the snapshot pinned to the context (see `X-Realm-Revision` under
+[HTTP API](#http-api)), or `0` before a chamber loads or when the server's
+storage does not track revisions.
+
+```go
+ctx = rlm.NewContext(ctx)
+span.SetAttributes(attribute.String("realm.revision", strconv.FormatUint(rlm.Revision(ctx), 10)))
+```
 
 The SDK reads flags written by newer realm servers: a targeting rule that uses
 an operator it does not know never applies, and a flag of a type it does not

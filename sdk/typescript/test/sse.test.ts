@@ -25,6 +25,15 @@ describe('readEvents', () => {
     ]);
   });
 
+  it('reports each event its own id', async () => {
+    expect(await collect(['event: flags\nid: 7\ndata: a\n\nid: 8\n\nevent: flags\ndata: b\n\nid:9\ndata: c\n\n'])).toEqual([
+      { event: 'flags', data: 'a', id: '7' },
+      // an id on an event without data is dropped with it
+      { event: 'flags', data: 'b' },
+      { event: 'message', data: 'c', id: '9' },
+    ]);
+  });
+
   it('handles chunks split anywhere, CRLF, and multi-line data', async () => {
     const text = 'event: chamber\r\ndata: one\r\ndata:two\r\n\r\ndata: plain\n\n';
     const chunks = [...text]; // one character per chunk

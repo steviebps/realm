@@ -155,6 +155,19 @@ the stream again every 5 minutes. It applies only `chamber` events, and
 rejects a payload that is not a chamber (null, or no `rules`), keeping the
 last snapshot.
 
+**Revisions.** Chamber reads and evaluations carry `X-Realm-Revision`
+(`api.RevisionHeader`), and each stream event carries it as its `id`, when the
+storage tracks revisions (`StorageEntry.Version`; transactional backends do,
+`cacheable` does not). For the inherited view `InheritableStorage.Get` reports
+`Lineage.Revision`: the highest `Version` among the chamber and the ancestors
+it merges, so any layer's write changes it. Deleting an ancestor takes its
+revision away, so the view's revision can go down: it names a version rather
+than ordering versions. Streams send only changed payloads, so an event's id is
+the first revision that produced it. The Go SDK keeps the revision on its
+`ChamberEntry` (`Realm.Revision(ctx)` reads the pinned snapshot's); the
+TypeScript clients expose `revision()`. Nothing yet resumes a stream from
+`Last-Event-ID` or rejects stale data.
+
 Where the broker hears about writes depends on the backend. A `Watchable`
 backend (`postgres`, `etcd`) reports every committed change, including other replicas'
 writes, and that feed alone drives the broker, so every replica pushes every
@@ -342,7 +355,8 @@ log line of their own.
 | etcd storage (multi-replica) | ✅ Done | `pkg/storage/etcd.go`; shared contract tests in `pkg/storage/conformance_test.go` |
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
 | Cross-replica stream fanout (multi-instance) | ✅ Done | `Watchable` storage feeds the broker (`http/handler.go`) |
-| Revisioned streams (resume with `Last-Event-ID`, SDKs reject stale data) | ⬜ Next | builds on `StorageEntry.Version` |
+| Revisions on reads, stream event ids, and in the SDKs | ✅ Done | `Lineage.Revision`, `api.RevisionHeader`, `Realm.Revision`, `revision()` in `sdk/typescript` |
+| Revisioned streams (resume with `Last-Event-ID`, SDKs reject stale data) | ⬜ Next | builds on the event ids above |
 | SDK API keys + OIDC/GitHub sign-in for the UI, roles | ✅ Done | `auth/`, `http/auth.go` |
 | TypeScript SDK + server-side evaluation endpoint | ✅ Done | `sdk/typescript`, `http/evaluate.go`, shared cases in `sdk/conformance` |
 | Audit log of flag changes | ✅ Done | per-chamber history with the authenticated actor (`http/meta.go`) |

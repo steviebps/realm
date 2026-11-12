@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/client"
 )
 
@@ -660,5 +661,77 @@ func TestFlappingStreamLogsSparingly(t *testing.T) {
 	}
 	if n := logs.count("connected again"); n > 1 {
 		t.Errorf("%d recovery lines, want at most 1", n)
+	}
+}
+
+// TestStreamedRevisions verifies that each streamed chamber takes the
+// revision of its own event's id, and none when the event has no usable id.
+func TestStreamedRevisions(t *testing.T) {
+	next := make(chan string)
+	srv := newChamberServer(t, "zero", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for {
+			select {
+			case ev := <-next:
+				fmt.Fprintf(w, "%s\n\n", ev)
+				w.(http.Flusher).Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
+	})
+	rlm := testRealm(t, srv.URL, nil, WithStreaming(true))
+	if err := rlm.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if got := rlm.Revision(ctx); got != 0 {
+		t.Errorf("revision of a load without the header = %d, want 0", got)
+	}
+	tests := []struct {
+		event string
+		want  uint64
+	}{
+		{"event: chamber\nid: 7\ndata: " + chamberJSON("one"), 7},
+		// the id does not carry over to the next event
+		{"event: chamber\ndata: " + chamberJSON("two"), 0},
+		{"id: 9\nevent: chamber\ndata: " + chamberJSON("three"), 9},
+		{"event: chamber\nid: soon\ndata: " + chamberJSON("four"), 0},
+		{"event: chamber\nid: 18446744073709551615\ndata: " + chamberJSON("five"), 18446744073709551615},
+	}
+	for _, tt := range tests {
+		next <- tt.event
+		value := strings.TrimSuffix(strings.SplitN(tt.event, `"value":"`, 2)[1], `"}}}`)
+		if !eventually(5*time.Second, func() bool { return msg(rlm) == value }) {
+			t.Fatalf("msg = %q, want %q", msg(rlm), value)
+		}
+		if got := rlm.Revision(ctx); got != tt.want {
+			t.Errorf("after %q: revision = %d, want %d", value, got, tt.want)
+		}
+	}
+}
+
+// TestLoadedRevision verifies that a polled chamber takes the revision the
+// server reports in its header.
+func TestLoadedRevision(t *testing.T) {
+	var rev atomic.Value
+	rev.Store("12")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(api.RevisionHeader, rev.Load().(string))
+		fmt.Fprintf(w, `{"data":%s}`, chamberJSON("one"))
+	}))
+	t.Cleanup(srv.Close)
+	rlm := testRealm(t, srv.URL, nil)
+	if err := rlm.Start(); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if got := rlm.Revision(ctx); got != 12 {
+		t.Errorf("revision = %d, want 12", got)
+	}
+	// an unchanged chamber at a newer revision still updates it
+	rev.Store("13")
+	if !eventually(5*time.Second, func() bool { return rlm.Revision(ctx) == 13 }) {
+		t.Errorf("revision = %d, want 13", rlm.Revision(ctx))
 	}
 }

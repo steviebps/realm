@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { Backoff, jitter, pollingInterval, RealmError, Transport } from '../src/transport.js';
+import { Backoff, jitter, parseRevision, pollingInterval, RealmError, Transport } from '../src/transport.js';
 import { fakeRealm } from './fake-realm.js';
 
 let cleanup: (() => unknown)[] = [];
@@ -68,6 +68,17 @@ describe('jitter', () => {
 describe('pollingInterval', () => {
   it('replaces an interval that is not positive with the default', () => {
     expect([20, 0, -1, Number.NaN, undefined].map((i) => pollingInterval(i, 5_000))).toEqual([20, 5_000, 5_000, 5_000, 5_000]);
+  });
+});
+
+describe('parseRevision', () => {
+  it('accepts positive integers JavaScript represents exactly', () => {
+    expect(parseRevision('42')).toBe(42);
+    expect(parseRevision(' 7 ')).toBe(7);
+    expect(parseRevision(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+    for (const v of [undefined, null, '', '0', '-1', '1.5', '1e3', 'abc', '18446744073709551615']) {
+      expect(parseRevision(v)).toBeUndefined();
+    }
   });
 });
 

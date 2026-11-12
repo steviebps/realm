@@ -468,6 +468,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 			if own {
 				w.Header().Set("ETag", etagOf(entry.Value))
 			}
+			setRevision(w, entry.Version)
 			handleOk(w, createResponseWithErrors(entry.Value, nil))
 			return
 
@@ -789,17 +790,36 @@ func deleteChamberTree(ctx context.Context, meta *metaStore, r *http.Request, ro
 	return deleted, nil
 }
 
+// setRevision sets the revision header (see api.RevisionHeader), unless the
+// storage does not track revisions (rev is 0).
+func setRevision(w http.ResponseWriter, rev uint64) {
+	if rev != 0 {
+		w.Header().Set(api.RevisionHeader, strconv.FormatUint(rev, 10))
+	}
+}
+
 // streamChamber holds an SSE connection open and pushes the chamber at path
 // whenever it changes. Clients evaluate the chamber themselves, so its
 // schedules need no pushes of their own.
 func streamChamber(w http.ResponseWriter, r *http.Request, reads *sharedReads, brk *broker, path string) {
-	streamEvents(w, r, brk, path, "chamber", false, func(ctx context.Context) ([]byte, time.Time, error) {
+	streamEvents(w, r, brk, path, "chamber", false, func(ctx context.Context) (streamPayload, error) {
 		entry, err := reads.Get(ctx, path)
 		if err != nil {
-			return nil, time.Time{}, err
+			return streamPayload{}, err
 		}
-		return entry.Value, time.Time{}, nil
+		return streamPayload{data: entry.Value, revision: entry.Version}, nil
 	})
+}
+
+// streamPayload is what a stream sends as one event.
+type streamPayload struct {
+	data []byte
+	// revision is the storage revision data was produced from, sent as the
+	// event's id; 0 when the storage does not track revisions.
+	revision uint64
+	// changesAt is when data changes by itself (a schedule boundary of an
+	// evaluated flag); zero when it changes only with writes.
+	changesAt time.Time
 }
 
 // streamEvents holds an SSE connection open and sends the payload produced by
@@ -809,9 +829,13 @@ func streamChamber(w http.ResponseWriter, r *http.Request, reads *sharedReads, b
 // intermediaries are handled. A payload spanning several lines is sent as
 // several data fields (see eventText).
 //
+// Each event's id is the revision its payload was produced from, when the
+// storage tracks revisions. A write that leaves the payload unchanged sends
+// nothing, so the last id names the first revision that produced the payload
+// the client holds, which may be older than storage's.
+//
 // current may also return a time at which the payload changes by itself (a
 // schedule boundary of an evaluated flag); the payload is produced again then.
-// A zero time means it changes only with writes.
 //
 // A payload whose source does not exist yet is not fatal: the stream waits for
 // it to be created. Neither is a failure to produce it (storage unreachable,
@@ -824,7 +848,7 @@ func streamChamber(w http.ResponseWriter, r *http.Request, reads *sharedReads, b
 //
 // public marks a stream anyone may open, which the broker limits to a share
 // of its streams (see broker.publicMax).
-func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, public bool, current func(context.Context) ([]byte, time.Time, error)) {
+func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, event string, public bool, current func(context.Context) (streamPayload, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
@@ -886,7 +910,7 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	// send writes the current payload unless it is unchanged. It returns
 	// false when the connection should be torn down.
 	send := func() bool {
-		data, changesAt, err := current(ctx)
+		payload, err := current(ctx)
 		if ctx.Err() != nil {
 			return false
 		}
@@ -911,18 +935,18 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		}
 		failures = 0
 		retry.Stop()
-		if changesAt.IsZero() {
+		if payload.changesAt.IsZero() {
 			recheck.Stop()
 		} else {
-			recheck.Reset(time.Until(changesAt))
+			recheck.Reset(time.Until(payload.changesAt))
 		}
-		if last != nil && bytes.Equal(data, last) {
+		if last != nil && bytes.Equal(payload.data, last) {
 			return true
 		}
-		if !write(eventText(event, data)) {
+		if !write(eventText(event, payload.revision, payload.data)) {
 			return false
 		}
-		last = data
+		last = payload.data
 		return true
 	}
 
@@ -959,13 +983,20 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	}
 }
 
-// eventText returns data as one server-sent event. Each line of data becomes a
-// data field, which clients join back with newlines: a payload spanning lines
-// (a chamber stored pretty-printed, say) would otherwise end the event's
-// fields at its first line, and clients would drop the rest.
-func eventText(event string, data []byte) string {
+// eventText returns data as one server-sent event, with id rev unless rev is
+// 0. Each line of data becomes a data field, which clients join back with
+// newlines: a payload spanning lines (a chamber stored pretty-printed, say)
+// would otherwise end the event's fields at its first line, and clients would
+// drop the rest.
+func eventText(event string, rev uint64, data []byte) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "event: %s\n", event)
+	if rev != 0 {
+		var buf [20]byte
+		b.WriteString("id: ")
+		b.Write(strconv.AppendUint(buf[:0], rev, 10))
+		b.WriteByte('\n')
+	}
 	text := strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(string(data))
 	for line := range strings.SplitSeq(strings.TrimRight(text, "\n"), "\n") {
 		fmt.Fprintf(&b, "data: %s\n", line)

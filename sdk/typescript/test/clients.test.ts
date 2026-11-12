@@ -373,6 +373,68 @@ describe('BrowserClient', () => {
   });
 });
 
+describe('revision', () => {
+  it('reports the ServerClient chamber revision, loaded and streamed', async () => {
+    const realm = await setup();
+    const client = new ServerClient({ address: realm.address });
+    cleanup.push(() => client.stop());
+    expect(client.revision()).toBeUndefined();
+    realm.setRevision('41');
+    await client.start();
+    expect(client.revision()).toBe(41);
+
+    await vi.waitFor(() => expect(realm.streams.size).toBe(1));
+    realm.setRevision('42');
+    realm.publish(betaOn);
+    await vi.waitFor(() => expect(client.revision()).toBe(42));
+    expect(client.bool('beta', {}, false)).toBe(true);
+
+    // the same chamber at a newer revision updates only the revision
+    const changed = vi.fn();
+    client.subscribe(changed);
+    realm.setRevision('43');
+    realm.publish(betaOn);
+    await vi.waitFor(() => expect(client.revision()).toBe(43));
+    expect(changed).not.toHaveBeenCalled();
+
+    // an event without one leaves the revision unknown
+    realm.setRevision(undefined);
+    realm.publish({ rules: {} });
+    await vi.waitFor(() => expect(client.bool('beta', {}, false)).toBe(false));
+    expect(client.revision()).toBeUndefined();
+  });
+
+  it('reports the ServerClient revision when polling', async () => {
+    const realm = await setup();
+    realm.setRevision('7');
+    const client = new ServerClient({ address: realm.address, streaming: false });
+    cleanup.push(() => client.stop());
+    await client.start();
+    expect(client.revision()).toBe(7);
+  });
+
+  it('reports the BrowserClient revision only for values from the server', async () => {
+    const realm = await setup();
+    realm.setRevision('5');
+    const client = new BrowserClient({ address: realm.address, context: { key: 'u1' }, bootstrap: { beta: { type: 'boolean', value: true } } });
+    cleanup.push(() => client.stop());
+    expect(client.source()).toBe('bootstrap');
+    expect(client.revision()).toBeUndefined();
+    await client.start();
+    expect(client.revision()).toBe(5);
+
+    await vi.waitFor(() => expect(realm.streams.size).toBe(1));
+    realm.setRevision('6');
+    realm.publish(betaOn);
+    await vi.waitFor(() => expect(client.revision()).toBe(6));
+
+    // until the new context's evaluation arrives, its values are not the server's
+    realm.setHang(true);
+    void client.identify({ key: 'u2' }).catch(() => {});
+    expect(client.revision()).toBeUndefined();
+  });
+});
+
 describe('a server answering without data', () => {
   it.each(['{}', '{"data":null}', '{"data":{"rules":null}}', '{"data":[]}', 'null'])(
     'keeps the last chamber after %s',

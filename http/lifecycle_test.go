@@ -63,8 +63,8 @@ func TestStalledStreamReaderLosesStream(t *testing.T) {
 	// large enough to fill the socket buffers of a client that does not read
 	payload := bytes.Repeat([]byte("x"), 32<<20)
 	srv := httptest.NewServer(withLifecycle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		streamEvents(w, r, brk, "/a/", "chamber", false, func(context.Context) ([]byte, time.Time, error) {
-			return payload, time.Time{}, nil
+		streamEvents(w, r, brk, "/a/", "chamber", false, func(context.Context) (streamPayload, error) {
+			return streamPayload{data: payload}, nil
 		})
 	}), logging.New(io.Discard), time.Second))
 	t.Cleanup(srv.Close)
@@ -387,11 +387,11 @@ func TestStreamsSurviveStorageFailures(t *testing.T) {
 	var value atomic.Value
 	value.Store("one")
 	srv := httptest.NewServer(withLifecycle(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		streamEvents(w, r, brk, "/a/", "chamber", false, func(context.Context) ([]byte, time.Time, error) {
+		streamEvents(w, r, brk, "/a/", "chamber", false, func(context.Context) (streamPayload, error) {
 			if failing.Load() {
-				return nil, time.Time{}, errors.New("storage unavailable")
+				return streamPayload{}, errors.New("storage unavailable")
 			}
-			return []byte(value.Load().(string)), time.Time{}, nil
+			return streamPayload{data: []byte(value.Load().(string))}, nil
 		})
 	}), logging.New(io.Discard), time.Second))
 	t.Cleanup(srv.Close)

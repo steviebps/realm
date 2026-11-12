@@ -103,6 +103,9 @@ type ChamberEntry struct {
 	// version caches the "version" attribute and its canonical semver form,
 	// so semver clauses on the process-wide version do not allocate.
 	version semverCache
+	// revision is the server's storage revision of the chamber; 0 when
+	// unknown.
+	revision uint64
 }
 
 // NewChamberEntry creates a new ChamberEntry. The provided attributes are

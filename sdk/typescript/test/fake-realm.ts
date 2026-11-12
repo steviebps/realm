@@ -19,6 +19,9 @@ export async function fakeRealm() {
   const requests: FakeRequest[] = [];
   let status = 200;
   let hang = false;
+  // The revision reported with each read and event, like a server on
+  // transactional storage; none by default.
+  let revision: string | undefined;
   // A test's own answer to some requests, like a proxy in front of the
   // server: it returns true when it has answered.
   let intercept: ((req: FakeRequest, res: ServerResponse) => boolean) | undefined;
@@ -50,13 +53,17 @@ export async function fakeRealm() {
     const payload = () => JSON.stringify(isEvaluate ? evaluate(body) : chamber);
     if (req.url!.endsWith('?watch=true')) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      const stream = { res, send: () => res.write(`event: ${isEvaluate ? 'flags' : 'chamber'}\ndata: ${payload()}\n\n`) };
+      const stream = {
+        res,
+        send: () =>
+          res.write(`event: ${isEvaluate ? 'flags' : 'chamber'}\n${revision ? `id: ${revision}\n` : ''}data: ${payload()}\n\n`),
+      };
       streams.add(stream);
       res.on('close', () => streams.delete(stream));
       stream.send();
       return;
     }
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, { 'Content-Type': 'application/json', ...(revision ? { 'X-Realm-Revision': revision } : {}) });
     res.end(JSON.stringify({ data: JSON.parse(payload()) }));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -73,6 +80,8 @@ export async function fakeRealm() {
     write(text: string) {
       for (const s of streams) s.res.write(text);
     },
+    /** Sets the revision reported from now on, or none. */
+    setRevision: (r: string | undefined) => (revision = r),
     publish(next: unknown) {
       chamber = next;
       for (const s of streams) s.send();
