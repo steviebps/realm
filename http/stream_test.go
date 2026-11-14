@@ -26,7 +26,7 @@ func newTestHandler(t *testing.T) http.Handler {
 	return h
 }
 
-func putChamber(t *testing.T, baseURL, path, body string) {
+func putChamber(t testing.TB, baseURL, path, body string) {
 	t.Helper()
 	resp, err := http.Post(baseURL+"/v1/chambers/"+path, "application/json", strings.NewReader(body))
 	if err != nil {
