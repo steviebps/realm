@@ -21,6 +21,9 @@ services and in browsers, with hooks for React.
 - **Progressive rollout:** deterministic, sticky percentages, bucketed on any attribute.
 - **Scheduled rules:** limit a rule to a window of time, such as three hours on a Wednesday.
 - **Real-time updates:** the SDK polls, or receives changes over server-sent events.
+- **Many tenants from one client:** the SDK reads every chamber below a path
+  and picks a chamber for each request, such as the chamber of the request's
+  tenant and location.
 - **Safe editing:** ETag optimistic concurrency and per-chamber change history.
 - **Storage:** file, BoltDB, in-memory, Google Cloud Storage, Amazon S3,
   PostgreSQL, and etcd (the last two support running several replicas).
@@ -37,6 +40,7 @@ services and in browsers, with hooks for React.
 - [Manage flags](#manage-flags)
 - [Use the Go SDK](#use-the-go-sdk)
 - [Use the TypeScript SDK](#use-the-typescript-sdk)
+- [Organize flags](#organize-flags)
 - [Authentication](#authentication)
 - [Reference](#reference)
 - [Documentation](#documentation)
@@ -224,7 +228,7 @@ Server settings:
 | `logLevel` | The minimum level logged: `debug`, `info` (default), `warn`, or `error`. `--debug` overrides it. |
 | `shutdownDelay` | How long to keep serving after `SIGTERM` while `/readyz` reports 503, such as `"5s"`. Gives load balancers time to stop routing to the server. Default: none. |
 | `maxStreams` | The most watch streams the server holds open at once. Evaluation streams may take at most three quarters of them, so server SDKs always find room. Default: `10000`. |
-| `maxSubtreeChambers` | The most chambers below the root of a subtree read or watch (`?subtree=true`). The server refuses a larger subtree with 413. Default: `10000`. |
+| `maxSubtreeChambers` | The most chambers below the root of a subtree read or watch (`?subtree=true`), counting paths that only lead to chambers. The server refuses a larger subtree with 413. Default: `10000`. Refer to [Serve many tenants and locations](#serve-many-tenants-and-locations). |
 | `auth` | Sign-in and API keys. Refer to [Authentication](#authentication). |
 
 ### Storage backends
@@ -468,6 +472,8 @@ the flag in the parent:
 | `GET /v1/chambers/<path>?inherit=layers` | Returns the chamber and each parent chamber its inherited view consults, nearest first, and which chamber serves each flag (`sources`). Also returns the flags that parents seal (`sealedBy`) and the definitions that those seals hide (`hidden`). Needs read access to each of those parent chambers. |
 | `GET /v1/chambers/<path>?list=true` | Lists the chambers below the path. |
 | `GET /v1/chambers/<path>?watch=true` | Streams the chamber as server-sent events. |
+| `GET /v1/chambers/<path>?subtree=true` | Returns the chamber and every chamber below it, each with the flags that it inherits. Refer to [Serve many tenants and locations](#serve-many-tenants-and-locations). |
+| `GET /v1/chambers/<path>?subtree=true&watch=true` | Streams the chambers of the subtree as server-sent events: each chamber, then `synced`, then each change. |
 | `POST /v1/chambers/<path>` | Creates or replaces the chamber. |
 | `PATCH /v1/chambers/<path>` | Merges the body into the chamber. |
 | `DELETE /v1/chambers/<path>` | Deletes the chamber. The chambers below it are kept. |
@@ -494,7 +500,9 @@ sure that you do not replace an existing chamber, send `If-None-Match: *`.
 ## Use the Go SDK
 
 The SDK gets a chamber when it starts. It keeps a local copy of the chamber and
-reads flags from that copy, so a flag read sends no network request.
+reads flags from that copy, so a flag read sends no network request. To read
+the chambers of many tenants or locations with one client, refer to
+[Serve many tenants and locations](#serve-many-tenants-and-locations).
 
 ### Read flags
 
@@ -723,6 +731,100 @@ the `bootstrap` or stored values for the context if you set the client's
 React renders the components that use that flag again. For every hook, refer
 to [sdk/typescript/README.md](sdk/typescript/README.md#react).
 
+## Organize flags
+
+### Serve many tenants and locations
+
+A service that serves many tenants can keep one chamber per tenant and per
+location, and read them all with one client. A layout that works well:
+
+```text
+/prod/                          release flags, kill switches, entitlements (rules on tenantId, locationId)
+├── regions/<region>/           regulated values
+└── tenants/<tenantId>/         tenant defaults
+    └── <locationId>/           location overrides
+```
+
+Use one chamber per location, not one targeting rule per location. In a
+shared chamber, every edit contends on one ETag (an edit made while someone
+else saved fails with `412`), and the change history keeps only the last 200
+edits of a chamber, so the edits of one location push out the history of the
+others. Separate chambers also let you scope an API key to one tenant. Flags
+that decide for many tenants at once, such as a release or an entitlement,
+belong in `/prod/` as targeting rules on `tenantId` or `locationId`. Chambers
+under `regions/` are not parents of the tenants' chambers, so a service that
+needs them reads them with a second client.
+
+To read every tenant's and location's chamber, give the SDK a path template
+instead of a path. The SDK reads (or watches) every chamber below the
+template's root, here `/prod/tenants/`, and picks the chamber for each
+request from its attributes:
+
+```go
+rlm, err := realm.NewRealm(
+	realm.WithHttpClient(c),
+	realm.WithPathTemplate("/prod/tenants/{tenantId}/{locationId}/"),
+	realm.WithStreaming(true),
+)
+// …
+ctx := rlm.NewContextWithEvaluation(r.Context(), realm.EvaluationContext{
+	Key:        userID,
+	Attributes: map[string]string{"tenantId": tenantID, "locationId": locationID},
+})
+enabled, _ := rlm.Bool(ctx, "new-checkout", false)
+log.Printf("flags from %s", rlm.ChamberPath(ctx)) // for example /prod/tenants/t-42/loc-7/
+```
+
+```ts
+const realm = new ServerClient({
+  address: 'https://realm.example.com',
+  token: process.env.REALM_TOKEN, // a read key for /prod/tenants/
+  pathTemplate: '/prod/tenants/{tenantId}/{locationId}/',
+});
+await realm.start();
+realm.bool('new-checkout', { key: userId, attributes: { tenantId, locationId } }, false);
+```
+
+- **Fallback to the nearest parent.** A request gets the chamber of the
+  deepest path that exists: a location without a chamber gets its tenant's,
+  and a tenant without one gets the view of `/prod/tenants/` (which inherits
+  `/prod/`). So you create a chamber only for a location that needs its own
+  values. A missing or mistyped attribute falls back the same way, without
+  an error: `ChamberPath(ctx)` in Go and `chamberPath(context)` in TypeScript
+  return the path that a request got.
+- **Every chamber inherits as usual**, so a location's chamber holds the
+  flags of its tenant, of `/prod/`, and of `/`, and sealed flags stay sealed.
+- **Size cap.** The server refuses a subtree with more than
+  `maxSubtreeChambers` paths below its root (default 10,000; refer to
+  [Server settings](#where-realm-finds-its-config)) with `413`. The SDK then keeps
+  the chambers it has and retries. Raise the cap, or use a template with a
+  deeper root.
+- The SDK's API key needs read access to the template's root.
+
+For the HTTP API and the rules for templates, refer to
+[docs/design/subtree.md](docs/design/subtree.md).
+
+### Release flags and kill switches
+
+Set the default in your code to the safe state. The SDKs return that default
+whenever they have no value from realm: before the first load succeeds (for
+example, when realm is unreachable as your service starts), and when the flag
+is missing or has another type. For a release flag, the safe state is usually
+off, the code path that is already in production. Name a kill switch so that
+its default, `false`, keeps the feature running, and seal it in `/prod/` so
+that no tenant's chamber can override it.
+
+### What does not belong in realm
+
+- **Secrets.** Every SDK that reads a chamber gets all of its flags, the web
+  UI shows them, and the change history keeps them. Keep passwords, tokens,
+  and keys in a secret manager.
+- **Records that a database must constrain or join on**, such as the list of
+  a tenant's locations or the data that other tables refer to. realm has no
+  foreign keys, unique constraints, or queries across chambers. Keep those
+  records in your database, and use realm for the flags that change how your
+  service treats them.
+
 ## Authentication
 
 > [!WARNING]
@@ -835,6 +937,7 @@ realm client get /prod/checkout/
 - [docs/design/targeting.md](docs/design/targeting.md): the targeting and rollout design.
 - [docs/design/auth.md](docs/design/auth.md): the authentication design and the `auth` config.
 - [docs/design/evaluation.md](docs/design/evaluation.md): server-side evaluation and the TypeScript SDK.
+- [docs/design/subtree.md](docs/design/subtree.md): subtree reads and watches, and path templates.
 - [CONTRIBUTING.md](CONTRIBUTING.md): build, test, and send a pull request.
 
 ## License
