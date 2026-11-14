@@ -107,3 +107,44 @@ func TestPlaintextTokenWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestSubtreeRequests verifies the requests for a subtree read and watch.
+func TestSubtreeRequests(t *testing.T) {
+	type seen struct{ uri, accept, auth string }
+	var mu sync.Mutex
+	var got []seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = append(got, seen{r.URL.RequestURI(), r.Header.Get("Accept"), r.Header.Get("Authorization")})
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	c, err := NewHttpClient(&HttpClientConfig{Address: srv.URL, Token: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	tests := []struct {
+		name string
+		do   func() (*http.Response, error)
+		want seen
+	}{
+		{"read", func() (*http.Response, error) { return c.GetSubtree(ctx, "/prod/tenants/") }, seen{"/v1/chambers/prod/tenants/?subtree=true", "", "Bearer key"}},
+		{"watch", func() (*http.Response, error) { return c.WatchSubtree(ctx, "/prod/tenants/") }, seen{"/v1/chambers/prod/tenants/?subtree=true&watch=true", "text/event-stream", "Bearer key"}},
+		{"single watch", func() (*http.Response, error) { return c.Watch(ctx, "prod") }, seen{"/v1/chambers/prod?watch=true", "text/event-stream", "Bearer key"}},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := tt.do()
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			mu.Lock()
+			defer mu.Unlock()
+			if got[i] != tt.want {
+				t.Errorf("got %+v, want %+v", got[i], tt.want)
+			}
+		})
+	}
+}

@@ -61,6 +61,9 @@ type ServerConfig struct {
 	// (default 10,000). Evaluation streams, which anyone holding a published
 	// evaluate key can open, may take at most three quarters of them.
 	MaxStreams int `json:"maxStreams,omitempty"`
+	// MaxSubtreeChambers caps the chambers below the root of a subtree read
+	// or watch (default 10,000); larger subtrees are refused.
+	MaxSubtreeChambers int `json:"maxSubtreeChambers,omitempty"`
 }
 
 type ClientConfig struct {

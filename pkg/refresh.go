@@ -42,7 +42,8 @@ const (
 	maxRetryAfter = 10 * time.Minute
 
 	// maxChamberBytes bounds a chamber read from the server, polled or
-	// streamed.
+	// streamed, and each view a subtree stream sends (maxSubtreeBytes bounds
+	// a subtree read).
 	maxChamberBytes = 16 << 20
 
 	// maxErrorBytes bounds the error response realm reads.
@@ -131,9 +132,12 @@ func newRetryPolicy(max time.Duration) *retryPolicy {
 }
 
 // delay returns how long to wait before retrying after err: minutes after a
-// 401, 403, or 404, at least what a 429's or 503's Retry-After asks for, and
-// otherwise the fast backoff.
+// 401, 403, or 404, or a server that does not serve subtrees, at least what
+// a 429's or 503's Retry-After asks for, and otherwise the fast backoff.
 func (p *retryPolicy) delay(err error) time.Duration {
+	if errors.Is(err, errNotSubtree) {
+		return p.slow.wait()
+	}
 	var se *statusError
 	if errors.As(err, &se) {
 		if se.permanent() {
@@ -150,9 +154,12 @@ func (p *retryPolicy) reset() {
 }
 
 // holdOff is the least a poll that failed with err waits before polling
-// again: minutes after a 401, 403, or 404, or what a 429's or 503's
-// Retry-After asks for.
+// again: minutes after a 401, 403, or 404, or a server that does not serve
+// subtrees, or what a 429's or 503's Retry-After asks for.
 func holdOff(err error) time.Duration {
+	if errors.Is(err, errNotSubtree) {
+		return slowRetryBackoff
+	}
 	var se *statusError
 	if !errors.As(err, &se) {
 		return 0
@@ -220,16 +227,29 @@ func (l *failureLog) ok() (int, bool) {
 	return n, reported
 }
 
-// load fetches the chamber and applies it, unless a newer one arrived while
-// it was being fetched. Failures are logged, rate-limited.
+// load fetches the chamber (or, with a template, the subtree) and applies
+// it, unless a newer one arrived while it was being fetched. Failures are
+// logged, rate-limited.
 func (rlm *Realm) load(ctx context.Context) error {
 	version := rlm.snapshotVersion()
-	c, rev, err := rlm.retrieveChamber(ctx, rlm.path)
+	var err error
+	if rlm.template != nil {
+		var views []subtreeView
+		if views, err = rlm.retrieveSubtree(ctx, rlm.template.root); err == nil {
+			rlm.setSubtreeIf(ctx, views, version)
+		}
+	} else {
+		var c *Chamber
+		var rev uint64
+		if c, rev, err = rlm.retrieveChamber(ctx, rlm.path); err == nil {
+			rlm.setChamberIf(c, rev, version)
+		}
+	}
 	if err != nil {
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			if log, n := rlm.loadFailures.fail(time.Now()); log {
-				ev := rlm.logger.WarnCtx(ctx).Err(err).Str("path", rlm.path).Int("failures", n)
-				if rlm.getChamber() == nil {
+				ev := rlm.logger.WarnCtx(ctx).Err(err).Str("path", rlm.readPath()).Int("failures", n)
+				if !rlm.hasSnapshot() {
 					ev.Msg("could not load flags; serving defaults until a load succeeds")
 				} else {
 					ev.Msg("could not refresh flags; serving the last ones loaded")
@@ -238,11 +258,19 @@ func (rlm *Realm) load(ctx context.Context) error {
 		}
 		return err
 	}
-	rlm.setChamberIf(c, rev, version)
 	if n, reported := rlm.loadFailures.ok(); reported {
-		rlm.logger.InfoCtx(ctx).Str("path", rlm.path).Int("failures", n).Msg("flags loaded after earlier failures")
+		rlm.logger.InfoCtx(ctx).Str("path", rlm.readPath()).Int("failures", n).Msg("flags loaded after earlier failures")
 	}
 	return nil
+}
+
+// readPath returns the path realm reads: its chamber's, or its template's
+// root.
+func (rlm *Realm) readPath() string {
+	if rlm.template != nil {
+		return rlm.template.root
+	}
+	return rlm.path
 }
 
 // poll refreshes the chamber on the polling interval until realm stops. err
@@ -387,6 +415,10 @@ func (rlm *Realm) logStreamEnd(ctx context.Context, received bool, err error) {
 	case errors.Is(err, errNotStreaming):
 	case received && errors.Is(err, errStreamClosed):
 		rlm.logger.DebugCtx(ctx).Msg("chamber stream ended; reconnecting")
+	case errors.Is(err, errNotSubtree):
+		if log, n := rlm.streamFailures.fail(time.Now()); log {
+			rlm.logger.ErrorCtx(ctx).Err(err).Str("path", rlm.readPath()).Int("failures", n).Msg("the realm server answered a subtree watch with something other than a subtree; retrying in a few minutes")
+		}
 	default:
 		if log, n := rlm.streamFailures.fail(time.Now()); log {
 			rlm.logger.WarnCtx(ctx).Err(err).Int("failures", n).Msg("chamber stream unavailable; reconnecting")
@@ -395,9 +427,10 @@ func (rlm *Realm) logStreamEnd(ctx context.Context, received bool, err error) {
 }
 
 // consumeStream opens one stream and applies the chambers it delivers until
-// it ends, reporting whether it applied any; it calls delivered when it
-// applies the first. errNotStreaming means the server answered with the
-// chamber itself (it predates streaming), which has been applied.
+// it ends, reporting whether it delivered: applied a chamber, or with a
+// template, a whole subtree (its first synced event). It calls delivered the
+// first time. errNotStreaming means the server answered with the chamber (or
+// subtree) itself (it predates streaming), which has been applied.
 func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received bool, err error) {
 	// The connection is torn down when nothing arrives for streamIdleTimeout,
 	// including while waiting for the response headers.
@@ -413,8 +446,12 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		return err
 	}
 
+	var h streamHandler = chamberStream{rlm}
+	if rlm.template != nil {
+		h = newSubtreeStream(rlm)
+	}
 	version := rlm.snapshotVersion()
-	resp, err := rlm.client.Watch(ctx, rlm.path)
+	resp, err := h.open(ctx)
 	if err != nil {
 		return false, idleErr(err)
 	}
@@ -427,14 +464,9 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		return false, fmt.Errorf("chamber stream: %w", newStatusError(resp))
 	}
 	if !strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		// A server that predates streaming ignores ?watch=true and answers
-		// with the chamber. Anything else (a proxy's sign-in page, say) is a
-		// failed attempt, retried as a stream.
-		c, rev, err := readChamberResponse(resp)
-		if err != nil {
-			return false, idleErr(fmt.Errorf("chamber stream: the server answered with neither an event stream nor a chamber: %w", err))
+		if err := h.answered(ctx, resp, version); !errors.Is(err, errNotStreaming) {
+			return false, idleErr(err)
 		}
-		rlm.setChamberIf(c, rev, version)
 		return false, errNotStreaming
 	}
 
@@ -450,12 +482,16 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		idle.Reset(streamIdleTimeout)
 		line := scanner.Bytes()
 		if len(line) == 0 {
-			// A blank line dispatches the event. Only chamber events (or
-			// unnamed ones) carry a chamber; others, which a newer server may
-			// send, are skipped.
-			if hasData && (event == "" || event == "chamber") && rlm.applyEvent(ctx, data, parseRevision(id)) && !received {
-				received = true
-				delivered()
+			// A blank line dispatches the event.
+			if hasData {
+				ok, err := h.event(ctx, event, id, data)
+				if err != nil {
+					return received, err
+				}
+				if ok && !received {
+					received = true
+					delivered()
+				}
 			}
 			event, id, data, hasData = "", "", data[:0], false
 			continue

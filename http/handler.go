@@ -56,6 +56,10 @@ type HandlerConfig struct {
 	// beyond it, new streams get 503 and clients retry with backoff. Zero
 	// means DefaultMaxStreams.
 	MaxStreams int
+	// MaxSubtreeChambers caps the chambers below the root of a subtree read
+	// or watch (?subtree=true); a larger subtree is refused with 413. Zero
+	// means DefaultMaxSubtreeChambers.
+	MaxSubtreeChambers int
 }
 
 // DefaultMaxStreams is the default cap on concurrent watch streams per server.
@@ -80,6 +84,9 @@ func NewHandler(ctx context.Context, config HandlerConfig) (http.Handler, error)
 	}
 	if config.MaxStreams <= 0 {
 		config.MaxStreams = DefaultMaxStreams
+	}
+	if config.MaxSubtreeChambers <= 0 {
+		config.MaxSubtreeChambers = DefaultMaxSubtreeChambers
 	}
 	var authn *auth.Authenticator
 	if config.Auth != nil {
@@ -120,7 +127,8 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	}
 
 	streamReads := &sharedReads{strg: hc.Storage, brk: brk, timeout: hc.RequestTimeout}
-	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, streamReads, notify))
+	trees := &subtrees{strg: hc.Storage, views: newSharedViews(hc.Storage, brk, hc.RequestTimeout), brk: brk, limit: hc.MaxSubtreeChambers}
+	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, streamReads, trees, notify))
 	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk, streamReads))
 	mux.Handle("/v1/history/", handleHistory(meta))
 	mux.Handle("/v1/catalog", handleCatalog(meta))
@@ -301,7 +309,7 @@ func preconditionFailed(r *http.Request, current string) bool {
 	return false
 }
 
-func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamReads *sharedReads, notify func(path string)) http.Handler {
+func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamReads *sharedReads, trees *subtrees, notify func(path string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -421,6 +429,21 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 
 		switch req.Operation {
 		case GetOperation:
+			// ?subtree=true returns the view of the path and of every
+			// chamber below it, or streams them with watch=true (see
+			// subtree.go)
+			subtree, ok := subtreeQuery(r, fail)
+			if !ok {
+				return
+			}
+			if subtree {
+				if isWatchRequest(r) {
+					trees.stream(w, r, req.Path, fail)
+				} else {
+					trees.serve(w, r, req.Path, fail)
+				}
+				return
+			}
 			// ?inherit=layers returns the chamber and each parent chamber its
 			// inherited view is built from, nearest first (see layers.go).
 			if r.URL.Query().Get("inherit") == "layers" {
@@ -514,10 +537,16 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 			case err != nil:
 				// part of the deletion may have landed (see commit)
 				notify(req.Path)
+				for _, p := range deleted {
+					notify(p)
+				}
 				fail(http.StatusInternalServerError, err)
 			default:
-				// subscribers at or below the path are all signaled
-				notify(req.Path)
+				// each deleted chamber is announced, as a change feed
+				// announces each key: subtree streams learn which went
+				for _, p := range deleted {
+					notify(p)
+				}
 				handleOkJSON(ctx, w, deleteResult{Deleted: deleted})
 			}
 			return
@@ -708,42 +737,18 @@ func queryBool(r *http.Request, name string) (bool, error) {
 	return b, nil
 }
 
-// chamberTree returns root and every path below it that holds or leads to a
-// chamber, as stored (without inheritance). Paths are canonical.
-func chamberTree(ctx context.Context, strg storage.Storage, root string) ([]string, error) {
-	paths := []string{root}
-	for i := 0; i < len(paths); i++ {
-		names, err := strg.List(ctx, paths[i])
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		for _, name := range names {
-			// backends name a child "a" or "a/", and the file backend lists
-			// a chamber's own entry as "."
-			name = strings.TrimSuffix(name, "/")
-			if name == "" || name == "." {
-				continue
-			}
-			// realm's metadata lives only beneath the root; a chamber named
-			// "_realm" anywhere else is an ordinary one
-			if paths[i] == "/" && isReservedName(name) {
-				continue
-			}
-			paths = append(paths, paths[i]+name+"/")
-		}
-	}
-	return paths, nil
-}
-
 // deleteChamberTree deletes the chamber at root and every chamber below it in
 // one Update, recording each deletion in that chamber's history, and returns
-// the deleted paths. Conditional headers are checked against root's chamber.
-// It returns a NotFoundError when there is no chamber at or below root.
+// the deleted paths, sorted. Conditional headers are checked against root's
+// chamber. It returns a NotFoundError when there is no chamber at or below
+// root. When the Update fails after deciding what to delete, it returns the
+// paths it set out to delete with the error: part of the deletion may have
+// landed.
 //
 // The tree is listed before the Update, so a chamber created below root
 // concurrently may survive; deleting again removes it.
 func deleteChamberTree(ctx context.Context, meta *metaStore, r *http.Request, root string) ([]string, error) {
-	paths, err := chamberTree(ctx, meta.strg, root)
+	paths, err := storage.ListTree(ctx, meta.strg, root, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -783,11 +788,8 @@ func deleteChamberTree(ctx context.Context, meta *metaStore, r *http.Request, ro
 		}
 		return ops, nil
 	})
-	if err != nil {
-		return nil, err
-	}
 	slices.Sort(deleted)
-	return deleted, nil
+	return deleted, err
 }
 
 // setRevision sets the revision header (see api.RevisionHeader), unless the
@@ -854,46 +856,24 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Bool("realm.server.watch", true))
 
-	if _, ok := w.(http.Flusher); !ok {
-		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{"streaming is not supported"}))
+	if !canStream(ctx, w) {
 		return
 	}
 
 	signals, unsubscribe, ok := brk.Subscribe(path, public)
 	if !ok {
-		w.Header().Set("Retry-After", "5")
-		handleError(ctx, w, http.StatusServiceUnavailable, createResponseWithErrors(nil, []string{"too many open streams; try again later"}))
+		refuseStream(ctx, w)
 		return
 	}
 	defer unsubscribe()
 
-	rc := http.NewResponseController(w)
-	_ = rc.SetReadDeadline(time.Time{})
-	// write writes and flushes s, giving the client streamWriteTimeout to
-	// take it. It returns false when the stream should end.
-	write := func(s string) bool {
-		_ = rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
-		if _, err := io.WriteString(w, s); err != nil {
-			return false
-		}
-		return rc.Flush() == nil
-	}
-
-	// Streams end after a while and clients reconnect, which re-checks their
-	// credentials (a revoked key or expired session loses its stream) and
-	// spreads streams over replicas added since.
-	lifetime := time.NewTimer(maxStreamLifetime + rand.N(maxStreamLifetime/4))
-	defer lifetime.Stop()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 	// Commit the headers now, so clients see the stream open even while
 	// they wait for the payload's source to be created.
-	w.WriteHeader(http.StatusOK)
-	if !write("") {
+	conn := startStream(w)
+	if conn == nil {
 		return
 	}
+	defer conn.close()
 
 	// recheck fires when the last payload produced changes by itself.
 	recheck := time.NewTimer(0)
@@ -901,10 +881,8 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	defer recheck.Stop()
 	// retry fires when a payload that could not be produced is due to be
 	// produced again.
-	retry := time.NewTimer(0)
-	retry.Stop()
-	defer retry.Stop()
-	failures := 0
+	retry := newStreamBackoff()
+	defer retry.stop()
 
 	var last []byte
 	// send writes the current payload unless it is unchanged. It returns
@@ -918,7 +896,7 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 			var nfError *storage.NotFoundError
 			if errors.As(err, &nfError) {
 				// wait for it to be created
-				failures = 0
+				retry.failures = 0
 				recheck.Stop()
 				return true
 			}
@@ -926,15 +904,12 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 				// storage refuses the path: it will never exist
 				return false
 			}
-			failures++
-			delay := streamRetryDelay(failures)
+			delay := retry.fail()
 			// the shared read logs the failure itself, once for every stream
 			logger.DebugCtx(ctx).Str("path", path).Str("error", err.Error()).Dur("retryIn", delay).Msg("could not produce a stream payload")
-			retry.Reset(delay)
 			return true
 		}
-		failures = 0
-		retry.Stop()
+		retry.succeed()
 		if payload.changesAt.IsZero() {
 			recheck.Stop()
 		} else {
@@ -943,7 +918,7 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		if last != nil && bytes.Equal(payload.data, last) {
 			return true
 		}
-		if !write(eventText(event, payload.revision, payload.data)) {
+		if !conn.write(eventText(event, payload.revision, payload.data)) {
 			return false
 		}
 		last = payload.data
@@ -953,34 +928,147 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 	if !send() {
 		return
 	}
+	conn.run(ctx, signals, send, retry, send, recheck.C, send)
+}
 
+// canStream reports whether w can stream, responding 500 when it cannot.
+func canStream(ctx context.Context, w http.ResponseWriter) bool {
+	if _, ok := w.(http.Flusher); !ok {
+		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{"streaming is not supported"}))
+		return false
+	}
+	return true
+}
+
+// refuseStream responds to a watch request the broker has no room for: the
+// client retries later.
+func refuseStream(ctx context.Context, w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "5")
+	handleError(ctx, w, http.StatusServiceUnavailable, createResponseWithErrors(nil, []string{"too many open streams; try again later"}))
+}
+
+// streamConn is an open server-sent event stream.
+type streamConn struct {
+	w  http.ResponseWriter
+	rc *http.ResponseController
+	// lifetime fires when the stream has been open long enough (see
+	// maxStreamLifetime).
+	lifetime *time.Timer
+}
+
+// startStream starts a server-sent event response on w, once the caller has
+// subscribed to the changes it streams. The request must have been read in
+// full: the stream lifts the request's read deadline, and bounds each write
+// instead, so a client that stops reading loses its stream rather than
+// holding it. It returns nil when the client is gone; otherwise the caller
+// closes the stream when it ends.
+func startStream(w http.ResponseWriter) *streamConn {
+	rc := http.NewResponseController(w)
+	_ = rc.SetReadDeadline(time.Time{})
+	// Streams end after a while and clients reconnect, which re-checks their
+	// credentials (a revoked key or expired session loses its stream) and
+	// spreads streams over replicas added since.
+	c := &streamConn{w: w, rc: rc, lifetime: time.NewTimer(maxStreamLifetime + rand.N(maxStreamLifetime/4))}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	if !c.write("") {
+		c.close()
+		return nil
+	}
+	return c
+}
+
+// close releases the stream's timers.
+func (c *streamConn) close() {
+	c.lifetime.Stop()
+}
+
+// buffer writes s without flushing it, giving the client streamWriteTimeout
+// to take what the write sends. It returns false when the stream should end.
+func (c *streamConn) buffer(s string) bool {
+	_ = c.rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	_, err := io.WriteString(c.w, s)
+	return err == nil
+}
+
+// flush sends what was buffered. It returns false when the stream should end.
+func (c *streamConn) flush() bool {
+	_ = c.rc.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+	return c.rc.Flush() == nil
+}
+
+// write writes and flushes s. It returns false when the stream should end.
+func (c *streamConn) write(s string) bool {
+	return c.buffer(s) && c.flush()
+}
+
+// run serves the stream until ctx is done, its lifetime ends, or a callback
+// returns false: it calls onSignal for each broker signal, onRetry when retry
+// is due, and onRecheck when recheck fires (nil never fires), and sends
+// heartbeats in between so dead connections and idle intermediaries are
+// noticed.
+func (c *streamConn) run(ctx context.Context, signals <-chan struct{}, onSignal func() bool, retry *streamBackoff, onRetry func() bool, recheck <-chan time.Time, onRecheck func() bool) {
 	heartbeat := time.NewTicker(30 * time.Second)
 	defer heartbeat.Stop()
 
 	for {
+		var ok bool
 		select {
 		case <-ctx.Done():
 			return
-		case <-lifetime.C:
+		case <-c.lifetime.C:
 			return
 		case <-signals:
-			if !send() {
-				return
-			}
-		case <-recheck.C:
-			if !send() {
-				return
-			}
-		case <-retry.C:
-			if !send() {
-				return
-			}
+			ok = onSignal()
+		case <-recheck:
+			ok = onRecheck()
+		case <-retry.timer.C:
+			ok = onRetry()
 		case <-heartbeat.C:
-			if !write(": ping\n\n") {
-				return
-			}
+			ok = c.write(": ping\n\n")
+		}
+		if !ok {
+			return
 		}
 	}
+}
+
+// streamBackoff schedules a stream's next attempt after failures to produce
+// what it sends (see streamRetryDelay).
+type streamBackoff struct {
+	// timer fires when the next attempt is due.
+	timer *time.Timer
+	// failures counts the consecutive failures.
+	failures int
+}
+
+// newStreamBackoff returns a backoff with nothing scheduled.
+func newStreamBackoff() *streamBackoff {
+	t := time.NewTimer(0)
+	t.Stop()
+	return &streamBackoff{timer: t}
+}
+
+// fail records a failure and schedules the next attempt, returning its delay.
+func (b *streamBackoff) fail() time.Duration {
+	b.failures++
+	delay := streamRetryDelay(b.failures)
+	b.timer.Reset(delay)
+	return delay
+}
+
+// succeed records a success and cancels any scheduled attempt.
+func (b *streamBackoff) succeed() {
+	b.failures = 0
+	b.timer.Stop()
+}
+
+// stop cancels any scheduled attempt.
+func (b *streamBackoff) stop() {
+	b.timer.Stop()
 }
 
 // eventText returns data as one server-sent event, with id rev unless rev is
