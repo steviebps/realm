@@ -106,10 +106,36 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 // The request is not subject to the client's overall timeout, so the stream can
 // stay open. The caller must close the returned response body.
 func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, error) {
-	logger := logging.Ctx(ctx)
-	logger.DebugCtx(ctx).Str("path", path).Msg("opening chamber watch stream")
+	return c.watch(ctx, path, "watch=true")
+}
 
-	target := c.address.Scheme + "://" + c.address.Host + "/v1/chambers/" + strings.TrimPrefix(path, "/") + "?watch=true"
+// WatchSubtree opens a long-lived server-sent-events stream of every chamber
+// at and below path (GET /v1/chambers/<path>?subtree=true&watch=true; see
+// docs/design/subtree.md). Like Watch, it is not subject to the client's
+// overall timeout. The caller must close the returned response body.
+func (c *HttpClient) WatchSubtree(ctx context.Context, path string) (*http.Response, error) {
+	return c.watch(ctx, path, "subtree=true&watch=true")
+}
+
+// GetSubtree reads the inherited view of every chamber at and below path
+// (GET /v1/chambers/<path>?subtree=true; see docs/design/subtree.md). The
+// caller must close the returned response body.
+func (c *HttpClient) GetSubtree(ctx context.Context, path string) (*http.Response, error) {
+	req, err := c.NewRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.RawQuery = "subtree=true"
+	return c.Do(req)
+}
+
+// watch opens a server-sent-events stream of the chamber at path, asking
+// with query.
+func (c *HttpClient) watch(ctx context.Context, path string, query string) (*http.Response, error) {
+	logger := logging.Ctx(ctx)
+	logger.DebugCtx(ctx).Str("path", path).Str("query", query).Msg("opening chamber watch stream")
+
+	target := c.address.Scheme + "://" + c.address.Host + "/v1/chambers/" + strings.TrimPrefix(path, "/") + "?" + query
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
