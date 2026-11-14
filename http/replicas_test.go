@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -103,6 +104,36 @@ func testReplicasStreamEachOthersWrites(t *testing.T, a, b *httptest.Server) {
 	if next := waitData(t, events, 2*time.Second); !strings.Contains(next, `"value":true`) {
 		t.Fatalf("update event = %s", next)
 	}
+}
+
+func TestReplicasStreamSubtrees(t *testing.T) {
+	forEachSharedBackend(t, testReplicasStreamSubtrees)
+}
+
+// testReplicasStreamSubtrees verifies that a subtree stream on one replica
+// hears which chambers another replica's writes change, from the change feed.
+func testReplicasStreamSubtrees(t *testing.T, a, b *httptest.Server) {
+	putChamber(t, a.URL, "app", fmt.Sprintf(flagBody, "false"))
+	putChamber(t, a.URL, "app/web", `{"rules":{}}`)
+	putChamber(t, a.URL, "app/web/eu", `{"rules":{"beta":{"type":"boolean","value":true}}}`)
+
+	events := openSubtreeStream(t, b.URL+"/v1/chambers/app/?subtree=true&watch=true", "")
+	want := []string{"chamber /app/={beta:false}", "chamber /app/web/={beta:false}", "chamber /app/web/eu/={beta:true}"}
+	if got := untilSynced(t, events); !slices.Equal(got, want) {
+		t.Fatalf("snapshot = %q, want %q", got, want)
+	}
+
+	// the chamber below that overrides the flag keeps its view
+	putChamber(t, a.URL, "app", fmt.Sprintf(flagBody, "true"))
+	expectEvents(t, events, "chamber /app/={beta:true}", "chamber /app/web/={beta:true}")
+
+	putChamber(t, a.URL, "app/api", `{"rules":{}}`)
+	expectEvents(t, events, "chamber /app/api/={beta:true}")
+
+	if resp, out := do(t, http.MethodDelete, a.URL+"/v1/chambers/app/web/?recursive=true", "", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete: %d %v", resp.StatusCode, out.Errors)
+	}
+	expectEvents(t, events, "deleted /app/web/", "deleted /app/web/eu/")
 }
 
 func TestReplicasEnforceIfMatchTogether(t *testing.T) {

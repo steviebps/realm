@@ -53,6 +53,45 @@ export interface Sink {
   setRaw(raw: string, revision: number | undefined): void;
 }
 
+/**
+ * What a Transport follows on a route, and where the data goes: a Sink that
+ * takes one event's data (see sinkFeed), or a follower of several events,
+ * such as a Subtree. Its methods throw when the data is not what the route
+ * serves, which the Transport treats as a failed refresh that keeps the last
+ * data.
+ */
+export interface Feed {
+  /**
+   * The query (without `?`) that requests and event streams carry, such as
+   * `subtree=true`; none when empty or undefined.
+   */
+  readonly query?: string;
+  /** Receives the data of a request, with its revision, as Sink.set does. */
+  set(data: unknown, revision: number | undefined): void;
+  /** Called when an event stream opens, before its first event. */
+  open?(): void;
+  /**
+   * Receives an event of a stream: its name, its data (JSON text), and its
+   * revision (see parseRevision). It returns whether the event brought the
+   * data up to date, which counts as a successful refresh; an event it
+   * ignores (one of another name, or part of a snapshot still arriving)
+   * returns false.
+   */
+  event(name: string, raw: string, revision: number | undefined): boolean;
+}
+
+/** Returns a Feed that passes the data of the events named event to sink, ignoring others. */
+export function sinkFeed(event: string, sink: Sink): Feed {
+  return {
+    set: (data, revision) => sink.set(data, revision),
+    event(name, raw, revision) {
+      if (name !== event) return false;
+      sink.setRaw(raw, revision);
+      return true;
+    },
+  };
+}
+
 /** The response header carrying the server's storage revision of a read. */
 const revisionHeader = 'X-Realm-Revision';
 
@@ -126,7 +165,7 @@ interface Monitor {
   succeeded(): void;
 }
 
-/** Talks to one chamber of a realm server. */
+/** Talks to one chamber of a realm server, or to the subtree below it. */
 export class Transport {
   readonly #onError: (error: Error) => void;
   // Notes that refreshing works again after a reported failure.
@@ -213,19 +252,24 @@ export class Transport {
   }
 
   /**
-   * Performs a request and returns the data in the response envelope (or
-   * undefined when there is none) and the server's revision of it (see
-   * parseRevision). It rejects when no complete response
+   * Performs a request, with an optional query (without `?`), and returns
+   * the data in the response envelope (or undefined when there is none) and
+   * the server's revision of it (see parseRevision). It rejects when no
+   * complete response
    * arrives within the request timeout.
    */
   async request(
     route: 'chambers' | 'evaluate',
     init: RequestInit,
     signal?: AbortSignal,
+    query = '',
   ): Promise<{ data: unknown; revision: number | undefined }> {
     const d = deadline(this.#timeout, signal);
     try {
-      const res = await this.#fetch(this.url(route), this.#init(init, 'application/json', d.signal));
+      const res = await this.#fetch(
+        this.url(route, query ? `?${query}` : ''),
+        this.#init(init, 'application/json', d.signal),
+      );
       const body: unknown = await res.json().catch(() => undefined);
       if (d.expired()) throw d.error();
       if (!res.ok) throw await errorFrom(res, body);
@@ -240,24 +284,23 @@ export class Transport {
   }
 
   /**
-   * Loads route into sink, then keeps it current until signal aborts: over
+   * Loads route into feed, then keeps it current until signal aborts: over
    * an event stream when streaming (polling every interval milliseconds as
    * well while the stream keeps failing), otherwise by polling. Its started
    * rejects when the first load fails, but refreshing carries on in the
-   * background (an event stream starts with the full data), so the sink
+   * background (an event stream starts with the full data), so the feed
    * fills once the server is reachable.
    */
   follow(
     route: 'chambers' | 'evaluate',
     init: RequestInit,
-    event: string,
-    sink: Sink,
+    feed: Feed,
     streaming: boolean,
     interval: number,
     signal: AbortSignal,
   ): Following {
     const state: FollowState = { settled: false, loaded: false, failure: undefined };
-    const started = this.#follow(route, init, event, sink, streaming, interval, signal, state);
+    const started = this.#follow(route, init, feed, streaming, interval, signal, state);
     return {
       started,
       current: () => {
@@ -270,8 +313,7 @@ export class Transport {
   async #follow(
     route: 'chambers' | 'evaluate',
     init: RequestInit,
-    event: string,
-    sink: Sink,
+    feed: Feed,
     streaming: boolean,
     interval: number,
     signal: AbortSignal,
@@ -279,8 +321,8 @@ export class Transport {
   ): Promise<void> {
     // load requests the data and delivers it, unless its signal aborted first.
     const load = async (signal: AbortSignal) => {
-      const { data, revision } = await this.request(route, init, signal);
-      if (!signal.aborted) sink.set(data, revision);
+      const { data, revision } = await this.request(route, init, signal, feed.query);
+      if (!signal.aborted) feed.set(data, revision);
     };
     let failure: Error | undefined;
     try {
@@ -292,7 +334,7 @@ export class Transport {
     state.settled = true;
     if (signal.aborted) return;
     const background = streaming
-      ? this.#watch(route, init, event, sink, signal, state, failure, (polling) =>
+      ? this.#watch(route, init, feed, signal, state, failure, (polling) =>
           this.#poll(load, interval, polling, state, undefined, false),
         )
       : this.#poll(load, interval, signal, state, failure, true);
@@ -302,8 +344,9 @@ export class Transport {
     if (failure) throw failure;
   }
 
-  // watch keeps an event stream open until signal aborts, passing the data of
-  // each event named event to sink. It reconnects with capped exponential
+  // watch keeps an event stream open until signal aborts, passing each event
+  // to feed; one that brings feed up to date counts as applied, ending the
+  // stream's failing. It reconnects with capped exponential
   // backoff and jitter, waiting at least as long as a 503's Retry-After asks;
   // after failure (why the first load failed), it backs off before the first
   // attempt too. In a browser, coming back online cuts a backoff short. An
@@ -313,8 +356,7 @@ export class Transport {
   async #watch(
     route: 'chambers' | 'evaluate',
     init: RequestInit,
-    event: string,
-    sink: Sink,
+    feed: Feed,
     signal: AbortSignal,
     state: FollowState,
     failure: Error | undefined,
@@ -342,7 +384,8 @@ export class Transport {
       try {
         let res: Response;
         try {
-          res = await this.#fetch(this.url(route, '?watch=true'), this.#init(init, 'text/event-stream', d.signal));
+          const query = feed.query ? `?${feed.query}&watch=true` : '?watch=true';
+          res = await this.#fetch(this.url(route, query), this.#init(init, 'text/event-stream', d.signal));
           if (!res.ok) throw await errorFrom(res);
         } catch (e) {
           throw d.expired() ? d.error() : e;
@@ -355,12 +398,13 @@ export class Transport {
           res.body?.cancel().catch(() => {});
           throw new RealmError('the server did not return an event stream', res.status);
         }
+        feed.open?.();
         await readEvents(
           res.body,
           (ev) => {
-            if (ev.event !== event || signal.aborted) return;
+            if (signal.aborted) return;
             try {
-              sink.setRaw(ev.data, parseRevision(ev.id));
+              if (!feed.event(ev.event, ev.data, parseRevision(ev.id))) return;
             } catch (e) {
               // The stream stays open, and the last data in use.
               const notJSON = e instanceof SyntaxError;

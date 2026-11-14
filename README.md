@@ -224,6 +224,7 @@ Server settings:
 | `logLevel` | The minimum level logged: `debug`, `info` (default), `warn`, or `error`. `--debug` overrides it. |
 | `shutdownDelay` | How long to keep serving after `SIGTERM` while `/readyz` reports 503, such as `"5s"`. Gives load balancers time to stop routing to the server. Default: none. |
 | `maxStreams` | The most watch streams the server holds open at once. Evaluation streams may take at most three quarters of them, so server SDKs always find room. Default: `10000`. |
+| `maxSubtreeChambers` | The most chambers below the root of a subtree read or watch (`?subtree=true`). The server refuses a larger subtree with 413. Default: `10000`. |
 | `auth` | Sign-in and API keys. Refer to [Authentication](#authentication). |
 
 ### Storage backends

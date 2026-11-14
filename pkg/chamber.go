@@ -106,6 +106,9 @@ type ChamberEntry struct {
 	// revision is the server's storage revision of the chamber; 0 when
 	// unknown.
 	revision uint64
+	// path is the canonical path of the chamber the view belongs to, in a
+	// subtree snapshot (see WithPathTemplate); empty otherwise.
+	path string
 }
 
 // NewChamberEntry creates a new ChamberEntry. The provided attributes are

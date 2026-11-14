@@ -54,6 +54,81 @@ type subscription struct {
 	// ch carries change signals. It has a buffer of one and sends are
 	// non-blocking, so it holds at most one pending "stale" signal.
 	ch chan struct{}
+	// tree marks a subtree subscription (see SubscribeTree), which records
+	// the paths that changed in dirty.
+	tree bool
+
+	mu sync.Mutex
+	// dirty holds the paths changed since the subscriber last took them.
+	dirty map[string]struct{}
+	// overflow is set once more paths changed than dirty may hold before
+	// the subscriber took them (see maxDirtyPaths).
+	overflow bool
+}
+
+// maxDirtyPaths bounds the changed paths a subtree subscription records
+// between two takes; past it, the subscriber treats every view as changed.
+var maxDirtyPaths = 1024
+
+// affectedBy reports whether a change at changed (normalized with a trailing
+// slash) affects the subscriber. A chamber's view changes with a change at or
+// above it, so a watcher is affected when its path starts with changed. A
+// subtree watcher is also affected by every change below its root.
+func (s *subscription) affectedBy(changed string) bool {
+	if strings.HasPrefix(s.path, changed) {
+		return true
+	}
+	return s.tree && strings.HasPrefix(changed, s.path)
+}
+
+// record notes, for a subtree subscription, that path changed.
+func (s *subscription) record(path string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.overflow {
+		return
+	}
+	if _, ok := s.dirty[path]; ok {
+		return
+	}
+	if len(s.dirty) >= maxDirtyPaths {
+		// the subscriber will look at everything: the paths no longer matter
+		s.overflow = true
+		clear(s.dirty)
+		return
+	}
+	s.dirty[path] = struct{}{}
+}
+
+// treeSubscription is a subscription to a subtree: a root and every chamber
+// below it (see SubscribeTree).
+type treeSubscription struct {
+	sub *subscription
+}
+
+// C returns the channel that receives a signal whenever a change affects the
+// subtree. Signals coalesce, so the subscriber takes the changed paths with
+// Take after each one.
+func (t *treeSubscription) C() <-chan struct{} {
+	return t.sub.ch
+}
+
+// Take returns the paths changed since the last Take, each once and in no
+// particular order, and forgets them. overflow reports that more paths
+// changed than were recorded (see maxDirtyPaths): the subscriber should
+// treat every view as changed.
+func (t *treeSubscription) Take() (changed []string, overflow bool) {
+	s := t.sub
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed = make([]string, 0, len(s.dirty))
+	for p := range s.dirty {
+		changed = append(changed, p)
+	}
+	overflow = s.overflow
+	clear(s.dirty)
+	s.overflow = false
+	return changed, overflow
 }
 
 // newBroker returns a broker holding at most max subscriptions (zero means
@@ -72,11 +147,40 @@ func (b *broker) Subscribe(watchPath string, public bool) (_ <-chan struct{}, _ 
 		path: utils.EnsureTrailingSlash(watchPath),
 		ch:   make(chan struct{}, 1),
 	}
+	unsubscribe, ok := b.add(sub, public)
+	if !ok {
+		return nil, nil, false
+	}
+	return sub.ch, unsubscribe, true
+}
 
+// SubscribeTree registers a watcher for root and every chamber below it, and
+// returns its subscription along with a function that unregisters it. The
+// subscription is signaled by every change at, above, or below root, and
+// records which paths changed (see treeSubscription.Take). ok is false, and
+// nothing is registered, when the broker already holds its maximum number of
+// subscriptions.
+func (b *broker) SubscribeTree(root string) (_ *treeSubscription, _ func(), ok bool) {
+	sub := &subscription{
+		path:  utils.EnsureTrailingSlash(root),
+		ch:    make(chan struct{}, 1),
+		tree:  true,
+		dirty: map[string]struct{}{},
+	}
+	unsubscribe, ok := b.add(sub, false)
+	if !ok {
+		return nil, nil, false
+	}
+	return &treeSubscription{sub: sub}, unsubscribe, true
+}
+
+// add registers sub unless the broker is full (see Subscribe), and returns
+// the function that unregisters it.
+func (b *broker) add(sub *subscription, public bool) (_ func(), ok bool) {
 	b.mu.Lock()
 	if b.max > 0 && (len(b.subs) >= b.max || (public && b.public >= b.publicMax())) {
 		b.mu.Unlock()
-		return nil, nil, false
+		return nil, false
 	}
 	id := b.next
 	b.next++
@@ -99,15 +203,17 @@ func (b *broker) Subscribe(watchPath string, public bool) (_ <-chan struct{}, _ 
 			activeStreams.Add(context.Background(), -1)
 		})
 	}
-
-	return sub.ch, unsubscribe, true
+	return unsubscribe, true
 }
 
-// Notify wakes every subscriber whose watched path is at or below changedPath.
+// Notify wakes every subscriber whose watched path is at or below changedPath,
+// and every subtree subscriber whose root is above it. Subtree subscribers
+// also record changedPath (see treeSubscription.Take).
 //
 // A watcher on "/a/b/" is affected by a write to "/a/" (its inherited view may
 // change) but not by a write to "/a/b/c/". Matching is therefore a prefix test:
-// the watched path must start with the changed path.
+// the watched path must start with the changed path. A subtree watcher on
+// "/a/b/" is affected by both.
 func (b *broker) Notify(changedPath string) {
 	changed := utils.EnsureTrailingSlash(changedPath)
 
@@ -115,8 +221,11 @@ func (b *broker) Notify(changedPath string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, sub := range b.subs {
-		if !strings.HasPrefix(sub.path, changed) {
+		if !sub.affectedBy(changed) {
 			continue
+		}
+		if sub.tree {
+			sub.record(changed)
 		}
 		// Non-blocking: if a signal is already pending, coalesce into it.
 		select {

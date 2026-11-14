@@ -1,0 +1,180 @@
+{
+  "description": "Path-template cases shared by the Go SDK and the TypeScript SDK (see docs/design/subtree.md). For each case, `paths` are the views the snapshot holds, `key` and `attributes` form the evaluation context, `defaults` are the process-wide attributes, `root` is the template's root, and `expect` is the path the context resolves to (null: no chamber). `invalidTemplates` must be refused when the client is constructed.",
+  "cases": [
+    {
+      "name": "every placeholder filled, location chamber exists",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/loc-1/"],
+      "attributes": {"tenantId": "t-1", "locationId": "loc-1"},
+      "expect": "/prod/tenants/t-1/loc-1/"
+    },
+    {
+      "name": "location without a chamber falls back to its tenant",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/loc-1/"],
+      "attributes": {"tenantId": "t-1", "locationId": "loc-2"},
+      "expect": "/prod/tenants/t-1/"
+    },
+    {
+      "name": "tenant without a chamber falls back to the root",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/"],
+      "attributes": {"tenantId": "t-9", "locationId": "loc-1"},
+      "expect": "/prod/tenants/"
+    },
+    {
+      "name": "a deeper chamber is used though the path between has none",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/loc-1/"],
+      "attributes": {"tenantId": "t-1", "locationId": "loc-1"},
+      "expect": "/prod/tenants/t-1/loc-1/"
+    },
+    {
+      "name": "missing last attribute stops at the tenant",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/loc-1/"],
+      "attributes": {"tenantId": "t-1"},
+      "expect": "/prod/tenants/t-1/"
+    },
+    {
+      "name": "missing first attribute stops at the root, whatever follows",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/loc-1/"],
+      "attributes": {"locationId": "loc-1"},
+      "expect": "/prod/tenants/"
+    },
+    {
+      "name": "empty value stops resolution",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/"],
+      "attributes": {"tenantId": "", "locationId": "loc-1"},
+      "expect": "/prod/tenants/"
+    },
+    {
+      "name": "value with a slash stops resolution",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/loc-1/"],
+      "attributes": {"tenantId": "t-1/loc-1"},
+      "expect": "/prod/tenants/"
+    },
+    {
+      "name": "parent reference stops resolution",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/"],
+      "attributes": {"tenantId": "t-1", "locationId": ".."},
+      "expect": "/prod/tenants/t-1/"
+    },
+    {
+      "name": "value containing a parent reference stops resolution",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/a..b/"],
+      "attributes": {"tenantId": "a..b"},
+      "expect": "/prod/tenants/"
+    },
+    {
+      "name": "a single dot stops resolution",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/"],
+      "attributes": {"tenantId": "t-1", "locationId": "."},
+      "expect": "/prod/tenants/t-1/"
+    },
+    {
+      "name": "process-wide attributes fill placeholders",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/loc-1/"],
+      "defaults": {"tenantId": "t-1"},
+      "attributes": {"locationId": "loc-1"},
+      "expect": "/prod/tenants/t-1/loc-1/"
+    },
+    {
+      "name": "context attributes take precedence over process-wide ones",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-2/"],
+      "defaults": {"tenantId": "t-1"},
+      "attributes": {"tenantId": "t-2"},
+      "expect": "/prod/tenants/t-2/"
+    },
+    {
+      "name": "the key placeholder is the context key",
+      "template": "/prod/users/{key}/",
+      "root": "/prod/users/",
+      "paths": ["/prod/users/", "/prod/users/u-1/"],
+      "key": "u-1",
+      "expect": "/prod/users/u-1/"
+    },
+    {
+      "name": "literal segments after a placeholder",
+      "template": "/prod/tenants/{tenantId}/locations/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/", "/prod/tenants/t-1/locations/loc-1/"],
+      "attributes": {"tenantId": "t-1", "locationId": "loc-1"},
+      "expect": "/prod/tenants/t-1/locations/loc-1/"
+    },
+    {
+      "name": "a literal segment is a candidate of its own",
+      "template": "/prod/tenants/{tenantId}/locations/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/locations/"],
+      "attributes": {"tenantId": "t-1", "locationId": "loc-9"},
+      "expect": "/prod/tenants/t-1/locations/"
+    },
+    {
+      "name": "template without a trailing slash",
+      "template": "/prod/tenants/{tenantId}",
+      "root": "/prod/tenants/",
+      "paths": ["/prod/tenants/", "/prod/tenants/t-1/"],
+      "attributes": {"tenantId": "t-1"},
+      "expect": "/prod/tenants/t-1/"
+    },
+    {
+      "name": "template without placeholders resolves to its root",
+      "template": "/prod/checkout/",
+      "root": "/prod/checkout/",
+      "paths": ["/prod/checkout/", "/prod/checkout/eu/"],
+      "attributes": {"region": "eu"},
+      "expect": "/prod/checkout/"
+    },
+    {
+      "name": "placeholder directly under the root chamber",
+      "template": "/{tenantId}/",
+      "root": "/",
+      "paths": ["/", "/t-1/"],
+      "attributes": {"tenantId": "t-1"},
+      "expect": "/t-1/"
+    },
+    {
+      "name": "no views yet",
+      "template": "/prod/tenants/{tenantId}/{locationId}/",
+      "root": "/prod/tenants/",
+      "paths": [],
+      "attributes": {"tenantId": "t-1", "locationId": "loc-1"},
+      "expect": null
+    }
+  ],
+  "invalidTemplates": [
+    "",
+    "prod/{tenantId}/",
+    "/prod//{tenantId}/",
+    "/prod/t-{tenantId}/",
+    "/prod/{tenantId}x/",
+    "/prod/{}/",
+    "/prod/{tenant id}/",
+    "/prod/{tenantId/",
+    "/prod/tenantId}/",
+    "/prod/./{tenantId}/",
+    "/prod/../{tenantId}/"
+  ]
+}

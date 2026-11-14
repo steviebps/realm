@@ -48,6 +48,43 @@ realm.revision(); // the server's revision of the chamber, for example to tag sp
 realm.stop();
 ```
 
+### A chamber per tenant: `pathTemplate`
+
+A service that serves many tenants or locations can read every chamber below
+a path at once, and pick one for each context, with `pathTemplate` instead of
+`path`:
+
+```ts
+const realm = new ServerClient({
+  address: 'https://realm.example.com',
+  token: process.env.REALM_TOKEN, // a read key for /prod/tenants/
+  pathTemplate: '/prod/tenants/{tenantId}/{locationId}/',
+});
+await realm.start(); // reads (and watches) every chamber below /prod/tenants/
+
+const context = { key: user.id, attributes: { tenantId: 't-42', locationId: 'loc-7' } };
+realm.bool('new-checkout', context, false); // evaluated against the chamber the context picks
+realm.chamberPath(context); // '/prod/tenants/t-42/loc-7/', or the chamber it fell back to
+realm.revision(context); // that chamber's revision
+```
+
+The client reads the subtree at the template's root (its literal prefix, here
+`/prod/tenants/`). Each getter fills the placeholders with the context's
+attributes, read as targeting clauses read them (`{key}` is the context's
+key, and process-wide `attributes` fill in for missing ones), and evaluates
+against the deepest of the resulting paths that has a chamber: a location
+with no chamber of its own gets its tenant's, and a tenant with none gets
+the root's. Resolution stops at a placeholder whose value is missing or
+empty, contains `/` or `..`, or is `.`. Since a mistyped attribute falls back
+silently too, `chamberPath(context)` tells which chamber a context got.
+
+A placeholder is a whole segment, `{name}` (letters, digits, `_`, `-`, and
+`.`); other segments are literal text. The constructor throws a `TypeError`
+for an invalid template, or one given together with `path`. Subscribers are
+called when any chamber in the subtree changes. Subtree reads need a server
+that supports them; an older one's answers are reported to `onError` as
+failed refreshes.
+
 ## BrowserClient
 
 ```ts
@@ -192,6 +229,7 @@ friends), flag hooks return their fallbacks.
 | `address` | — | the realm server |
 | `token` | — | an API key, sent as a bearer token |
 | `path` | `/` | the chamber to read; flags inherited from parent chambers are included |
+| `pathTemplate` | none | server only, instead of `path`: picks a chamber of a subtree for each context; see [A chamber per tenant](#a-chamber-per-tenant-pathtemplate) |
 | `streaming` | `true` | keep values current over a server-sent event stream; `false` polls instead |
 | `pollingInterval` | 15 min (server), 5 min (browser) | milliseconds between polls when not streaming, or while the stream keeps failing; each wait varies by up to a tenth either way, and a value that is not positive means the default |
 | `requestTimeout` | 10 s | milliseconds to wait for a response (or a stream's headers) before retrying; `0` waits forever |
@@ -250,3 +288,5 @@ npm run build
 Evaluation is a port of the Go SDK's. `../conformance/evaluation.json` holds
 cases both implementations run; add one there whenever evaluation changes. See
 [docs/design/evaluation.md](../../docs/design/evaluation.md).
+`../conformance/subtree.json` does the same for path templates; see
+[docs/design/subtree.md](../../docs/design/subtree.md).

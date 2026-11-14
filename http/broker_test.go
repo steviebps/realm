@@ -1,9 +1,108 @@
 package http
 
 import (
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
+
+func TestBrokerTreeSubscription(t *testing.T) {
+	tests := []struct {
+		name    string
+		changed string
+		woken   bool
+	}{
+		{"the root", "/a/b/", true},
+		{"above the root", "/a/", true},
+		{"the top", "/", true},
+		{"below the root", "/a/b/c/", true},
+		{"far below the root", "/a/b/c/d/e/", true},
+		{"a sibling", "/a/c/", false},
+		{"a name sharing a prefix", "/a/bc/", false},
+		{"elsewhere", "/x/", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newBroker(0)
+			sub, unsub, ok := b.SubscribeTree("/a/b")
+			if !ok {
+				t.Fatal("subscription refused")
+			}
+			defer unsub()
+			b.Notify(tt.changed)
+			if got := received(sub.C()); got != tt.woken {
+				t.Fatalf("woken = %v, want %v", got, tt.woken)
+			}
+			changed, overflow := sub.Take()
+			var want []string
+			if tt.woken {
+				want = []string{tt.changed}
+			}
+			if overflow || !slices.Equal(changed, want) {
+				t.Errorf("Take() = %v, %v; want %v, false", changed, overflow, want)
+			}
+		})
+	}
+}
+
+func TestBrokerTreeSubscriptionCoalesces(t *testing.T) {
+	b := newBroker(0)
+	sub, unsub, _ := b.SubscribeTree("/a/")
+	defer unsub()
+
+	for range 3 {
+		b.Notify("/a/x/")
+		b.Notify("/a/y")
+	}
+	if !received(sub.C()) || received(sub.C()) {
+		t.Fatal("expected one pending signal")
+	}
+	changed, overflow := sub.Take()
+	slices.Sort(changed)
+	if overflow || !slices.Equal(changed, []string{"/a/x/", "/a/y/"}) {
+		t.Errorf("Take() = %v, %v; want each path once", changed, overflow)
+	}
+	if changed, overflow := sub.Take(); len(changed) != 0 || overflow {
+		t.Errorf("second Take() = %v, %v; want nothing", changed, overflow)
+	}
+}
+
+func TestBrokerTreeSubscriptionOverflows(t *testing.T) {
+	old := maxDirtyPaths
+	maxDirtyPaths = 3
+	t.Cleanup(func() { maxDirtyPaths = old })
+
+	b := newBroker(0)
+	sub, unsub, _ := b.SubscribeTree("/a/")
+	defer unsub()
+	for i := range 4 {
+		b.Notify(fmt.Sprintf("/a/%d/", i))
+	}
+	if changed, overflow := sub.Take(); !overflow || len(changed) != 0 {
+		t.Errorf("Take() = %v, %v; want an overflow", changed, overflow)
+	}
+	// and recording starts again
+	b.Notify("/a/x/")
+	if changed, overflow := sub.Take(); overflow || !slices.Equal(changed, []string{"/a/x/"}) {
+		t.Errorf("Take() after an overflow = %v, %v", changed, overflow)
+	}
+}
+
+func TestBrokerTreeSubscriptionsCount(t *testing.T) {
+	b := newBroker(1)
+	_, unsub, ok := b.SubscribeTree("/a/")
+	if !ok {
+		t.Fatal("first subscription refused")
+	}
+	if _, _, ok := b.Subscribe("/b/", false); ok {
+		t.Fatal("subscription beyond the cap was accepted")
+	}
+	unsub()
+	if _, _, ok := b.Subscribe("/b/", false); !ok {
+		t.Fatal("subscription refused after the tree subscription ended")
+	}
+}
 
 func received(ch <-chan struct{}) bool {
 	select {
