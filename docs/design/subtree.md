@@ -84,11 +84,16 @@ data: {"chambers":512}
   its ancestors.
 - **`id`** is the view's revision, absent when the storage does not track
   revisions.
-- **A view that cannot be built** sends nothing. Clients keep the last view
-  they received for that path, as single-chamber streams do.
+- **A view that cannot be built** is sent as a `chamber` event with `path`
+  and `error` instead of `rules`, and no `id`: in every snapshot, and
+  afterwards when a view newly fails or its error changes. It counts in
+  `synced`'s `chambers`. Clients keep the last view they received for that
+  path, as single-chamber streams do.
 - **Resync.** When the server cannot tell which views changed (too many
-  changes at once, say), it sends the whole snapshot again, ending with
-  `synced`.
+  changes at once, say), it sends the whole snapshot again, then `deleted`
+  for each path it had sent on this stream that the snapshot no longer holds,
+  then `synced`. Clients cannot tell where a resync starts, so the server
+  names what disappeared.
 - **Reconnects.** A stream may end at any time (streams have a maximum
   lifetime). The client reconnects, and after the new stream's `synced`,
   drops every path that stream did not send. That is how it learns of
@@ -124,8 +129,8 @@ The SDKs read a subtree when given a path template instead of a path:
 - Each segment between slashes is either literal text without braces, or a
   placeholder that is the whole segment: `{name}`, where `name` is one or
   more of `A-Z a-z 0-9 _ - .`.
-- Empty segments (`//`), partial placeholders (`x{a}`), and empty names
-  (`{}`) are invalid. The SDK refuses an invalid template when it is
+- Empty segments (`//`), literal `.` or `..` segments, partial placeholders
+  (`x{a}`), and empty names (`{}`) are invalid. The SDK refuses an invalid template when it is
   constructed.
 - A template without placeholders is valid, and always resolves to its root.
 - The **root** of a template is its literal prefix up to the first
@@ -168,12 +173,17 @@ silently too, the SDKs report which path a context resolved to
   chosen view to the context, so flag getters stay allocation-free.
 - **`NewContext`** (no evaluation context) pins the root's view.
 - **A getter called with a context that pins nothing** resolves from the
-  context's evaluation context on every call.
+  context's evaluation context (or the process-wide attributes alone) on
+  every call.
+- **`ChamberPath(ctx)`** is the path of the view the context pins or
+  resolves to; in single-chamber mode, the configured path.
 - **`Revision(ctx)`** is the pinned view's revision.
 
 ### TypeScript SDK
 
-- **`ServerClient`** takes a `pathTemplate` option instead of `path`.
+- **`ServerClient`** takes a `pathTemplate` option instead of `path`. An
+  invalid template, or one combined with `path`, throws a `TypeError` from
+  the constructor.
 - Getters resolve the template from the context passed to them.
 - `revision(context)` and `chamberPath(context)` report the revision and the
   path of the view that context resolves to.

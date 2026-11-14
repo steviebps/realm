@@ -173,6 +173,8 @@
     "/prod/{}/",
     "/prod/{tenant id}/",
     "/prod/{tenantId/",
-    "/prod/tenantId}/"
+    "/prod/tenantId}/",
+    "/prod/./{tenantId}/",
+    "/prod/../{tenantId}/"
   ]
 }
