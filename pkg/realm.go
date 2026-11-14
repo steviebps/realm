@@ -20,7 +20,14 @@ import (
 
 type Realm struct {
 	attributes map[string]string
-	path       string
+	// semver caches the canonical form of the "version" attribute for the
+	// views of a subtree snapshot.
+	semver semverCache
+	// path is the chamber realm reads, or empty with a template.
+	path string
+	// template is the path template (see WithPathTemplate), or nil when
+	// realm reads the single chamber at path.
+	template *pathTemplate
 	// lifecycle guards started, ctx, and cancel.
 	lifecycle sync.Mutex
 	started   bool
@@ -28,9 +35,18 @@ type Realm struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	// mu guards the snapshot (root) and the fields that describe it.
+	// mu guards the snapshot (root, or views with a template) and the fields
+	// that describe it.
 	mu   sync.RWMutex
 	root *ChamberEntry
+	// views is the subtree snapshot with a template: the view of each path
+	// at or below the template's root, nil until the first load. The views
+	// are immutable; the map changes in place under mu, so a change costs the
+	// same however large the subtree.
+	views map[string]*ChamberEntry
+	// unsupportedSeen holds the flags of a subtree snapshot that this SDK
+	// cannot fully evaluate, as logged.
+	unsupportedSeen map[string]struct{}
 	// version counts the snapshot's replacements, so that a chamber fetched
 	// while a newer one arrived (from the stream, say) never replaces it.
 	version uint64
@@ -46,14 +62,15 @@ type Realm struct {
 	logger          *logging.TracedLogger
 	tracer          trace.Tracer
 
-	// loadFailures, streamFailures, streamDown, and badEvents keep a failure
-	// that repeats from flooding the log.
-	loadFailures, streamFailures, streamDown, badEvents failureLog
+	// loadFailures, streamFailures, streamDown, badEvents, and badViews keep
+	// a failure that repeats from flooding the log.
+	loadFailures, streamFailures, streamDown, badEvents, badViews failureLog
 }
 
 type RealmConfig struct {
 	client             *client.HttpClient
 	path               string
+	pathTemplate       *string
 	applicationVersion string
 	attributes         map[string]string
 	// pollingInterval is how often realm will refetch the chamber from the realm server
@@ -113,6 +130,36 @@ func WithHttpClient(c *client.HttpClient) RealmOption {
 func WithPath(path string) RealmOption {
 	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
 		rc.path = path
+		return rc
+	})
+}
+
+// WithPathTemplate makes realm serve many chambers at once, picking one for
+// each request from its evaluation context, instead of the single chamber of
+// WithPath (which it cannot be combined with). A template is a path whose
+// segments may be placeholders named after attributes, such as
+// "/prod/tenants/{tenantId}/{locationId}/".
+//
+// Realm reads (or, with WithStreaming, watches) every chamber below the
+// template's root: its literal prefix up to the first placeholder
+// ("/prod/tenants/"). A request gets the view of the deepest path, filling
+// placeholders in order from its attributes (as targeting clauses look them
+// up, "key" being EvaluationContext.Key), that has a chamber: a location
+// without a chamber gets its tenant's, and a tenant without one the root's.
+// Filling stops at an attribute that is missing or empty, or holds "/" or
+// "..", or is ".". ChamberPath reports the path a context resolved to.
+//
+// NewContextWithEvaluation resolves the template once and pins the view it
+// picked to the context; NewContext pins the root's view. A flag getter with
+// a context that pins nothing resolves it on each call.
+//
+// NewRealm refuses a template that does not start with "/", or has an empty
+// segment, a placeholder that is not a whole segment, or a placeholder name
+// with characters other than A-Z a-z 0-9 _ - and ".". See
+// docs/design/subtree.md.
+func WithPathTemplate(template string) RealmOption {
+	return realmOptionFunc(func(rc RealmConfig) RealmConfig {
+		rc.pathTemplate = &template
 		return rc
 	})
 }
@@ -192,7 +239,17 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		return nil, errors.New("client option must not be nil")
 	}
 
-	if cfg.path == "" {
+	var template *pathTemplate
+	switch {
+	case cfg.pathTemplate != nil && cfg.path != "":
+		return nil, errors.New("WithPath and WithPathTemplate cannot be combined")
+	case cfg.pathTemplate != nil:
+		t, err := parsePathTemplate(*cfg.pathTemplate)
+		if err != nil {
+			return nil, err
+		}
+		template = t
+	case cfg.path == "":
 		return nil, errors.New("path must not be empty")
 	}
 
@@ -219,12 +276,15 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 		logger = defaultLogger()
 	}
 
+	v := attributes[VersionAttribute]
 	return &Realm{
 		tracer:          otel.Tracer("github.com/steviebps/realm"),
 		logger:          logger,
 		client:          cfg.client,
 		path:            cfg.path,
+		template:        template,
 		attributes:      attributes,
+		semver:          semverCache{raw: v, canonical: canonicalSemver(v)},
 		pollingInterval: cfg.pollingInterval,
 		streaming:       cfg.streaming,
 	}, nil
@@ -256,8 +316,9 @@ func newDefaultLogger(w io.Writer) *logging.TracedLogger {
 // errStopped is returned by Start on a stopped Realm that has no chamber.
 var errStopped = errors.New("realm is stopped")
 
-// Start loads the chamber, then keeps it current in the background (by
-// polling, or streaming with WithStreaming) until Stop.
+// Start loads the chamber (or, with WithPathTemplate, the subtree), then
+// keeps it current in the background (by polling, or streaming with
+// WithStreaming) until Stop.
 //
 // If the first load fails, Start returns its error but keeps retrying in the
 // background, with backoff, so a service can start while realm is
@@ -271,7 +332,7 @@ func (rlm *Realm) Start() error {
 	if rlm.started {
 		ctx := rlm.ctx
 		rlm.lifecycle.Unlock()
-		if rlm.getChamber() != nil {
+		if rlm.hasSnapshot() {
 			return nil
 		}
 		if ctx.Err() != nil {
@@ -371,6 +432,34 @@ func (rlm *Realm) getChamber() *ChamberEntry {
 	return rlm.root
 }
 
+// hasSnapshot reports whether a load (or a stream) has delivered the
+// chamber, or the subtree.
+func (rlm *Realm) hasSnapshot() bool {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	if rlm.template != nil {
+		return rlm.views != nil
+	}
+	return rlm.root != nil
+}
+
+// resolve returns the subtree view ec resolves to (see WithPathTemplate), or
+// nil when the snapshot holds none.
+func (rlm *Realm) resolve(ec EvaluationContext) *ChamberEntry {
+	ec = ec.withDefaults(rlm.attributes)
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	return rlm.template.resolve(rlm.views, ec)
+}
+
+// rootView returns the view of the template's root, or nil when the
+// snapshot holds none.
+func (rlm *Realm) rootView() *ChamberEntry {
+	rlm.mu.RLock()
+	defer rlm.mu.RUnlock()
+	return rlm.views[rlm.template.root]
+}
+
 func chamberFromContext(ctx context.Context) *ChamberEntry {
 	c, ok := ctx.Value(RequestContextKey).(*ChamberEntry)
 	if !ok {
@@ -379,18 +468,51 @@ func chamberFromContext(ctx context.Context) *ChamberEntry {
 	return c
 }
 
+// chamberFromContext returns the view pinned to ctx or, when it pins none,
+// the current chamber, or with a template the view the context's
+// EvaluationContext resolves to.
 func (rlm *Realm) chamberFromContext(ctx context.Context) *ChamberEntry {
 	c := chamberFromContext(ctx)
 	if c != nil {
 		return c
 	}
+	if rlm.template != nil {
+		return rlm.resolve(evaluationFromContext(ctx))
+	}
 	return rlm.getChamber()
 }
 
+// NewContext pins the current chamber snapshot to ctx, so every flag read
+// with the returned context sees the same chamber. With WithPathTemplate, it
+// pins the view of the template's root.
 func (rlm *Realm) NewContext(ctx context.Context) context.Context {
-	c := rlm.getChamber()
+	var c *ChamberEntry
+	if rlm.template != nil {
+		c = rlm.rootView()
+	} else {
+		c = rlm.getChamber()
+	}
 	ctx = context.WithValue(ctx, RequestContextKey, c)
 	return ctx
+}
+
+// ChamberPath returns the path of the chamber flag reads with ctx use: with
+// WithPathTemplate, the path of the view pinned to ctx (see
+// NewContextWithEvaluation) or that its evaluation context resolves to, and
+// otherwise the path given to WithPath. It is "" when there is no chamber
+// (before the first load, say), when flag reads return ErrChamberEmpty.
+//
+// A placeholder filled from a mistyped or missing attribute falls back to a
+// shallower chamber silently; ChamberPath shows where a request landed.
+func (rlm *Realm) ChamberPath(ctx context.Context) string {
+	c := rlm.chamberFromContext(ctx)
+	switch {
+	case c == nil:
+		return ""
+	case rlm.template == nil:
+		return rlm.path
+	}
+	return c.path
 }
 
 // Revision returns the server's storage revision of the chamber snapshot
@@ -398,7 +520,8 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 // none, so a service can record which configuration a request ran under (on
 // its spans or logs, say). It is the highest revision among the chamber and
 // the parents its inherited view merges, so it changes whenever any of them
-// does.
+// does. With WithPathTemplate, it is the revision of the view pinned to ctx,
+// or that its evaluation context resolves to.
 //
 // It is 0 before a chamber has loaded, and when the server does not report
 // revisions: only servers on transactional storage (such as postgres, etcd,
@@ -416,8 +539,16 @@ func (rlm *Realm) Revision(ctx context.Context) uint64 {
 // and additionally associates the provided EvaluationContext with the context.
 // Flag retrievals performed with the returned context apply targeting rules
 // against the context's Key and Attributes (merged over WithAttributes).
+//
+// With WithPathTemplate, it pins the view ec resolves to instead, so flag
+// reads with the returned context do not resolve the template again. Before
+// the first load there is none to pin, and each read resolves it.
 func (rlm *Realm) NewContextWithEvaluation(ctx context.Context, ec EvaluationContext) context.Context {
-	ctx = rlm.NewContext(ctx)
+	if rlm.template != nil {
+		ctx = context.WithValue(ctx, RequestContextKey, rlm.resolve(ec))
+	} else {
+		ctx = rlm.NewContext(ctx)
+	}
 	return context.WithValue(ctx, EvaluationContextKey, ec)
 }
 
