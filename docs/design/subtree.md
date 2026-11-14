@@ -1,7 +1,7 @@
 # Subtree reads and watches
 
-Status: being built (issue #144). This document is the contract the server,
-the Go SDK, and the TypeScript SDK are built against.
+Status: built in the server, the Go SDK, and the TypeScript SDK (issue
+#144). This document is the contract the three are built against.
 
 A service that serves many tenants needs the chamber of every location it
 may be asked about. Rather than one SDK client and one stream per chamber, it
@@ -44,9 +44,14 @@ that path returns) of the root and of every chamber below it:
   holding the whole subtree in memory. A failure partway through ends the
   body early, and the client sees JSON that does not parse, which it treats
   as a failed load and retries.
-- **Limits.** `HandlerConfig.MaxSubtreeChambers` (default 10,000) caps the
-  number of chambers. A larger subtree is refused with `413` before anything
-  is written.
+- **Limits.** `HandlerConfig.MaxSubtreeChambers` (`maxSubtreeChambers` in
+  the server config; default 10,000) caps the number of paths below the
+  root, counting paths that only lead to chambers: which paths hold one is
+  known only after reading them, and a larger subtree is refused with `413`
+  before anything is written. A watched subtree that grows past the cap ends
+  its stream, and the reconnect is refused with `413`.
+- **Timeouts.** A subtree read is bounded by the server's request timeout,
+  like any other request.
 - **Combinations.** `subtree=true` cannot be combined with `inherit=false` or
   `inherit=layers` (`400`).
 - **Auth.** The caller needs read access to the root (`CanRead(root)`). A
@@ -83,7 +88,7 @@ data: {"chambers":512}
   `deleted`: when its chamber is deleted, its view becomes the one built from
   its ancestors.
 - **`id`** is the view's revision, absent when the storage does not track
-  revisions.
+  revisions. `deleted`, `synced`, and error events carry none.
 - **A view that cannot be built** is sent as a `chamber` event with `path`
   and `error` instead of `rules`, and no `id`: in every snapshot, and
   afterwards when a view newly fails or its error changes. It counts in
