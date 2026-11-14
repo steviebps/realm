@@ -84,7 +84,7 @@ func parseSegment(seg string) (templateSegment, error) {
 	}
 	for i := 0; i < len(name); i++ {
 		if !isNameByte(name[i]) {
-			return templateSegment{}, fmt.Errorf("placeholder %q: a name may hold only A-Z a-z 0-9 _ - and .", seg)
+			return templateSegment{}, fmt.Errorf("placeholder %q: a name may hold only letters, digits, underscores, hyphens, and dots", seg)
 		}
 	}
 	return templateSegment{text: name, placeholder: true}, nil
