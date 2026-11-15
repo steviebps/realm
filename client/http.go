@@ -92,6 +92,12 @@ func NewHttpClient(c *HttpClientConfig) (*HttpClient, error) {
 	tracer := otel.Tracer("github.com/steviebps/realm")
 
 	return &HttpClient{
+		// Both clients use http.DefaultTransport, which asks for gzip and
+		// decompresses gzipped bodies as they are read, unless a request
+		// sets Accept-Encoding itself (it would then get the compressed
+		// bytes): requests leave it unset. Readers bound how much of a body
+		// they read, which bounds the decompressed bytes, so a small
+		// gzipped body cannot inflate past the bound.
 		underlying: &http.Client{Timeout: c.Timeout, Transport: otelhttp.NewTransport(http.DefaultTransport)},
 		// Not traced: a span would stay open for the stream's whole life.
 		streaming:  &http.Client{Transport: http.DefaultTransport},
@@ -113,13 +119,18 @@ func (c *HttpClient) Watch(ctx context.Context, path string) (*http.Response, er
 // at and below path (GET /v1/chambers/<path>?subtree=true&watch=true; see
 // docs/design/subtree.md). Like Watch, it is not subject to the client's
 // overall timeout. The caller must close the returned response body.
+//
+// Servers gzip subtree streams. The transport asks for gzip and
+// decompresses the body as it is read, so the caller reads each event as
+// soon as the server flushes it.
 func (c *HttpClient) WatchSubtree(ctx context.Context, path string) (*http.Response, error) {
 	return c.watch(ctx, path, "subtree=true&watch=true")
 }
 
 // GetSubtree reads the inherited view of every chamber at and below path
 // (GET /v1/chambers/<path>?subtree=true; see docs/design/subtree.md). The
-// caller must close the returned response body.
+// caller must close the returned response body. Servers gzip subtree
+// reads, which the transport decompresses as the body is read.
 func (c *HttpClient) GetSubtree(ctx context.Context, path string) (*http.Response, error) {
 	req, err := c.NewRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {

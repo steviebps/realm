@@ -401,10 +401,15 @@ func openSubtreeStream(t testing.TB, url, token string) <-chan sseEvent {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("open %s: %d %s", url, resp.StatusCode, body)
 	}
+	return sseEvents(resp.Body)
+}
+
+// sseEvents returns the events of the server-sent event stream body.
+func sseEvents(body io.Reader) <-chan sseEvent {
 	out := make(chan sseEvent, 1024)
 	go func() {
 		defer close(out)
-		scanner := bufio.NewScanner(resp.Body)
+		scanner := bufio.NewScanner(body)
 		scanner.Buffer(nil, 1<<20)
 		var ev sseEvent
 		for scanner.Scan() {

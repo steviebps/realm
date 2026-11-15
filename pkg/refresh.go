@@ -43,7 +43,8 @@ const (
 
 	// maxChamberBytes bounds a chamber read from the server, polled or
 	// streamed, and each view a subtree stream sends (maxSubtreeBytes bounds
-	// a subtree read).
+	// a subtree read). Like maxSubtreeBytes, it bounds decoded bytes, after
+	// the HTTP client decompresses a gzipped response.
 	maxChamberBytes = 16 << 20
 
 	// maxErrorBytes bounds the error response realm reads.
