@@ -87,6 +87,28 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   of them serves each flag, which flags a parent seals (`sealedBy`), and the
   definitions those seals hide (`hidden`); the UI uses it to show where each
   flag comes from and which flags override a parent's.
+- **Subtree reads** — `GET ?subtree=true` (`http/subtree.go`) returns the
+  inherited view of the path and of every chamber below it, root first and
+  parents before children, so a service can serve many tenants or locations
+  from one read. `storage.ListTree` lists the paths below the root (refused
+  with 413 beyond `HandlerConfig.MaxSubtreeChambers`, default 10,000, before
+  anything is written); `storage.ReadTree` then reads each chamber once,
+  keeping only those above the root and along the path being walked, and
+  merges each view in memory with `storage.BuildView` (the same
+  `Lineage.Merge` a plain read uses). On a backend that is a **`Scanner`**
+  (`postgres`, `etcd`, `boltdb`), the listing is one `ScanKeys` and the
+  chambers below the root come from one `Scan`, so a subtree costs a few
+  round trips however many chambers it holds (a 500-chamber subtree on
+  localhost Postgres: 4 storage calls and about 10 ms, against 1,004 calls
+  and 96 ms read path by path); other backends list each level and read each
+  chamber. The response is written as it is read, so a failure partway through
+  ends the body early and the client retries. When the request's
+  `Accept-Encoding` allows gzip, the body is gzipped (`http/compress.go`; see
+  Real-time updates for how). A view that cannot be built is
+  an entry with an `error` rather than a failed response. A missing root is
+  never a 404: its entry is the view built from its ancestors. Reading needs
+  `CanRead` on the root only. The wire format is in
+  [design/subtree.md](design/subtree.md).
 - **Sealed flags** — a PUT or PATCH that adds a flag a parent seals, or
   changes the chamber's stored definition of one, is refused with 400 naming
   the parent (`checkSeals` in `http/handler.go`, from
@@ -125,6 +147,23 @@ mutex. Reads (`Bool`/`String`/`Float64`/`CustomValue`) pull the snapshot (and an
   changes as the server pushes them ("immediately sourced"). The SDK reconnects
   with capped exponential backoff and **falls back to polling** if the server
   does not return an event stream (detected via `Content-Type`).
+
+**Path templates.** Instead of one path, the SDK can take a template whose
+segments may be placeholders named after attributes
+(`WithPathTemplate("/prod/tenants/{tenantId}/{locationId}/")`, parsed in
+`pkg/template.go`; `pathTemplate` in the TypeScript `ServerClient`). It then
+reads, or watches, the subtree at the template's root (its literal prefix,
+`/prod/tenants/`) and holds a map of views by path (`pkg/subtree.go`) in place
+of the single `ChamberEntry`. Each request gets the view of the deepest path
+the snapshot holds a view for, filling placeholders in order from the
+evaluation context: a location without a chamber gets its tenant's view, and a
+tenant without one the root's. `NewContextWithEvaluation` resolves once and
+pins that view to the context, so flag reads stay allocation-free;
+`Realm.ChamberPath(ctx)` (`chamberPath(context)` in TypeScript) reports which
+path a request landed on, since a mistyped attribute falls back silently. The
+Go SDK retries a server that answers a subtree read with something else (one
+that predates subtrees) after minutes, as after a 404. Both SDKs run the resolution
+cases in `sdk/conformance/subtree.json`.
 
 ### Real-time updates (SSE)
 
@@ -175,6 +214,71 @@ change. With other backends the handler notifies the broker after its own
 writes, which only reaches watchers on the same replica; run one replica with
 those backends.
 
+**Subtree watches.** `GET /v1/chambers/<root>?subtree=true&watch=true`
+(`subtrees.stream` in `http/subtree.go`) sends a `chamber` event for each
+view a subtree read returns, then `synced`; after that, a `chamber` event
+for each view a change alters and `deleted` for each chamber deleted (see
+[design/subtree.md](design/subtree.md)). The stream subscribes with
+`broker.SubscribeTree` before listing the subtree, so no change falls between
+the listing and the subscription. A tree subscription is woken by changes at,
+above, or below its root, and records the changed paths in a dirty set,
+which the stream takes after each signal: a change at or above the root may
+alter every view, and a change below it alters the views at and below that
+path (or creates or deletes one). Signals still coalesce, so a burst of writes
+costs one pass. Past `maxDirtyPaths` (1,024) paths between two takes, the
+subscription overflows and the stream **resyncs**: it lists the subtree
+again, sends every view, then `deleted` for each path it had sent that the
+new listing lacks, then `synced`. A recursive delete notifies each deleted
+path, as a `Watchable` change feed announces each key, so streams learn
+which chambers went. Each stream keeps a hash of the last data it sent for
+each path and sends only views that differ, so a write that leaves a view
+unchanged sends nothing; the events from one change are buffered and flushed
+together. A subtree that grows past `MaxSubtreeChambers` ends its stream, and
+the reconnect is refused with 413. Subtree streams count toward
+`MaxStreams`.
+
+**Compression.** Subtree reads and watches are gzipped when the request's
+`Accept-Encoding` allows it (q-values honoured), with `Content-Encoding: gzip`;
+every subtree response, errors included, carries `Vary: Accept-Encoding`, and
+errors sent before the body are never compressed. Merged chambers repeat each
+other, so a `/prod/` write fanning out to 500 views costs a stream about
+19 KB instead of 1.2 MB, for about 1.2 ms of CPU per stream at
+`flate.BestSpeed`. Every flush a subtree response makes (the read's every 64
+entries, a stream's batch of events, a heartbeat) is a deflate sync flush, so
+events arrive as promptly as uncompressed ones, and a stream that ends closes
+its gzip body cleanly. A stream borrows a compressor from a pool for one batch
+and returns it at the flush (a compressor holds about half a megabyte), so an
+idle stream holds none; batches therefore do not reference earlier ones, which
+costs little, as deflate looks back only 32 KB. Since every stream compresses
+its own copy of each event, `disableSubtreeCompression` in the server config
+(`HandlerConfig.DisableSubtreeCompression`) turns it off. Single-chamber reads
+and watches, `inherit=layers`, and evaluation streams (public, and shaped by
+the caller's context) are never compressed. Both SDKs' HTTP stacks ask for
+gzip and decompress as they read (the Go client must not set
+`Accept-Encoding` itself, or Go's transport stops decompressing), and the Go
+SDK's size bounds apply to the decompressed bytes.
+
+A write high in the tree wakes every subtree stream below it at once, and can
+change thousands of views. Rather than each stream reading them, the streams
+on a replica share a **per-change read cache** (`sharedViews`): for the
+broker's current generation, each stored chamber is read at most once
+(`storage.ReadLayer`) and each view is merged from those reads once
+(`storage.BuildView`) and marshaled once, then handed to every stream that
+asks. A snapshot on a `Scanner` backend first fills the cache with one `Scan`
+of the root (`storage.ScanLayers`), shared by the streams of that root, so a
+stream's first load (and every resync and reconnect) is a range read rather
+than a read per chamber. Like `sharedReads`, a stream only shares what was read after the latest
+change announced before it asked, so it never receives a view read before the
+change that woke it. Shared reads are detached from the stream that started
+them and bounded by the request timeout; failures are not shared (the next
+caller reads again), and the cache is dropped 30 seconds after the latest
+change (`sharedViewsTTL`). The Go SDK's `subtreeStream` (`pkg/subtree.go`)
+stages the snapshot until the first `synced` and then swaps it in whole;
+after every `synced`, it drops the paths that stream did not send, which is
+how it learns of deletions made while it was disconnected. A view sent with
+an `error` keeps the last good view of its path. Neither SDK
+resumes from `Last-Event-ID` yet.
+
 ## Storage
 
 `pkg/storage/storage.go` defines `Storage{Get,Put,Delete,List,Close}` over
@@ -208,6 +312,13 @@ Backends can implement optional interfaces (`pkg/storage/txn.go`,
   systems would map onto other names). `Update` checks every op's key before
   applying any; the error wraps `ErrInvalidPath`, which the server answers
   with 400.
+- **`Scanner`** — `Scan(ctx, prefix)` and `ScanKeys(ctx, prefix)` yield every
+  entry (or key) at or below a path in byte order of key, in one range read,
+  streamed where the backend allows (`postgres`: one statement over two index
+  ranges, skipping `/_realm/` at `/`; `etcd`: pages at one revision;
+  `boltdb`: one read transaction, copied out so a slow reader cannot stall
+  writers). Subtree reads use it (see Request flow). `cacheable` does not pass
+  it on, so reads through a cache keep going through the cache.
 - **`HealthReporter`** — `Health()` reports trouble beyond failing reads
   (`postgres`, `etcd`: a change feed that has not caught up for 30 seconds), which
   fails `/readyz`.
@@ -355,6 +466,7 @@ log line of their own.
 | etcd storage (multi-replica) | ✅ Done | `pkg/storage/etcd.go`; shared contract tests in `pkg/storage/conformance_test.go` |
 | **Real-time streaming ("immediately sourced", SSE)** | ✅ Done | `http/broker.go`, `streamChamber` in `http/handler.go`, `Realm.stream` in `pkg/realm.go` |
 | Cross-replica stream fanout (multi-instance) | ✅ Done | `Watchable` storage feeds the broker (`http/handler.go`) |
+| Subtree reads/watches; a chamber per request from a path template | ✅ Done | `http/subtree.go`, `pkg/storage/subtree.go`, `WithPathTemplate`, `pathTemplate` in `sdk/typescript` ([design](design/subtree.md)) |
 | Revisions on reads, stream event ids, and in the SDKs | ✅ Done | `Lineage.Revision`, `api.RevisionHeader`, `Realm.Revision`, `revision()` in `sdk/typescript` |
 | Revisioned streams (resume with `Last-Event-ID`, SDKs reject stale data) | ⬜ Next | builds on the event ids above |
 | SDK API keys + OIDC/GitHub sign-in for the UI, roles | ✅ Done | `auth/`, `http/auth.go` |

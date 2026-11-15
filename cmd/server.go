@@ -150,7 +150,7 @@ func runServer(cmd *cobra.Command) error {
 	if serverConfig.MaxSubtreeChambers < 0 {
 		return fmt.Errorf("invalid maxSubtreeChambers %d: want a positive number, or 0 for the default", serverConfig.MaxSubtreeChambers)
 	}
-	handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout, Auth: serverConfig.Auth, Draining: draining, MaxStreams: serverConfig.MaxStreams, MaxSubtreeChambers: serverConfig.MaxSubtreeChambers})
+	handler, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg, RequestTimeout: realmhttp.DefaultHandlerTimeout, Auth: serverConfig.Auth, Draining: draining, MaxStreams: serverConfig.MaxStreams, MaxSubtreeChambers: serverConfig.MaxSubtreeChambers, DisableSubtreeCompression: serverConfig.DisableSubtreeCompression})
 	if err != nil {
 		return err
 	}

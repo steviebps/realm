@@ -21,8 +21,10 @@ import (
 // maxSubtreeBytes bounds a subtree read (see WithPathTemplate). The server
 // caps a subtree at 10,000 chambers by default, so this allows views of
 // about 100 KiB each on average. The response is decoded as it is read, one
-// view at a time, so it is never held whole in memory.
-const maxSubtreeBytes = 1 << 30
+// view at a time, so it is never held whole in memory. It bounds the
+// decoded bytes: a gzipped response (which the HTTP client decompresses
+// as it reads) cannot inflate past it. A variable, so tests can lower it.
+var maxSubtreeBytes int64 = 1 << 30
 
 // errNotSubtree reports an answer to a subtree read or watch that is not a
 // subtree: the server likely predates subtree reads.

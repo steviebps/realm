@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -401,10 +403,15 @@ func openSubtreeStream(t testing.TB, url, token string) <-chan sseEvent {
 		body, _ := io.ReadAll(resp.Body)
 		t.Fatalf("open %s: %d %s", url, resp.StatusCode, body)
 	}
+	return sseEvents(resp.Body)
+}
+
+// sseEvents returns the events of the server-sent event stream body.
+func sseEvents(body io.Reader) <-chan sseEvent {
 	out := make(chan sseEvent, 1024)
 	go func() {
 		defer close(out)
-		scanner := bufio.NewScanner(resp.Body)
+		scanner := bufio.NewScanner(body)
 		scanner.Buffer(nil, 1<<20)
 		var ev sseEvent
 		for scanner.Scan() {
@@ -820,4 +827,71 @@ func BenchmarkSubtreeStreamParentWrite(b *testing.B) {
 	counting.mu.Unlock()
 	b.ReportMetric(float64(reads)/float64(b.N), "reads/change")
 	b.ReportMetric(float64(views), "views/change")
+}
+
+// countingScanner counts the reads and scans of a Scanner.
+type countingScanner struct {
+	storage.Scanner
+	mu    sync.Mutex
+	gets  []string
+	scans int
+}
+
+func (c *countingScanner) Get(ctx context.Context, key string) (*storage.StorageEntry, error) {
+	c.mu.Lock()
+	c.gets = append(c.gets, key)
+	c.mu.Unlock()
+	return c.Scanner.Get(ctx, key)
+}
+
+func (c *countingScanner) Scan(ctx context.Context, prefix string) iter.Seq2[*storage.StorageEntry, error] {
+	c.mu.Lock()
+	c.scans++
+	c.mu.Unlock()
+	return c.Scanner.Scan(ctx, prefix)
+}
+
+func (c *countingScanner) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.gets, c.scans = nil, 0
+}
+
+// TestSubtreeStreamSnapshotScans verifies that a stream's snapshot reads the
+// chambers below its root with one scan when the storage can scan, and sends
+// what the per-chamber reads send.
+func TestSubtreeStreamSnapshotScans(t *testing.T) {
+	sc, ok := deleteBackends["boltdb"](t).(storage.Scanner)
+	if !ok {
+		t.Fatal("boltdb is not a Scanner")
+	}
+	strg := &countingScanner{Scanner: sc}
+	base := subtreeTestServer(t, strg, nil)
+	seedSubtree(t, base)
+	strg.reset()
+
+	events := openSubtreeStream(t, base+"/v1/chambers/prod/tenants/?subtree=true&watch=true", "")
+	snapshot := untilSynced(t, events)
+	want := []string{
+		"chamber /prod/tenants/={beta:false limit:500 theme:classic}",
+		"chamber /prod/tenants/t-1/={beta:false limit:1000 theme:classic}",
+		"chamber /prod/tenants/t-1/loc-1/={beta:true limit:1000 theme:classic}",
+		"chamber /prod/tenants/t-1/loc-2/={beta:false limit:1000 theme:classic}",
+		"chamber /prod/tenants/t-2/={beta:false limit:10 theme:classic}",
+	}
+	if !slices.Equal(snapshot, want) {
+		t.Fatalf("snapshot =\n  %q\nwant\n  %q", snapshot, want)
+	}
+
+	strg.mu.Lock()
+	defer strg.mu.Unlock()
+	if strg.scans != 1 {
+		t.Errorf("the snapshot scanned %d times, want 1", strg.scans)
+	}
+	// only the root's ancestors, outside the scan, are read one by one
+	for _, key := range strg.gets {
+		if key != "/" && key != "/prod/" {
+			t.Errorf("the snapshot read %s with Get; gets %q", key, strg.gets)
+		}
+	}
 }

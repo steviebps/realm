@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -46,6 +47,65 @@ func (l *listingStorage) List(_ context.Context, prefix string) ([]string, error
 	return slices.Sorted(maps.Keys(set)), nil
 }
 
+// scanningStorage is a listingStorage that is also a Scanner, as backends
+// that can read a prefix in one query are. It counts scans, and fails the
+// scan after failAfter entries when scanErr is set.
+type scanningStorage struct {
+	*listingStorage
+	scans     int
+	scanErr   error
+	failAfter int
+}
+
+var _ Scanner = (*scanningStorage)(nil)
+
+func (s *scanningStorage) Scan(_ context.Context, prefix string) iter.Seq2[*StorageEntry, error] {
+	s.scans++
+	return func(yield func(*StorageEntry, error) bool) {
+		prefix = scanPrefix(prefix)
+		n := 0
+		for _, key := range slices.Sorted(maps.Keys(s.entries)) {
+			if !strings.HasPrefix(key, prefix) || scanSkips(prefix, key) {
+				continue
+			}
+			if s.scanErr != nil && n == s.failAfter {
+				yield(nil, s.scanErr)
+				return
+			}
+			n++
+			if !yield(&StorageEntry{Key: key, Value: []byte(s.entries[key])}, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (s *scanningStorage) ScanKeys(ctx context.Context, prefix string) iter.Seq2[string, error] {
+	return scanKeysOf(s.Scan(ctx, prefix))
+}
+
+// sources returns a listingStorage over entries and, when scan is set, one
+// that is also a Scanner.
+func sources(entries map[string]string, scan bool) (*listingStorage, Storage) {
+	l := newListingStorage(entries)
+	if scan {
+		return l, &scanningStorage{listingStorage: l}
+	}
+	return l, l
+}
+
+// bothWays runs fn as a subtest with a source that lists each level of the
+// tree, then with one that scans.
+func bothWays(t *testing.T, fn func(t *testing.T, scan bool)) {
+	for _, scan := range []bool{false, true} {
+		name := "levels"
+		if scan {
+			name = "scan"
+		}
+		t.Run(name, func(t *testing.T) { fn(t, scan) })
+	}
+}
+
 // subtreeTree is lineageTree without its slashless key, which no listing
 // names, plus siblings whose names sort around "/".
 func subtreeTree(overrides map[string]string, missing ...string) map[string]string {
@@ -69,7 +129,7 @@ func walkPaths(t *testing.T, s Storage, root string) ([]View, error) {
 		t.Fatalf("ListTree(%s): %v", root, err)
 	}
 	var views []View
-	for v, err := range WalkTree(ctx, RawLayers(s), IsInheritable(s), paths) {
+	for v, err := range ReadTree(ctx, s, paths) {
 		if err != nil {
 			return views, err
 		}
@@ -79,7 +139,15 @@ func walkPaths(t *testing.T, s Storage, root string) ([]View, error) {
 }
 
 func TestListTreeOrder(t *testing.T) {
-	src := newListingStorage(subtreeTree(nil))
+	bothWays(t, testListTreeOrder)
+}
+
+func testListTreeOrder(t *testing.T, scan bool) {
+	_, src := sources(subtreeTree(map[string]string{
+		// listed as List names them: an empty or "." segment ends a key
+		"/a//x/":  `{"rules":{}}`,
+		"/a/./y/": `{"rules":{}}`,
+	}), scan)
 	tests := []struct {
 		root string
 		want []string
@@ -102,29 +170,54 @@ func TestListTreeOrder(t *testing.T) {
 }
 
 func TestListTreeLimit(t *testing.T) {
-	src := newListingStorage(subtreeTree(nil))
-	// /a/ has five paths below it
-	if _, err := ListTree(context.Background(), src, "/a/", 5); err != nil {
-		t.Errorf("five paths below /a/ with a limit of five: %v", err)
-	}
-	if _, err := ListTree(context.Background(), src, "/a/", 4); !errors.Is(err, ErrSubtreeTooLarge) {
-		t.Errorf("five paths below /a/ with a limit of four: %v, want ErrSubtreeTooLarge", err)
-	}
+	bothWays(t, func(t *testing.T, scan bool) {
+		// /a/ has five paths below it, /a/b/ and /a/b/c/d/ only lead to
+		// chambers
+		_, src := sources(subtreeTree(nil, "/a/b/", "/a/b/c/d/"), scan)
+		if _, err := ListTree(context.Background(), src, "/a/", 5); err != nil {
+			t.Errorf("five paths below /a/ with a limit of five: %v", err)
+		}
+		if _, err := ListTree(context.Background(), src, "/a/", 4); !errors.Is(err, ErrSubtreeTooLarge) {
+			t.Errorf("five paths below /a/ with a limit of four: %v, want ErrSubtreeTooLarge", err)
+		}
+	})
 }
 
 func TestListTreeLeavesOutReservedPaths(t *testing.T) {
-	src := newListingStorage(map[string]string{
-		"/app/":                  `{"rules":{}}`,
-		"/_realm/history/app/":   `{}`,
-		"/app/_realm/":           `{"rules":{}}`,
-		"/_REALM/keys/something": `{}`,
+	bothWays(t, func(t *testing.T, scan bool) {
+		_, src := sources(map[string]string{
+			"/app/":                   `{"rules":{}}`,
+			"/_realm/history/app/":    `{}`,
+			"/app/_realm/":            `{"rules":{}}`,
+			"/_REALM/keys/something/": `{}`,
+		}, scan)
+		got, err := ListTree(context.Background(), src, "/", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"/", "/app/", "/app/_realm/"}; !slices.Equal(got, want) {
+			t.Errorf("ListTree(/) = %v, want %v", got, want)
+		}
 	})
-	got, err := ListTree(context.Background(), src, "/", 0)
-	if err != nil {
+}
+
+// TestListTreeScans verifies that ListTree reads a Scanner's keys with one
+// scan, and Lists nothing.
+func TestListTreeScans(t *testing.T) {
+	l := newListingStorage(subtreeTree(nil))
+	src := &scanningStorage{listingStorage: l}
+	inh, _ := NewInheritableStorage(src)
+	if _, err := ListTree(context.Background(), inh, "/", 0); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"/", "/app/", "/app/_realm/"}; !slices.Equal(got, want) {
-		t.Errorf("ListTree(/) = %v, want %v", got, want)
+	if src.scans != 1 || len(l.reads) != 0 {
+		t.Errorf("ListTree scanned %d times and read %v, want one scan and no reads", src.scans, l.reads)
+	}
+
+	boom := errors.New("storage unavailable")
+	src.scanErr, src.failAfter = boom, 3
+	if _, err := ListTree(context.Background(), inh, "/", 0); !errors.Is(err, boom) {
+		t.Errorf("ListTree over a failing scan = %v, want %v", err, boom)
 	}
 }
 
@@ -147,47 +240,74 @@ func TestWalkTreeMatchesGet(t *testing.T) {
 		{name: "unparsable leaf", root: "/a/", overrides: map[string]string{"/a/b/c/": `nope`}},
 		{name: "sealed", root: "/prod/", overrides: map[string]string{"/": `{"rules":{"ui.theme":{"type":"string","value":"classic","sealed":true}}}`, "/prod/us-east/": `{"rules":{"ui.theme":{"type":"string","value":"dark"}}}`}},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
-			src := newListingStorage(subtreeTree(tt.overrides, tt.missing...))
-			inh, _ := NewInheritableStorage(src)
-			views, err := walkPaths(t, inh, tt.root)
-			if err != nil {
-				t.Fatal(err)
+	bothWays(t, func(t *testing.T, scan bool) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				testWalkTreeMatchesGet(t, scan, tt.root, subtreeTree(tt.overrides, tt.missing...))
+			})
+		}
+	})
+}
+
+func testWalkTreeMatchesGet(t *testing.T, scan bool, root string, entries map[string]string) {
+	ctx := context.Background()
+	src, s := sources(entries, scan)
+	inh, _ := NewInheritableStorage(s)
+	views, err := walkPaths(t, inh, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, n := range src.reads {
+		if n > 1 {
+			t.Errorf("the walk read %s %d times", key, n)
+		}
+		if scan && !slices.Contains(consultedAncestors(root), key) {
+			t.Errorf("the walk read %s, which it scanned", key)
+		}
+	}
+	if scan && s.(*scanningStorage).scans != 2 {
+		t.Errorf("the walk scanned %d times, want 2 (ListTree and ReadTree)", s.(*scanningStorage).scans)
+	}
+	// the root, then every chamber below it, in order
+	wantPaths := []string{root}
+	for _, key := range slices.Sorted(maps.Keys(entries)) {
+		if key != root && strings.HasPrefix(key, root) {
+			wantPaths = append(wantPaths, key)
+		}
+	}
+	var gotPaths []string
+	for _, v := range views {
+		gotPaths = append(gotPaths, v.Path)
+	}
+	if !slices.Equal(gotPaths, wantPaths) {
+		t.Errorf("views of\n  %v\nwant\n  %v", gotPaths, wantPaths)
+	}
+
+	for _, v := range views {
+		if v.Path == root && !v.Stored {
+			continue // Get has no view of a path without a chamber
+		}
+		want, wantErr := inh.Get(ctx, v.Path)
+		if (v.Err == nil) != (wantErr == nil) || (wantErr != nil && v.Err.Error() != wantErr.Error()) {
+			t.Fatalf("%s: view error = %v, Get error = %v", v.Path, v.Err, wantErr)
+		}
+		if wantErr != nil {
+			var ce *ChamberError
+			if !errors.As(v.Err, &ce) {
+				t.Errorf("%s: view error %v does not wrap a ChamberError", v.Path, v.Err)
 			}
-			for key, n := range src.reads {
-				if n > 1 {
-					t.Errorf("the walk read %s %d times", key, n)
-				}
-			}
-			for _, v := range views {
-				if v.Path == tt.root && !v.Stored {
-					continue // Get has no view of a path without a chamber
-				}
-				want, wantErr := inh.Get(ctx, v.Path)
-				if (v.Err == nil) != (wantErr == nil) || (wantErr != nil && v.Err.Error() != wantErr.Error()) {
-					t.Fatalf("%s: view error = %v, Get error = %v", v.Path, v.Err, wantErr)
-				}
-				if wantErr != nil {
-					var ce *ChamberError
-					if !errors.As(v.Err, &ce) {
-						t.Errorf("%s: view error %v does not wrap a ChamberError", v.Path, v.Err)
-					}
-					continue
-				}
-				var buf bytes.Buffer
-				if err := utils.WriteInterfaceWith(&buf, v.Chamber, false); err != nil {
-					t.Fatal(err)
-				}
-				if !bytes.Equal(buf.Bytes(), want.Value) {
-					t.Errorf("%s: view =\n  %s\nGet =\n  %s", v.Path, buf.Bytes(), want.Value)
-				}
-				if v.Revision != want.Version {
-					t.Errorf("%s: view revision %d, Get %d", v.Path, v.Revision, want.Version)
-				}
-			}
-		})
+			continue
+		}
+		var buf bytes.Buffer
+		if err := utils.WriteInterfaceWith(&buf, v.Chamber, false); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(buf.Bytes(), want.Value) {
+			t.Errorf("%s: view =\n  %s\nGet =\n  %s", v.Path, buf.Bytes(), want.Value)
+		}
+		if v.Revision != want.Version {
+			t.Errorf("%s: view revision %d, Get %d", v.Path, v.Revision, want.Version)
+		}
 	}
 }
 
@@ -215,31 +335,39 @@ func TestWalkTreeEntries(t *testing.T) {
 			want: []string{"/nope/deeper/=[checkout.newFlow search.provider ui.theme]"},
 		},
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			inh, _ := NewInheritableStorage(newListingStorage(subtreeTree(nil, tt.missing...)))
-			views, err := walkPaths(t, inh, tt.root)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got []string
-			for _, v := range views {
-				got = append(got, v.Path+"="+strings.Join(slices.Sorted(maps.Keys(v.Chamber.Rules)), " "))
-			}
-			for i := range tt.want {
-				tt.want[i] = strings.ReplaceAll(strings.ReplaceAll(tt.want[i], "[", ""), "]", "")
-			}
-			if !slices.Equal(got, tt.want) {
-				t.Errorf("views =\n  %q\nwant\n  %q", got, tt.want)
-			}
-		})
-	}
+	bothWays(t, func(t *testing.T, scan bool) {
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, src := sources(subtreeTree(nil, tt.missing...), scan)
+				inh, _ := NewInheritableStorage(src)
+				views, err := walkPaths(t, inh, tt.root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got []string
+				for _, v := range views {
+					got = append(got, v.Path+"="+strings.Join(slices.Sorted(maps.Keys(v.Chamber.Rules)), " "))
+				}
+				want := make([]string, len(tt.want))
+				for i := range tt.want {
+					want[i] = strings.ReplaceAll(strings.ReplaceAll(tt.want[i], "[", ""), "]", "")
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("views =\n  %q\nwant\n  %q", got, want)
+				}
+			})
+		}
+	})
 }
 
 // TestWalkTreeWithoutInheritance verifies that each view of storage that
 // does not apply inheritance is the chamber as stored.
 func TestWalkTreeWithoutInheritance(t *testing.T) {
-	src := newListingStorage(subtreeTree(nil))
+	bothWays(t, testWalkTreeWithoutInheritance)
+}
+
+func testWalkTreeWithoutInheritance(t *testing.T, scan bool) {
+	_, src := sources(subtreeTree(nil), scan)
 	views, err := walkPaths(t, src, "/prod/")
 	if err != nil {
 		t.Fatal(err)
@@ -282,6 +410,78 @@ func TestWalkTreeStopsAtFailedRead(t *testing.T) {
 	}
 }
 
+// TestReadTreeStopsAtFailedScan verifies that a scan that fails partway ends
+// the walk with its error, at the path being walked, and that a failed read
+// of the root's ancestors ends it before the scan starts.
+func TestReadTreeStopsAtFailedScan(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("storage unavailable")
+	l := newListingStorage(subtreeTree(nil))
+	src := &scanningStorage{listingStorage: l}
+	inh, _ := NewInheritableStorage(src)
+	paths, err := ListTree(ctx, inh, "/prod/", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// /prod/ is the first entry scanned, /prod/us-east/ the second
+	src.scanErr, src.failAfter = boom, 1
+	var views []View
+	for v, err := range ReadTree(ctx, inh, paths) {
+		if err != nil {
+			if !errors.Is(err, boom) || v.Path != "/prod/us-east/" {
+				t.Errorf("walk error = %v at %s, want %v at /prod/us-east/", err, v.Path, boom)
+			}
+			break
+		}
+		views = append(views, v)
+	}
+	if len(views) != 1 || views[0].Path != "/prod/" {
+		t.Errorf("views before the failure = %+v, want /prod/ alone", views)
+	}
+
+	src.scanErr = nil
+	l.failing = map[string]error{"/": boom}
+	scans := src.scans
+	for v, err := range ReadTree(ctx, inh, paths) {
+		if !errors.Is(err, boom) {
+			t.Errorf("walk over a failing ancestor yielded %+v, %v; want %v", v, err, boom)
+		}
+	}
+	if src.scans != scans {
+		t.Error("the walk scanned after failing to read the root's ancestors")
+	}
+}
+
+// TestReadTreeSkipsUnlistedEntries verifies that ReadTree yields the views of
+// the paths it is given alone: a chamber created after the paths were listed
+// is left out, and one deleted since is a path without a chamber, as when
+// reading each path.
+func TestReadTreeSkipsUnlistedEntries(t *testing.T) {
+	bothWays(t, func(t *testing.T, scan bool) {
+		ctx := context.Background()
+		l, src := sources(subtreeTree(nil), scan)
+		inh, _ := NewInheritableStorage(src)
+		paths, err := ListTree(ctx, inh, "/prod/", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.entries["/prod/new/"] = `{"rules":{}}`
+		l.entries["/prod/us-east/a/"] = `{"rules":{}}`
+		delete(l.entries, "/prod/us-east/")
+		var got []string
+		for v, err := range ReadTree(ctx, inh, paths) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, v.Path)
+		}
+		if want := []string{"/prod/", "/prod/us-east/canary/"}; !slices.Equal(got, want) {
+			t.Errorf("views of %v, want %v", got, want)
+		}
+	})
+}
+
 func TestBuildViewMatchesGet(t *testing.T) {
 	ctx := context.Background()
 	boom := errors.New("storage unavailable")
@@ -308,4 +508,59 @@ func TestBuildViewMatchesGet(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestScanLayers verifies that ScanLayers reads, with one scan, the layer
+// ReadLayer reads for each listed path, and reads nothing from storage that
+// cannot scan.
+func TestScanLayers(t *testing.T) {
+	ctx := context.Background()
+	entries := subtreeTree(map[string]string{"/a/b/c/": `nope`}, "/prod/")
+	for _, root := range []string{"/", "/prod/", "/a/", "/none/"} {
+		t.Run(root, func(t *testing.T) {
+			l := newListingStorage(entries)
+			src := &scanningStorage{listingStorage: l}
+			paths, err := ListTree(ctx, src, root, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// ListTree scans for its keys
+			clear(l.reads)
+			src.scans = 0
+			layers, ok, err := ScanLayers(ctx, src, paths)
+			if err != nil || !ok {
+				t.Fatalf("ScanLayers: ok %v, err %v", ok, err)
+			}
+			if src.scans != 1 || len(l.reads) != 0 {
+				t.Errorf("ScanLayers scanned %d times and read %v", src.scans, l.reads)
+			}
+			if len(layers) != len(paths) {
+				t.Errorf("%d layers for %d paths", len(layers), len(paths))
+			}
+			for _, p := range paths {
+				want, err := ReadLayer(ctx, l, p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := layers[p]; layerSummary(got) != layerSummary(want) {
+					t.Errorf("%s: scanned %s, read %s", p, layerSummary(got), layerSummary(want))
+				}
+			}
+		})
+	}
+
+	t.Run("cannot scan", func(t *testing.T) {
+		l := newListingStorage(entries)
+		layers, ok, err := ScanLayers(ctx, l, []string{"/"})
+		if ok || err != nil || layers != nil || len(l.reads) != 0 {
+			t.Errorf("ScanLayers = %v, %v, %v; reads %v", layers, ok, err, l.reads)
+		}
+	})
+
+	t.Run("failed scan", func(t *testing.T) {
+		src := &scanningStorage{listingStorage: newListingStorage(entries), scanErr: errors.New("boom"), failAfter: 1}
+		if _, _, err := ScanLayers(ctx, src, []string{"/"}); err == nil {
+			t.Error("a failed scan returned no error")
+		}
+	})
 }
