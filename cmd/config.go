@@ -64,6 +64,11 @@ type ServerConfig struct {
 	// MaxSubtreeChambers caps the chambers below the root of a subtree read
 	// or watch (default 10,000); larger subtrees are refused.
 	MaxSubtreeChambers int `json:"maxSubtreeChambers,omitempty"`
+	// DisableSubtreeCompression stops gzipping subtree reads and watches
+	// for clients that accept gzip (default false: they are gzipped). Each
+	// subtree stream compresses its own copy of every event, so this trades
+	// bandwidth for CPU.
+	DisableSubtreeCompression bool `json:"disableSubtreeCompression,omitempty"`
 }
 
 type ClientConfig struct {

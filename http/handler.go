@@ -60,6 +60,11 @@ type HandlerConfig struct {
 	// or watch (?subtree=true); a larger subtree is refused with 413. Zero
 	// means DefaultMaxSubtreeChambers.
 	MaxSubtreeChambers int
+	// DisableSubtreeCompression stops gzipping subtree reads and watches
+	// (?subtree=true), which are otherwise gzipped for clients that accept
+	// it. Each subtree stream compresses its own copy of every event, so
+	// turning it off trades bandwidth for CPU.
+	DisableSubtreeCompression bool
 }
 
 // DefaultMaxStreams is the default cap on concurrent watch streams per server.
@@ -127,7 +132,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	}
 
 	streamReads := &sharedReads{strg: hc.Storage, brk: brk, timeout: hc.RequestTimeout}
-	trees := &subtrees{strg: hc.Storage, views: newSharedViews(hc.Storage, brk, hc.RequestTimeout), brk: brk, limit: hc.MaxSubtreeChambers}
+	trees := &subtrees{strg: hc.Storage, views: newSharedViews(hc.Storage, brk, hc.RequestTimeout), brk: brk, limit: hc.MaxSubtreeChambers, compress: !hc.DisableSubtreeCompression}
 	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, streamReads, trees, notify))
 	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk, streamReads))
 	mux.Handle("/v1/history/", handleHistory(meta))
@@ -1011,7 +1016,7 @@ func (c *streamConn) write(s string) bool {
 // heartbeats in between so dead connections and idle intermediaries are
 // noticed.
 func (c *streamConn) run(ctx context.Context, signals <-chan struct{}, onSignal func() bool, retry *streamBackoff, onRetry func() bool, recheck <-chan time.Time, onRecheck func() bool) {
-	heartbeat := time.NewTicker(30 * time.Second)
+	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 
 	for {
@@ -1100,6 +1105,9 @@ var maxStreamLifetime = 20 * time.Minute
 
 // streamWriteTimeout bounds each write to a watch stream.
 var streamWriteTimeout = 30 * time.Second
+
+// heartbeatInterval is how often a watch stream sends a heartbeat (": ping").
+var heartbeatInterval = 30 * time.Second
 
 // streamRetryDelay is how long a stream waits before producing its payload
 // again after failures consecutive failures: doubling from one second to 30,

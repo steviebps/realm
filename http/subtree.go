@@ -66,6 +66,9 @@ type subtrees struct {
 	// limit caps the chambers below a root (see
 	// HandlerConfig.MaxSubtreeChambers).
 	limit int
+	// compress gzips responses to requests that accept it (see
+	// HandlerConfig.DisableSubtreeCompression).
+	compress bool
 }
 
 // list lists the subtree at root, responding to errors with fail.
@@ -88,18 +91,23 @@ func (s *subtrees) list(ctx context.Context, root string, fail func(int, error))
 // as they are read (see docs/design/subtree.md). The caller has checked that
 // the request may read root, which covers the paths below it. A failure
 // partway through ends the body early, so clients see JSON that does not
-// parse and retry.
+// parse and retry. The body is gzipped when the request accepts it, and
+// each flush sends the entries written so far.
 func (s *subtrees) serve(w http.ResponseWriter, r *http.Request, root string, fail func(int, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Bool("realm.server.subtree", true))
+	varyByEncoding(w)
 
 	paths, ok := s.list(ctx, root, fail)
 	if !ok {
 		return
 	}
 
+	w, end := compressible(w, r, s.compress)
+	defer end()
+	span.SetAttributes(attribute.String("realm.server.contentEncoding", contentEncoding(w)))
 	rc := http.NewResponseController(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -146,12 +154,15 @@ func (s *subtrees) serve(w http.ResponseWriter, r *http.Request, root string, fa
 // stream holds an SSE connection open and keeps the client's views of root
 // and every chamber below it current (see docs/design/subtree.md): a
 // snapshot of every view, then synced, then the views each change affects.
-// The caller has checked that the request may read root.
+// The stream is gzipped when the request accepts it, and each flush (a
+// batch of events, or a heartbeat) sends what was written so far. The
+// caller has checked that the request may read root.
 func (s *subtrees) stream(w http.ResponseWriter, r *http.Request, root string, fail func(int, error)) {
 	ctx := r.Context()
 	logger := logging.Ctx(ctx)
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(attribute.Bool("realm.server.watch", true), attribute.Bool("realm.server.subtree", true))
+	varyByEncoding(w)
 
 	if !canStream(ctx, w) {
 		return
@@ -171,6 +182,8 @@ func (s *subtrees) stream(w http.ResponseWriter, r *http.Request, root string, f
 		return
 	}
 
+	w, end := compressible(w, r, s.compress)
+	defer end()
 	conn := startStream(w)
 	if conn == nil {
 		return
