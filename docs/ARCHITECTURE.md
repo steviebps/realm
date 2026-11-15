@@ -92,12 +92,19 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   parents before children, so a service can serve many tenants or locations
   from one read. `storage.ListTree` lists the paths below the root (refused
   with 413 beyond `HandlerConfig.MaxSubtreeChambers`, default 10,000, before
-  anything is written); `storage.WalkTree` then reads each chamber once,
+  anything is written); `storage.ReadTree` then reads each chamber once,
   keeping only those above the root and along the path being walked, and
-  merges each view
-  in memory with `storage.BuildView` (the same `Lineage.Merge` a plain read
-  uses). The response is written as it is read, so a failure partway through
-  ends the body early and the client retries. A view that cannot be built is
+  merges each view in memory with `storage.BuildView` (the same
+  `Lineage.Merge` a plain read uses). On a backend that is a **`Scanner`**
+  (`postgres`, `etcd`, `boltdb`), the listing is one `ScanKeys` and the
+  chambers below the root come from one `Scan`, so a subtree costs a few
+  round trips however many chambers it holds (a 500-chamber subtree on
+  localhost Postgres: 4 storage calls and about 10 ms, against 1,004 calls
+  and 96 ms read path by path); other backends list each level and read each
+  chamber. The response is written as it is read, so a failure partway through
+  ends the body early and the client retries. When the request's
+  `Accept-Encoding` allows gzip, the body is gzipped (`http/compress.go`; see
+  Real-time updates for how). A view that cannot be built is
   an entry with an `error` rather than a failed response. A missing root is
   never a 404: its entry is the view built from its ancestors. Reading needs
   `CanRead` on the root only. The wire format is in
@@ -230,13 +237,37 @@ together. A subtree that grows past `MaxSubtreeChambers` ends its stream, and
 the reconnect is refused with 413. Subtree streams count toward
 `MaxStreams`.
 
+**Compression.** Subtree reads and watches are gzipped when the request's
+`Accept-Encoding` allows it (q-values honoured), with `Content-Encoding: gzip`;
+every subtree response, errors included, carries `Vary: Accept-Encoding`, and
+errors sent before the body are never compressed. Merged chambers repeat each
+other, so a `/prod/` write fanning out to 500 views costs a stream about
+19 KB instead of 1.2 MB, for about 1.2 ms of CPU per stream at
+`flate.BestSpeed`. Every flush a subtree response makes (the read's every 64
+entries, a stream's batch of events, a heartbeat) is a deflate sync flush, so
+events arrive as promptly as uncompressed ones, and a stream that ends closes
+its gzip body cleanly. A stream borrows a compressor from a pool for one batch
+and returns it at the flush (a compressor holds about half a megabyte), so an
+idle stream holds none; batches therefore do not reference earlier ones, which
+costs little, as deflate looks back only 32 KB. Since every stream compresses
+its own copy of each event, `disableSubtreeCompression` in the server config
+(`HandlerConfig.DisableSubtreeCompression`) turns it off. Single-chamber reads
+and watches, `inherit=layers`, and evaluation streams (public, and shaped by
+the caller's context) are never compressed. Both SDKs' HTTP stacks ask for
+gzip and decompress as they read (the Go client must not set
+`Accept-Encoding` itself, or Go's transport stops decompressing), and the Go
+SDK's size bounds apply to the decompressed bytes.
+
 A write high in the tree wakes every subtree stream below it at once, and can
 change thousands of views. Rather than each stream reading them, the streams
 on a replica share a **per-change read cache** (`sharedViews`): for the
 broker's current generation, each stored chamber is read at most once
 (`storage.ReadLayer`) and each view is merged from those reads once
 (`storage.BuildView`) and marshaled once, then handed to every stream that
-asks. Like `sharedReads`, a stream only shares what was read after the latest
+asks. A snapshot on a `Scanner` backend first fills the cache with one `Scan`
+of the root (`storage.ScanLayers`), shared by the streams of that root, so a
+stream's first load (and every resync and reconnect) is a range read rather
+than a read per chamber. Like `sharedReads`, a stream only shares what was read after the latest
 change announced before it asked, so it never receives a view read before the
 change that woke it. Shared reads are detached from the stream that started
 them and bounded by the request timeout; failures are not shared (the next
@@ -281,6 +312,13 @@ Backends can implement optional interfaces (`pkg/storage/txn.go`,
   systems would map onto other names). `Update` checks every op's key before
   applying any; the error wraps `ErrInvalidPath`, which the server answers
   with 400.
+- **`Scanner`** — `Scan(ctx, prefix)` and `ScanKeys(ctx, prefix)` yield every
+  entry (or key) at or below a path in byte order of key, in one range read,
+  streamed where the backend allows (`postgres`: one statement over two index
+  ranges, skipping `/_realm/` at `/`; `etcd`: pages at one revision;
+  `boltdb`: one read transaction, copied out so a slow reader cannot stall
+  writers). Subtree reads use it (see Request flow). `cacheable` does not pass
+  it on, so reads through a cache keep going through the cache.
 - **`HealthReporter`** — `Health()` reports trouble beyond failing reads
   (`postgres`, `etcd`: a change feed that has not caught up for 30 seconds), which
   fails `/readyz`.

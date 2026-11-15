@@ -119,6 +119,35 @@ server keeps that cheap:
 2. Each stream remembers what it last sent for each path, and sends only
    views that changed.
 3. The events from one change are written together and flushed once.
+4. They are gzipped (see Compression), and merged chambers repeat each
+   other: a `/prod/` write that changes 500 views costs a stream about 19 KB
+   rather than 1.2 MB.
+
+On storage that can read a range of keys in one query (Postgres, etcd,
+boltdb), a subtree read, and a stream's snapshot, list and read the subtree
+with one range read rather than a read per chamber.
+
+## Compression
+
+Subtree reads and watches are gzipped when the request's `Accept-Encoding`
+allows gzip (q-values are honoured, so `gzip;q=0` turns it off):
+
+- Compressed responses carry `Content-Encoding: gzip`. Every subtree
+  response carries `Vary: Accept-Encoding`.
+- Errors sent before the body (`400`, `403`, `413`, `503`) are never
+  compressed.
+- Each flush is a deflate sync flush: a read's batch of entries, a stream's
+  events from one change, a heartbeat. Events therefore arrive as promptly
+  as uncompressed ones. A stream that ends closes its gzip body cleanly.
+- The server config's `disableSubtreeCompression` turns compression off, for
+  CPU: each stream compresses its own copy of every event.
+- Single-chamber reads and watches, `inherit=layers`, and evaluation streams
+  are not compressed.
+
+Clients should ask for gzip and decompress as they read: the Go SDK (through
+Go's transport, so it must not set `Accept-Encoding` itself) and the
+TypeScript SDK (through `fetch`) do. Size limits apply to the decompressed
+bytes.
 
 ## Picking a chamber from a path template
 
@@ -196,7 +225,7 @@ silently too, the SDKs report which path a context resolved to
 ## Not covered yet
 
 - Resuming a stream from `Last-Event-ID`.
-- Range reads (`Scan`) for backends that can list a prefix in one query.
-  Until then, a subtree read lists each level of the tree.
-- Compressing streams.
+- Range reads on the other backends (S3, GCS, file, bigcache) and through a
+  `cacheable` storage: a subtree read there lists each level of the tree and
+  reads each chamber.
 - Subtrees in the evaluation endpoint, or for `evaluate` keys.
