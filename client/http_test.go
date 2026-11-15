@@ -1,13 +1,18 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/steviebps/realm/helper/logging"
@@ -146,5 +151,72 @@ func TestSubtreeRequests(t *testing.T) {
 				t.Errorf("got %+v, want %+v", got[i], tt.want)
 			}
 		})
+	}
+}
+
+// TestSubtreeResponsesAreDecompressed verifies that subtree reads and
+// watches ask for gzip and get bodies decompressed as they are read: a
+// watch's first event before the server sends more.
+func TestSubtreeResponsesAreDecompressed(t *testing.T) {
+	more := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			http.Error(w, "gzip not accepted: "+r.Header.Get("Accept-Encoding"), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Encoding", "gzip")
+		gz := gzip.NewWriter(w)
+		defer gz.Close()
+		if r.URL.Query().Get("watch") != "true" {
+			fmt.Fprint(gz, `{"data":{"chambers":[]}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(gz, "event: synced\ndata: {\"chambers\":0}\n\n")
+		_ = gz.Flush()
+		w.(http.Flusher).Flush()
+		select {
+		case <-more:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(more)
+	c, err := NewHttpClient(&HttpClientConfig{Address: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	res, err := c.GetSubtree(ctx, "/prod/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil || res.StatusCode != http.StatusOK || string(body) != `{"data":{"chambers":[]}}` || !res.Uncompressed {
+		t.Errorf("read: %d %q, %v (decompressed: %v)", res.StatusCode, body, err, res.Uncompressed)
+	}
+
+	res, err = c.WatchSubtree(ctx, "/prod/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK || !res.Uncompressed {
+		t.Fatalf("watch: %d (decompressed: %v)", res.StatusCode, res.Uncompressed)
+	}
+	line := make(chan string, 1)
+	go func() {
+		s, _ := bufio.NewReader(res.Body).ReadString('\n')
+		line <- s
+	}()
+	select {
+	case got := <-line:
+		if got != "event: synced\n" {
+			t.Errorf("first line %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first event did not arrive while the stream was open")
 	}
 }
