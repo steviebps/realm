@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"os"
 	"slices"
@@ -57,6 +58,7 @@ var (
 	_ Transactional  = (*EtcdStorage)(nil)
 	_ Watchable      = (*EtcdStorage)(nil)
 	_ HealthReporter = (*EtcdStorage)(nil)
+	_ Scanner        = (*EtcdStorage)(nil)
 )
 
 var (
@@ -65,6 +67,9 @@ var (
 	etcdTimeout = 10 * time.Second
 	// etcdListPage is how many keys List reads per request.
 	etcdListPage int64 = 512
+	// etcdScanPage is how many entries, with their values, Scan reads per
+	// request.
+	etcdScanPage int64 = 256
 	// etcdProgressInterval is how often a Watch checks that it is current
 	// (see etcdWatcher.probe), which is how it notices a feed that stopped
 	// because the cluster is unreachable.
@@ -331,6 +336,79 @@ func (s *EtcdStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 	slices.Sort(names)
 	return names, nil
+}
+
+// Scan yields the entry at prefix and every entry below it, in key order (see
+// Scanner). It reads one revision of the cluster, a page of entries
+// (etcdScanPage) per request, and holds only the page it is yielding. At "/",
+// it skips the range under ReservedPrefix rather than reading realm's
+// metadata.
+func (s *EtcdStorage) Scan(ctx context.Context, prefix string) iter.Seq2[*StorageEntry, error] {
+	return s.scan(ctx, "Scan", prefix, true)
+}
+
+// ScanKeys yields the keys Scan would yield, reading keys alone, a page of
+// etcdListPage per request.
+func (s *EtcdStorage) ScanKeys(ctx context.Context, prefix string) iter.Seq2[string, error] {
+	return scanKeysOf(s.scan(ctx, "ScanKeys", prefix, false))
+}
+
+// scan runs Scan (with values) or ScanKeys (without), in a span named name.
+func (s *EtcdStorage) scan(ctx context.Context, name, prefix string, values bool) iter.Seq2[*StorageEntry, error] {
+	return func(yield func(*StorageEntry, error) bool) {
+		ctx, span := s.tracer.Start(ctx, "EtcdStorage "+name, trace.WithAttributes(attribute.String("realm.etcd.prefix", prefix)))
+		defer span.End()
+
+		logging.Ctx(ctx).DebugCtx(ctx).Str("prefix", prefix).Msg("scan operation")
+
+		fail := func(err error) {
+			recordError(span, err)
+			yield(nil, err)
+		}
+		if err := ValidatePath(prefix); err != nil {
+			fail(err)
+			return
+		}
+		prefix = scanPrefix(prefix)
+		n := 0
+		defer func() { span.SetAttributes(attribute.Int("realm.etcd.entries", n)) }()
+		// every page after the first reads the first one's revision, so the
+		// scan sees one snapshot
+		var rev int64
+		for _, r := range scanRanges(prefix) {
+			start, end := s.prefix+r[0], s.prefix+r[1]
+			for {
+				opts := []clientv3.OpOption{clientv3.WithRange(end), clientv3.WithLimit(etcdScanPage)}
+				if !values {
+					opts = append(opts, clientv3.WithKeysOnly(), clientv3.WithLimit(etcdListPage))
+				}
+				if rev != 0 {
+					opts = append(opts, clientv3.WithRev(rev))
+				}
+				resp, err := s.client.Get(ctx, start, opts...)
+				if err != nil {
+					fail(err)
+					return
+				}
+				rev = resp.Header.Revision
+				for _, kv := range resp.Kvs {
+					e := &StorageEntry{Key: string(kv.Key[len(s.prefix):]), Value: kv.Value, Version: uint64(kv.ModRevision)}
+					if scanSkips(prefix, e.Key) {
+						continue
+					}
+					n++
+					if !yield(e, nil) {
+						return
+					}
+				}
+				if !resp.More || len(resp.Kvs) == 0 {
+					break
+				}
+				// the next key after the last one read
+				start = string(resp.Kvs[len(resp.Kvs)-1].Key) + "\x00"
+			}
+		}
+	}
 }
 
 // Txn applies ops atomically if every check holds. A later op on a key

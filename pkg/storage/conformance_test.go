@@ -61,6 +61,23 @@ func transactionalBackends() map[string]func(t *testing.T) Transactional {
 	return out
 }
 
+// scannerBackends maps every locally testable Transactional backend to a
+// function opening a fresh, empty instance of it as a Scanner, skipping the
+// test for a backend that is not one.
+func scannerBackends() map[string]func(t *testing.T) Scanner {
+	out := map[string]func(t *testing.T) Scanner{}
+	for name, open := range transactionalBackends() {
+		out[name] = func(t *testing.T) Scanner {
+			s, ok := open(t).(Scanner)
+			if !ok {
+				t.Skipf("%s is not a Scanner", name)
+			}
+			return s
+		}
+	}
+	return out
+}
+
 // txnContract is what every Transactional backend must do.
 var txnContract = []struct {
 	name string

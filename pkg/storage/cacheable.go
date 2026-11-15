@@ -30,6 +30,11 @@ import (
 // cacheable reads carry no Version, since the cache may answer, and one served
 // from a versioned cache (boltdb) would carry the cache's revision rather than
 // the source's. ReadForUpdate's carry the source's, which is all Update needs.
+//
+// CacheableStorage is never a Scanner, even over one (boltdb): a scan would
+// read the source past the cache, and carry the source's versions, so subtree
+// reads (see ListTree and ReadTree) list and read it a path at a time,
+// through the cache, like every other read.
 type CacheableStorage struct {
 	cache  Storage
 	source Storage

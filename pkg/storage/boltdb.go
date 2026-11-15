@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"iter"
 	"path"
 	"path/filepath"
 	"slices"
@@ -38,6 +39,7 @@ type BoltStorage struct {
 var (
 	_ Storage       = (*BoltStorage)(nil)
 	_ Transactional = (*BoltStorage)(nil)
+	_ Scanner       = (*BoltStorage)(nil)
 )
 
 var (
@@ -262,6 +264,106 @@ func (b *BoltStorage) List(ctx context.Context, prefix string) ([]string, error)
 	}
 
 	return names, nil
+}
+
+// Scan yields the entry at prefix and every entry below it, in key order (see
+// Scanner), from one read transaction. Unlike the network backends it does
+// not stream: it copies the entries out of the transaction before yielding
+// any, because a read transaction held open while a caller writes them to a
+// slow client would keep the database file from growing (bbolt remaps it
+// only when no transaction holds the old mapping), stalling every write. The
+// database is local, so the copy costs memory, not round trips.
+//
+// Keys are stored cleaned, without their trailing slash ("/a/b" for "/a/b/"),
+// and so sort differently ("/a" < "/a-b" < "/a/b", where "/a-b/" < "/a/" <
+// "/a/b/"): Scan reads the entry at prefix and the range below it, then
+// sorts the entries by the paths it yields.
+func (b *BoltStorage) Scan(ctx context.Context, prefix string) iter.Seq2[*StorageEntry, error] {
+	return b.scan(ctx, "Scan", prefix, true)
+}
+
+// ScanKeys yields the keys Scan would yield, without copying values.
+func (b *BoltStorage) ScanKeys(ctx context.Context, prefix string) iter.Seq2[string, error] {
+	return scanKeysOf(b.scan(ctx, "ScanKeys", prefix, false))
+}
+
+// boltReserved and boltReservedEnd bound the cleaned keys beneath
+// ReservedPrefix, which a scan of "/" skips.
+var (
+	boltReserved    = []byte(ReservedPrefix)
+	boltReservedEnd = []byte(strings.TrimSuffix(ReservedPrefix, "/") + "0")
+)
+
+// scan runs Scan (with values) or ScanKeys (without), in a span named name.
+func (b *BoltStorage) scan(ctx context.Context, name, prefix string, values bool) iter.Seq2[*StorageEntry, error] {
+	return func(yield func(*StorageEntry, error) bool) {
+		ctx, span := b.tracer.Start(ctx, "BoltStorage "+name, trace.WithAttributes(attribute.String("realm.bolt.prefix", prefix)))
+		defer span.End()
+
+		logging.Ctx(ctx).DebugCtx(ctx).Str("prefix", prefix).Msg("scan operation")
+
+		if err := ValidatePath(prefix); err != nil {
+			recordError(span, err)
+			yield(nil, err)
+			return
+		}
+		// rooted and cleaned, with a trailing slash, like the keys yielded
+		prefix = canonicalChamberPath(scanPrefix(prefix))
+
+		var entries []*StorageEntry
+		err := b.db.View(func(tx *bolt.Tx) error {
+			bk := boltBucketsOf(tx)
+			add := func(k, v []byte) {
+				key := string(k)
+				if key != "/" {
+					key += "/"
+				}
+				if scanSkips(prefix, key) {
+					return
+				}
+				e := &StorageEntry{Key: key, Version: bk.version(k)}
+				if values {
+					// v points into the memory-mapped database (see Get)
+					e.Value = bytes.Clone(v)
+				}
+				entries = append(entries, e)
+			}
+			// the entry at prefix itself is stored without the slash that
+			// starts the range below it ("/" is both)
+			if self := []byte(strings.TrimSuffix(prefix, "/")); len(self) > 0 {
+				if v := bk.chambers.Get(self); v != nil {
+					add(self, v)
+				}
+			}
+			lo := []byte(prefix)
+			c := bk.chambers.Cursor()
+			k, v := c.Seek(lo)
+			for k != nil && bytes.HasPrefix(k, lo) {
+				if prefix == "/" && bytes.HasPrefix(k, boltReserved) {
+					k, v = c.Seek(boltReservedEnd)
+					continue
+				}
+				add(k, v)
+				k, v = c.Next()
+			}
+			return nil
+		})
+		if err == nil {
+			err = ctx.Err()
+		}
+		if err != nil {
+			recordError(span, err)
+			yield(nil, err)
+			return
+		}
+		slices.SortFunc(entries, func(x, y *StorageEntry) int { return strings.Compare(x.Key, y.Key) })
+		span.SetAttributes(attribute.Int("realm.bolt.entries", len(entries)))
+		for _, e := range entries {
+			if !yield(e, nil) {
+				return
+			}
+		}
+	}
 }
 
 // Txn applies ops in one bbolt transaction if every check holds, giving
