@@ -509,3 +509,58 @@ func TestBuildViewMatchesGet(t *testing.T) {
 		}
 	}
 }
+
+// TestScanLayers verifies that ScanLayers reads, with one scan, the layer
+// ReadLayer reads for each listed path, and reads nothing from storage that
+// cannot scan.
+func TestScanLayers(t *testing.T) {
+	ctx := context.Background()
+	entries := subtreeTree(map[string]string{"/a/b/c/": `nope`}, "/prod/")
+	for _, root := range []string{"/", "/prod/", "/a/", "/none/"} {
+		t.Run(root, func(t *testing.T) {
+			l := newListingStorage(entries)
+			src := &scanningStorage{listingStorage: l}
+			paths, err := ListTree(ctx, src, root, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// ListTree scans for its keys
+			clear(l.reads)
+			src.scans = 0
+			layers, ok, err := ScanLayers(ctx, src, paths)
+			if err != nil || !ok {
+				t.Fatalf("ScanLayers: ok %v, err %v", ok, err)
+			}
+			if src.scans != 1 || len(l.reads) != 0 {
+				t.Errorf("ScanLayers scanned %d times and read %v", src.scans, l.reads)
+			}
+			if len(layers) != len(paths) {
+				t.Errorf("%d layers for %d paths", len(layers), len(paths))
+			}
+			for _, p := range paths {
+				want, err := ReadLayer(ctx, l, p)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := layers[p]; layerSummary(got) != layerSummary(want) {
+					t.Errorf("%s: scanned %s, read %s", p, layerSummary(got), layerSummary(want))
+				}
+			}
+		})
+	}
+
+	t.Run("cannot scan", func(t *testing.T) {
+		l := newListingStorage(entries)
+		layers, ok, err := ScanLayers(ctx, l, []string{"/"})
+		if ok || err != nil || layers != nil || len(l.reads) != 0 {
+			t.Errorf("ScanLayers = %v, %v, %v; reads %v", layers, ok, err, l.reads)
+		}
+	})
+
+	t.Run("failed scan", func(t *testing.T) {
+		src := &scanningStorage{listingStorage: newListingStorage(entries), scanErr: errors.New("boom"), failAfter: 1}
+		if _, _, err := ScanLayers(ctx, src, []string{"/"}); err == nil {
+			t.Error("a failed scan returned no error")
+		}
+	})
+}

@@ -278,6 +278,9 @@ func (s *subtreeStream) take() {
 // that the snapshot no longer holds, as clients cannot tell where a resync
 // starts; then synced. It holds the views sent as the client's.
 func (s *subtreeStream) snapshot(ctx context.Context, paths []string) error {
+	if err := s.views.prefill(ctx, paths); err != nil {
+		return err
+	}
 	held := make(map[string]heldView, len(paths))
 	// a snapshot cut short has sent some views: remember them, so the next
 	// one says which of them went
@@ -482,6 +485,8 @@ type viewGeneration struct {
 	gen    uint64
 	layers map[string]*sharedCall[storage.Layer]
 	views  map[string]*sharedCall[builtView]
+	// scans holds, by root, the scans that filled layers (see prefill).
+	scans map[string]*sharedCall[struct{}]
 }
 
 // sharedCall is one read that callers share.
@@ -499,7 +504,7 @@ func (s *sharedViews) generation() *viewGeneration {
 	if s.cur != nil && s.cur.gen >= gen {
 		return s.cur
 	}
-	s.cur = &viewGeneration{gen: gen, layers: map[string]*sharedCall[storage.Layer]{}, views: map[string]*sharedCall[builtView]{}}
+	s.cur = &viewGeneration{gen: gen, layers: map[string]*sharedCall[storage.Layer]{}, views: map[string]*sharedCall[builtView]{}, scans: map[string]*sharedCall[struct{}]{}}
 	if s.expiry == nil {
 		s.expiry = time.AfterFunc(sharedViewsTTL, func() {
 			s.mu.Lock()
@@ -513,11 +518,13 @@ func (s *sharedViews) generation() *viewGeneration {
 }
 
 // shared returns the value at key in the map of the latest generation that
-// pick selects, loading it with load unless another caller already is.
-// Failures are not shared with later callers, which load again.
-func shared[T any](ctx context.Context, s *sharedViews, pick func(*viewGeneration) map[string]*sharedCall[T], key string, load func(context.Context) (T, error)) (T, error) {
+// pick selects, loading it with load (given that generation) unless another
+// caller already is. Failures are not shared with later callers, which load
+// again.
+func shared[T any](ctx context.Context, s *sharedViews, pick func(*viewGeneration) map[string]*sharedCall[T], key string, load func(context.Context, *viewGeneration) (T, error)) (T, error) {
 	s.mu.Lock()
-	m := pick(s.generation())
+	g := s.generation()
+	m := pick(g)
 	c, ok := m[key]
 	if !ok {
 		c = &sharedCall[T]{done: make(chan struct{})}
@@ -528,7 +535,7 @@ func shared[T any](ctx context.Context, s *sharedViews, pick func(*viewGeneratio
 			// end before the others sharing it.
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
 			defer cancel()
-			c.val, c.err = load(rctx)
+			c.val, c.err = load(rctx, g)
 			if c.err != nil {
 				s.mu.Lock()
 				if m[key] == c {
@@ -550,7 +557,7 @@ func shared[T any](ctx context.Context, s *sharedViews, pick func(*viewGeneratio
 
 // layer returns the chamber stored at p (see storage.ReadLayer).
 func (s *sharedViews) layer(ctx context.Context, p string) (storage.Layer, error) {
-	return shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[storage.Layer] { return g.layers }, p, func(ctx context.Context) (storage.Layer, error) {
+	return shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[storage.Layer] { return g.layers }, p, func(ctx context.Context, _ *viewGeneration) (storage.Layer, error) {
 		l, err := storage.ReadLayer(ctx, s.raw, p)
 		if err != nil {
 			logging.Ctx(ctx).WarnCtx(ctx).Str("path", p).Str("error", err.Error()).Msg("subtree streams could not read the chamber; they will retry")
@@ -559,9 +566,39 @@ func (s *sharedViews) layer(ctx context.Context, p string) (storage.Layer, error
 	})
 }
 
+// prefill reads the chambers stored at paths (from ListTree, the root first)
+// with one range read when the storage can scan (see storage.ScanLayers), so
+// that a snapshot's views are built without a read per chamber. Streams of the
+// same root share the scan, once per change; chambers already read since the
+// change are kept.
+func (s *sharedViews) prefill(ctx context.Context, paths []string) error {
+	if _, ok := s.raw.(storage.Scanner); !ok || len(paths) == 0 {
+		return nil
+	}
+	_, err := shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[struct{}] { return g.scans }, paths[0], func(ctx context.Context, g *viewGeneration) (struct{}, error) {
+		layers, _, err := storage.ScanLayers(ctx, s.raw, paths)
+		if err != nil {
+			logging.Ctx(ctx).WarnCtx(ctx).Str("root", paths[0]).Str("error", err.Error()).Msg("subtree streams could not scan the subtree; they will retry")
+			return struct{}{}, err
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for p, l := range layers {
+			if _, ok := g.layers[p]; ok {
+				continue
+			}
+			c := &sharedCall[storage.Layer]{done: make(chan struct{}), val: l}
+			close(c.done)
+			g.layers[p] = c
+		}
+		return struct{}{}, nil
+	})
+	return err
+}
+
 // view returns the view of p, built from shared reads.
 func (s *sharedViews) view(ctx context.Context, p string) (builtView, error) {
-	return shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[builtView] { return g.views }, p, func(ctx context.Context) (builtView, error) {
+	return shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[builtView] { return g.views }, p, func(ctx context.Context, _ *viewGeneration) (builtView, error) {
 		v, err := storage.BuildView(ctx, s.layer, p, s.inheritable)
 		if err != nil {
 			return builtView{}, err

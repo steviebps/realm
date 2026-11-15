@@ -154,6 +154,39 @@ func ReadLayer(ctx context.Context, s Storage, p string) (Layer, error) {
 	return parseLayer(p, entry), nil
 }
 
+// ScanLayers reads the chamber stored at each of paths, which ListTree
+// returned (the root first), with one Scan of the root when Raw(s) is a
+// Scanner, as ReadLayer would read each: a path with no chamber stored has a
+// layer with neither Chamber nor Err. Entries written below the root after
+// the paths were listed are left out. ok is false, and nothing is read, when
+// Raw(s) is not a Scanner. The layers are held in memory together.
+func ScanLayers(ctx context.Context, s Storage, paths []string) (layers map[string]Layer, ok bool, err error) {
+	sc, ok := Raw(s).(Scanner)
+	if !ok || len(paths) == 0 {
+		return nil, ok, nil
+	}
+	ctx, span := otel.Tracer("github.com/steviebps/realm").Start(ctx, "ScanLayers", trace.WithAttributes(attribute.String("realm.subtree.root", paths[0]), attribute.Int("realm.subtree.paths", len(paths))))
+	defer span.End()
+	if err := ValidatePath(paths[0]); err != nil {
+		recordError(span, err)
+		return nil, true, err
+	}
+	layers = make(map[string]Layer, len(paths))
+	for _, p := range paths {
+		layers[p] = Layer{Path: p}
+	}
+	for entry, err := range sc.Scan(ctx, paths[0]) {
+		if err != nil {
+			recordError(span, err)
+			return nil, true, err
+		}
+		if _, listed := layers[entry.Key]; listed {
+			layers[entry.Key] = parseLayer(entry.Key, entry)
+		}
+	}
+	return layers, true, nil
+}
+
 // RawLayers returns a LayerReader that reads each chamber from Raw(s).
 func RawLayers(s Storage) LayerReader {
 	raw := Raw(s)
