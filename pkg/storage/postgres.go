@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"net"
 	"slices"
 	"strconv"
@@ -52,6 +53,7 @@ var (
 	_ Transactional  = (*PostgresStorage)(nil)
 	_ Watchable      = (*PostgresStorage)(nil)
 	_ HealthReporter = (*PostgresStorage)(nil)
+	_ Scanner        = (*PostgresStorage)(nil)
 )
 
 const (
@@ -337,6 +339,90 @@ func (p *PostgresStorage) List(ctx context.Context, prefix string) ([]string, er
 		names = []string{}
 	}
 	return names, nil
+}
+
+// Scan yields the entry at prefix and every entry below it, in key order, from
+// one query (see Scanner). It streams the rows, holding one of the pool's
+// connections until the caller stops iterating, and reads one snapshot of the
+// database. At "/", the query skips the range under ReservedPrefix in the
+// index rather than reading and discarding realm's metadata.
+func (p *PostgresStorage) Scan(ctx context.Context, prefix string) iter.Seq2[*StorageEntry, error] {
+	return p.scan(ctx, "Scan", prefix, true)
+}
+
+// ScanKeys yields the keys Scan would yield, from one query that reads only
+// the key index.
+func (p *PostgresStorage) ScanKeys(ctx context.Context, prefix string) iter.Seq2[string, error] {
+	return scanKeysOf(p.scan(ctx, "ScanKeys", prefix, false))
+}
+
+// scanQuery reads two key ranges, [$1, $2) and [$3, $4), in key order, in
+// one statement: each range is an ordered index scan, and the planner merges
+// them without sorting, so the rows stream as they are read.
+const scanQuery = `SELECT %[1]s FROM (
+	(SELECT %[1]s FROM realm_entries WHERE key >= $1 AND key < $2 ORDER BY key)
+	UNION ALL
+	(SELECT %[1]s FROM realm_entries WHERE key >= $3 AND key < $4 ORDER BY key)
+) AS entries ORDER BY key`
+
+// scan runs Scan (with values) or ScanKeys (without), in a span named name.
+func (p *PostgresStorage) scan(ctx context.Context, name, prefix string, values bool) iter.Seq2[*StorageEntry, error] {
+	return func(yield func(*StorageEntry, error) bool) {
+		ctx, span := p.tracer.Start(ctx, "PostgresStorage "+name, trace.WithAttributes(attribute.String("realm.postgres.prefix", prefix)))
+		defer span.End()
+
+		logging.Ctx(ctx).DebugCtx(ctx).Str("prefix", prefix).Msg("scan operation")
+
+		fail := func(err error) {
+			recordError(span, err)
+			yield(nil, err)
+		}
+		if err := ValidatePath(prefix); err != nil {
+			fail(err)
+			return
+		}
+		prefix = scanPrefix(prefix)
+		ranges := scanRanges(prefix)
+		if len(ranges) == 1 {
+			// the query always reads two ranges; the second is empty
+			end := ranges[0][1]
+			ranges = append(ranges, [2]string{end, end})
+		}
+		cols := "key"
+		if values {
+			cols = "key, value, rev"
+		}
+		rows, err := p.pool.Query(ctx, fmt.Sprintf(scanQuery, cols), ranges[0][0], ranges[0][1], ranges[1][0], ranges[1][1])
+		if err != nil {
+			fail(err)
+			return
+		}
+		defer rows.Close()
+
+		n := 0
+		defer func() { span.SetAttributes(attribute.Int("realm.postgres.entries", n)) }()
+		for rows.Next() {
+			e := &StorageEntry{}
+			dest := []any{&e.Key}
+			if values {
+				dest = append(dest, &e.Value, &e.Version)
+			}
+			if err := rows.Scan(dest...); err != nil {
+				fail(err)
+				return
+			}
+			if scanSkips(prefix, e.Key) {
+				continue
+			}
+			n++
+			if !yield(e, nil) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			fail(err)
+		}
+	}
 }
 
 // Txn applies ops atomically if every check holds.

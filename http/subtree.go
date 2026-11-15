@@ -107,7 +107,7 @@ func (s *subtrees) serve(w http.ResponseWriter, r *http.Request, root string, fa
 		return
 	}
 	n := 0
-	for v, err := range storage.WalkTree(ctx, storage.RawLayers(s.strg), storage.IsInheritable(s.strg), paths) {
+	for v, err := range storage.ReadTree(ctx, s.strg, paths) {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			noteFailure(ctx, http.StatusInternalServerError, fmt.Errorf("the subtree read failed after %d chambers: %w", n, err))
