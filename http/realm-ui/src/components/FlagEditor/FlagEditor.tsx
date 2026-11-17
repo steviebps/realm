@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Alert, Button, Checkbox, Label, Modal, ModalBody, ModalFooter, ModalHeader } from 'flowbite-react';
-import { HiPlus } from 'react-icons/hi';
+import { HiPause, HiPlus } from 'react-icons/hi';
 import { Catalog, Flag, TargetingRule } from '../../models/response';
-import { validateFlag, withSealed } from '../../utils/flags';
+import { rulesOf, targetingPaused, validateFlag, withRules, withSealed } from '../../utils/flags';
 import { RuleEditor } from './RuleEditor';
 import { ValueInput } from './ValueInput';
 
@@ -23,15 +23,18 @@ const newRuleKey = () => `rule-${nextRuleKey++}`;
 
 export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview }: Props) => {
   const [draft, setDraft] = useState<Flag>(() => structuredClone(flag));
-  const [ruleKeys, setRuleKeys] = useState<string[]>(() => (flag.targeting ?? []).map(newRuleKey));
+  // Kept apart from the draft, which can't be paused without rules, so that rules added while targeting is off stay
+  // paused.
+  const [paused, setPaused] = useState(() => targetingPaused(flag));
+  const [ruleKeys, setRuleKeys] = useState<string[]>(() => rulesOf(flag).map(newRuleKey));
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
   const [showProblems, setShowProblems] = useState(false);
-  const rules = draft.targeting ?? [];
+  const rules = rulesOf(draft);
   const problems = validateFlag(draft);
 
   // setRules replaces the rules, and their keys, which must stay in step.
   const setRules = (next: TargetingRule[], keys: string[]) => {
-    setDraft({ ...draft, targeting: next.length ? next : undefined });
+    setDraft(withRules(draft, next, paused));
     setRuleKeys(keys);
   };
   const setValidity = (key: string) => (valid: boolean) =>
@@ -54,6 +57,13 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
             Rules are checked top to bottom; the first rule that applies decides the value. If none applies, the default
             is served.
           </p>
+
+          {paused && (
+            <Alert color="warning" icon={HiPause}>
+              Targeting is off: every context gets the default. These rules are kept, and can be edited, but
+              aren&rsquo;t applied until you turn targeting back on.
+            </Alert>
+          )}
 
           {rules.map((rule, i) => {
             const key = ruleKeys[i];
@@ -111,6 +121,27 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
               onChange={(value) => setDraft({ ...draft, value })}
               onValidityChange={setValidity('default')}
             />
+          </div>
+
+          <div className="flex items-start gap-2">
+            <Checkbox
+              id="flag-paused"
+              className="mt-0.5"
+              aria-describedby="flag-paused-help"
+              checked={paused}
+              onChange={(e) => {
+                setPaused(e.target.checked);
+                setDraft(withRules(draft, rules, e.target.checked));
+              }}
+            />
+            <div className="flex flex-col">
+              <Label htmlFor="flag-paused">Turn targeting off</Label>
+              <p id="flag-paused-help" className="text-sm text-gray-600 dark:text-gray-400">
+                Every context gets the default, and the rules are kept for when you turn targeting back on. Chambers
+                below that override <span className="font-mono">{name}</span> aren&rsquo;t affected unless it&rsquo;s
+                sealed.
+              </p>
+            </div>
           </div>
 
           <div className="flex items-start gap-2">

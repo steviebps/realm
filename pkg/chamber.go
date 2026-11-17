@@ -222,7 +222,8 @@ func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 // operator, or flag type realm does not know, at any level, is an error
 // instead of being ignored: a misspelled "schedule" would otherwise make its
 // rule apply immediately, a misspelled "rules" would replace the chamber with
-// an empty one, and a misspelled operator would never match. (Reads decode
+// an empty one, and a misspelled operator would never match. It also refuses
+// a flag with rules in both targeting and pausedTargeting. (Reads decode
 // leniently, so a newer server's additions do not break older SDKs.)
 func ParseChamber(b []byte) (*Chamber, error) {
 	var c Chamber
@@ -233,6 +234,9 @@ func ParseChamber(b []byte) (*Chamber, error) {
 		return nil, err
 	}
 	if err := c.checkSupported(); err != nil {
+		return nil, err
+	}
+	if err := c.checkPaused(); err != nil {
 		return nil, err
 	}
 	return &c, nil
@@ -249,12 +253,29 @@ func (c *Chamber) checkSupported() error {
 		if !knownType(f.Type) {
 			return fmt.Errorf("flag %q: %w", key, &UnsupportedTypeError{RuleType: f.Type})
 		}
-		for i, tr := range f.Targeting {
-			for _, cl := range tr.Clauses {
-				if !cl.Op.known() {
-					return fmt.Errorf("flag %q: targeting rule %s: clause on %q: unsupported operator %q", key, ruleName(tr.ID, i), cl.Attribute, cl.Op)
+		for _, rules := range []struct {
+			name  string
+			rules []*TargetingRule
+		}{{"targeting rule", f.Targeting}, {"paused targeting rule", f.PausedTargeting}} {
+			for i, tr := range rules.rules {
+				for _, cl := range tr.Clauses {
+					if !cl.Op.known() {
+						return fmt.Errorf("flag %q: %s %s: clause on %q: unsupported operator %q", key, rules.name, ruleName(tr.ID, i), cl.Attribute, cl.Op)
+					}
 				}
 			}
+		}
+	}
+	return nil
+}
+
+// checkPaused reports the first flag, in key order, with rules in both
+// targeting and pausedTargeting: a flag's targeting is either on or off.
+func (c *Chamber) checkPaused() error {
+	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
+		f := c.Rules[key]
+		if f != nil && len(f.Targeting) > 0 && len(f.PausedTargeting) > 0 {
+			return fmt.Errorf("flag %q has rules in both targeting and pausedTargeting: its targeting is either on (rules in targeting) or off (rules in pausedTargeting)", key)
 		}
 	}
 	return nil
@@ -294,7 +315,10 @@ var (
 		fields: []string{"id", "description", "clauses", "value", "rollout", "schedule"},
 		nested: map[string]*shape{"clauses": clauseShape, "rollout": rolloutShape, "schedule": scheduleShape},
 	}
-	flagShape    = &shape{fields: []string{"type", "value", "sealed", "targeting"}, nested: map[string]*shape{"targeting": ruleShape}}
+	flagShape = &shape{
+		fields: []string{"type", "value", "sealed", "targeting", "pausedTargeting"},
+		nested: map[string]*shape{"targeting": ruleShape, "pausedTargeting": ruleShape},
+	}
 	chamberShape = &shape{fields: []string{"rules"}, nested: map[string]*shape{"rules": {each: flagShape}}}
 )
 

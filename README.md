@@ -99,7 +99,7 @@ go get github.com/steviebps/realm
 | Term | Meaning |
 |---|---|
 | **Chamber** | A namespace of flags at a path, for example `/prod/checkout/`. A chamber inherits the flags of its parent chambers. |
-| **Flag** | A typed default `value` and an ordered list of `targeting` rules. A flag with `"sealed": true` cannot be overridden by the chambers below its chamber. |
+| **Flag** | A typed default `value` and an ordered list of `targeting` rules. A flag with `"sealed": true` cannot be overridden by the chambers below its chamber. While a flag's targeting is turned off, its rules are kept in `pausedTargeting` instead. |
 | **Targeting rule** | A list of clauses, a `value`, and an optional `rollout`. All clauses must match. |
 | **Clause** | `{ "attribute", "op", "values" }`. A clause on an attribute that is not set never matches. |
 | **Rollout** | `{ "percentage", "bucketBy", "seed" }`. Limits a rule to a sticky percentage of the matching contexts. |
@@ -112,7 +112,9 @@ go get github.com/steviebps/realm
    returns the value of that rule.
 3. If no rule applies, realm returns the default `value` of the flag.
 
-A context that is not in the rollout goes to the next rule.
+A context that is not in the rollout goes to the next rule. Rules in
+`pausedTargeting` are never examined (see
+[Turning targeting off](#turning-targeting-off)).
 
 ### Example flag
 
@@ -464,6 +466,40 @@ the flag in the parent:
 - To change the flag, edit it in the chamber that seals it, or unseal it there.
 - Without `inheritable`, `sealed` is stored but has no effect.
 
+### Turning targeting off
+
+To pull a feature in the middle of a rollout without losing the rollout, turn
+the flag's targeting off. Its rules move from `targeting` to
+`pausedTargeting`, and every context gets the default `value`:
+
+```json
+{
+  "rules": {
+    "checkout.newFlow": {
+      "type": "boolean",
+      "value": false,
+      "pausedTargeting": [
+        { "id": "pilots", "clauses": [{ "attribute": "locationId", "op": "in", "values": ["loc-123"] }], "value": true },
+        { "id": "gradual", "value": true, "rollout": { "percentage": 25, "bucketBy": "locationId" } }
+      ]
+    }
+  }
+}
+```
+
+- To turn targeting back on, move the rules back to `targeting`. Rollouts are
+  deterministic, so the same contexts get the feature again.
+- In the web UI, use **Pause** and **Resume** on the flag's row, or
+  **Turn targeting off** in the flag editor. You can still edit the rules
+  while targeting is off.
+- SDKs that predate `pausedTargeting` ignore it. They see no `targeting`, so
+  they serve the default too.
+- A write with rules in both `targeting` and `pausedTargeting` fails with
+  `400 Bad Request`.
+- Turning targeting off changes only this chamber's definition. Chambers below
+  it that override the flag still serve their own definitions. To turn the
+  flag off everywhere below, seal it as well.
+
 ### HTTP API
 
 | Request | Result |
@@ -814,6 +850,10 @@ is missing or has another type. For a release flag, the safe state is usually
 off, the code path that is already in production. Name a kill switch so that
 its default, `false`, keeps the feature running, and seal it in `/prod/` so
 that no tenant's chamber can override it.
+
+To pull a release flag in the middle of a rollout, turn its targeting off
+(see [Turning targeting off](#turning-targeting-off)): every context gets
+the default, and the rollout is kept for when you turn targeting back on.
 
 ### What does not belong in realm
 

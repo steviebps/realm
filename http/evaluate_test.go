@@ -50,6 +50,55 @@ func TestEvaluate(t *testing.T) {
 	}
 }
 
+// TestEvaluatePausedTargeting verifies that turning a flag's targeting off
+// serves its default to every context and keeps its rules as written, that
+// turning it on again applies them, and that the server refuses a flag with
+// rules in both lists.
+func TestEvaluatePausedTargeting(t *testing.T) {
+	srv := newInheritableTestServer(t)
+	const rules = `[{"id":"pilots","clauses":[{"attribute":"tenantId","op":"in","values":["acme"]}],"value":true}]`
+	chambers := srv.URL + "/v1/chambers/app/"
+	evaluate := srv.URL + "/v1/evaluate/app/"
+	acme := `{"key":"u1","attributes":{"tenantId":"acme"}}`
+
+	steps := []struct {
+		name   string
+		write  string
+		status int
+		want   string // the chamber as stored, when written
+		beta   bool   // what acme is served after the step
+	}{
+		{"targeting on", `{"rules":{"beta":{"type":"boolean","value":false,"targeting":` + rules + `}}}`, http.StatusCreated,
+			`{"rules":{"beta":{"type":"boolean","value":false,"targeting":` + rules + `}}}`, true},
+		{"targeting off", `{"rules":{"beta":{"type":"boolean","value":false,"pausedTargeting":` + rules + `}}}`, http.StatusCreated,
+			`{"rules":{"beta":{"type":"boolean","value":false,"pausedTargeting":` + rules + `}}}`, false},
+		{"rules in both are refused", `{"rules":{"beta":{"type":"boolean","value":false,"targeting":` + rules + `,"pausedTargeting":` + rules + `}}}`, http.StatusBadRequest,
+			"", false},
+		{"targeting on again", `{"rules":{"beta":{"type":"boolean","value":false,"targeting":` + rules + `}}}`, http.StatusCreated,
+			`{"rules":{"beta":{"type":"boolean","value":false,"targeting":` + rules + `}}}`, true},
+	}
+	for _, step := range steps {
+		t.Run(step.name, func(t *testing.T) {
+			status, out := call(t, nil, http.MethodPost, chambers, step.write, "")
+			if status != step.status {
+				t.Fatalf("write status = %d, want %d (%v)", status, step.status, out.Errors)
+			}
+			if step.want != "" {
+				if _, got := call(t, nil, http.MethodGet, chambers, "", ""); string(got.Data) != step.want {
+					t.Errorf("stored %s, want %s", got.Data, step.want)
+				}
+			}
+			status, out = call(t, nil, http.MethodPost, evaluate, acme, "")
+			if status != http.StatusOK {
+				t.Fatalf("evaluate status = %d (%v)", status, out.Errors)
+			}
+			if want := fmt.Sprintf(`{"flags":{"beta":{"type":"boolean","value":%t}}}`, step.beta); string(out.Data) != want {
+				t.Errorf("evaluated %s, want %s", out.Data, want)
+			}
+		})
+	}
+}
+
 func TestEvaluateRolloutIsSticky(t *testing.T) {
 	srv := newInheritableTestServer(t)
 	putChamber(t, srv.URL, "app/", evaluateChild)

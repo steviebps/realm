@@ -1,13 +1,13 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
-import { HiClock, HiExclamation, HiPencil, HiPlus, HiTrash } from 'react-icons/hi';
+import { HiClock, HiExclamation, HiPause, HiPencil, HiPlay, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
 import { Chamber, Flag, RuleType } from '../models/response';
 import { diffChambers } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
-import { defaultValueFor } from '../utils/flags';
+import { defaultValueFor, rulesOf, targetingPaused, withTargetingPaused } from '../utils/flags';
 import { ancestorsOf, get, provenance } from '../utils/provenance';
 import { messageOf } from '../utils/strings';
 import { HistoryDrawer } from './HistoryDrawer';
@@ -39,7 +39,7 @@ type Proposal = {
 
 const attributesIn = (flags: Flag[]) =>
   flags.flatMap((f) =>
-    (f.targeting ?? []).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
+    rulesOf(f).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
   );
 
 export const ChamberView = ({ path }: { path: string }) => {
@@ -178,6 +178,7 @@ export const ChamberView = ({ path }: { path: string }) => {
                 const flag = own.rules[name];
                 // a definition saved before a parent sealed the flag: not served, and the server refuses changes
                 const hiddenBy = get(prov?.sealedBy, name);
+                const paused = targetingPaused(flag);
                 return (
                   <FlagRow
                     key={name}
@@ -199,6 +200,28 @@ export const ChamberView = ({ path }: { path: string }) => {
                               onClick={() => setEditing({ name, flag, isNew: false })}
                             >
                               <HiPencil className="mr-1" /> Edit
+                            </Button>
+                          )}
+                          {hiddenBy === undefined && rulesOf(flag).length > 0 && (
+                            <Button
+                              size="xs"
+                              color="light"
+                              aria-label={`${paused ? 'Resume' : 'Pause'} targeting for ${name}`}
+                              title={
+                                paused
+                                  ? 'Turn targeting back on: apply its rules again.'
+                                  : 'Turn targeting off: every context gets the default, and the rules are kept.'
+                              }
+                              onClick={() =>
+                                propose(`${paused ? 'Resume' : 'Pause'} targeting for ${name}`, (c) => {
+                                  // re-applied to the latest chamber after a conflict, which may have changed the flag
+                                  if (c.rules[name]) c.rules[name] = withTargetingPaused(c.rules[name], !paused);
+                                  return c;
+                                })
+                              }
+                            >
+                              {paused ? <HiPlay className="mr-1" /> : <HiPause className="mr-1" />}
+                              {paused ? 'Resume' : 'Pause'}
                             </Button>
                           )}
                           <Button

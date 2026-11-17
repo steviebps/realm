@@ -55,6 +55,12 @@ export interface Flag {
    */
   sealed?: boolean;
   targeting?: TargetingRule[];
+  /**
+   * The flag's targeting rules while its targeting is turned off. They are
+   * kept for when it is turned back on, but never evaluated: every context
+   * gets the default `value`.
+   */
+  pausedTargeting?: TargetingRule[];
 }
 
 /** A namespace of flags, as served by `GET /v1/chambers/<path>`. */
