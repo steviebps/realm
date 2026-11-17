@@ -19,7 +19,8 @@ Status: **implemented** · Supersedes the `overrides` and `rollout` fields.
 
 API keys and OIDC login · TypeScript SDK and the server-side evaluation
 endpoint for browsers · Postgres storage and cross-replica fanout · multi-way
-(A/B/n) variant splits · kill switch.
+(A/B/n) variant splits · kill switch (since built: see
+[Turning targeting off](#turning-targeting-off)).
 
 ## Data model
 
@@ -136,6 +137,36 @@ afternoon:
   request.
 - Windows are one-off. Recurring windows (every Wednesday 2–5pm) would need a
   time zone and its daylight-saving rules; they are not supported yet.
+
+### Turning targeting off
+
+A per-flag switch serves the default to every context and keeps the rules for
+later. Turning targeting off moves the flag's rules from `targeting` to
+`pausedTargeting`; turning it on moves them back:
+
+```json
+"checkout.newFlow": {
+  "type": "boolean",
+  "value": false,
+  "pausedTargeting": [ { "id": "pilots", "clauses": [ … ], "value": true } ]
+}
+```
+
+- Evaluation never reads `pausedTargeting`, in any SDK or on the server, so
+  schedules in paused rules set no evaluation stream bounds either.
+- A plain `"targetingOff": true` would not work with older SDKs: reads are
+  lenient, so they would ignore it and go on applying the rules. Moving the
+  rules works with every SDK. Older SDKs ignore `pausedTargeting`, see no
+  `targeting`, and serve the default.
+- Paused rules are validated as `targeting` rules are, so a paused rule can be
+  turned back on unchanged. Writes are refused when a flag has rules in both
+  lists. When stored data has both anyway, `targeting` is served, as older
+  SDKs serve it.
+- Rollouts are deterministic, so turning targeting back on serves the feature
+  to the same contexts as before.
+- The switch is part of one chamber's definition. Chambers below that override
+  the flag are not affected; sealing the flag is what makes one definition
+  serve everywhere below.
 
 ## Attribute catalog
 

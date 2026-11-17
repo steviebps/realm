@@ -23,7 +23,9 @@ cannot override it. Each flag has a default value and ordered
 **targeting rules** matched against context attributes (tenant, location,
 environment, service, semver `version`, `buildSha`, …), each optionally
 limited to a **deterministic percentage rollout** and/or a one-off **schedule**
-(a time window). The SDK stays current by
+(a time window). A flag's targeting can be **turned off** (its rules move to
+`pausedTargeting`, which is never evaluated, so it serves its default). The
+SDK stays current by
 **polling** (default 15 min) or **real-time streaming** (SSE). The server
 offers ETag optimistic concurrency, per-chamber change history, and an
 attribute catalog (value → label) for the UI; storage includes S3,
@@ -67,6 +69,9 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   `overrides`/`rollout` fields. A flag of a type this version does not know
   decodes (kept raw, re-marshaled unchanged) but cannot be served: getters
   return the caller's default with an error, and `Chamber.Evaluate` omits it.
+  `PausedTargeting` holds the rules while targeting is turned off: validated
+  like `Targeting` but never evaluated, so older SDKs (which ignore the field)
+  agree; `ParseChamber` refuses a flag with rules in both.
   `Sealed` keeps chambers below the flag's chamber from overriding it:
   `Lineage.Merge` serves the farthest sealing ancestor's definition and hides
   nearer ones, and the server refuses writes below it that add or change
