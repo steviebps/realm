@@ -121,6 +121,13 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"zero-length schedule", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00Z","end":"2026-11-04T14:00:00Z"}}]}`, "must be after"},
 		{"schedule not RFC 3339", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"Wednesday 2pm"}}]}`, "cannot parse"},
 		{"schedule finer than a millisecond", `{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-11-04T14:00:00.0000001Z"}}]}`, "millisecond"},
+		{"valid paused targeting", `{"type":"boolean","value":false,"pausedTargeting":[{"id":"a","clauses":[{"attribute":"locationId","op":"in","values":["x"]}],"value":true,"rollout":{"percentage":50}}]}`, ""},
+		{"paused rule value wrong type", `{"type":"boolean","value":false,"pausedTargeting":[{"value":"yes"}]}`, "pausedTargeting: targeting rule #1: "},
+		{"paused rule value missing", `{"type":"boolean","value":false,"pausedTargeting":[{"clauses":[]}]}`, "pausedTargeting: targeting rule #1: value cannot be empty"},
+		{"paused duplicate ids", `{"type":"string","value":"a","pausedTargeting":[{"id":"x","value":"b"},{"id":"x","value":"c"}]}`, "not unique"},
+		{"paused empty schedule", `{"type":"boolean","value":false,"pausedTargeting":[{"value":true,"schedule":{}}]}`, "start or an end"},
+		// reads are lenient: a flag with rules in both decodes (ParseChamber refuses it)
+		{"rules in both", `{"type":"boolean","value":false,"targeting":[{"value":true}],"pausedTargeting":[{"value":true}]}`, ""},
 		{"legacy overrides rejected", `{"type":"boolean","value":false,"overrides":[]}`, "no longer supported"},
 		{"legacy rollout rejected", `{"type":"boolean","value":false,"rollout":{"type":"boolean","value":true,"percentage":5}}`, "no longer supported"},
 	}
@@ -432,7 +439,10 @@ func TestChamberEvaluateNextScheduleChange(t *testing.T) {
 			{"value":true},
 			{"value":true,"schedule":{"end":"2026-11-04T15:30:00Z"}}
 		]},
-		"c":{"type":"boolean","value":false}
+		"c":{"type":"boolean","value":false},
+		"paused":{"type":"boolean","value":false,"pausedTargeting":[
+			{"value":true,"schedule":{"start":"2026-11-04T13:00:00Z"}}
+		]}
 	}}`), &c); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -591,4 +601,66 @@ func TestFlagSealed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFlagPausedTargeting verifies that a flag whose targeting is turned off
+// serves its default to every context, keeps its rules exactly as they were,
+// and that rules in targeting win when a stored flag has rules in both, as
+// they do for an SDK that predates pausedTargeting.
+func TestFlagPausedTargeting(t *testing.T) {
+	const pilots = `[{"id":"pilots","clauses":[{"attribute":"locationId","op":"in","values":["loc-a"]}],"value":true,"rollout":{"percentage":100,"bucketBy":"locationId"}}]`
+	tests := []struct {
+		name       string
+		flag       string
+		wantPaused bool
+		want       bool // the value served to loc-a
+		wantOut    string
+	}{
+		{name: "targeting on", flag: `{"type":"boolean","value":false,"targeting":` + pilots + `}`, want: true,
+			wantOut: `{"type":"boolean","value":false,"targeting":` + pilots + `}`},
+		{name: "targeting off serves the default", flag: `{"type":"boolean","value":false,"pausedTargeting":` + pilots + `}`, wantPaused: true, want: false,
+			wantOut: `{"type":"boolean","value":false,"pausedTargeting":` + pilots + `}`},
+		{name: "sealed and off", flag: `{"type":"boolean","value":false,"sealed":true,"pausedTargeting":` + pilots + `}`, wantPaused: true, want: false,
+			wantOut: `{"type":"boolean","value":false,"sealed":true,"pausedTargeting":` + pilots + `}`},
+		{name: "matched like other fields, case-insensitively", flag: `{"type":"boolean","value":false,"PausedTargeting":` + pilots + `}`, wantPaused: true, want: false,
+			wantOut: `{"type":"boolean","value":false,"pausedTargeting":` + pilots + `}`},
+		{name: "targeting is matched case-insensitively too", flag: `{"type":"boolean","value":false,"Targeting":` + pilots + `}`, want: true,
+			wantOut: `{"type":"boolean","value":false,"targeting":` + pilots + `}`},
+		{name: "no paused rules is not paused", flag: `{"type":"boolean","value":false,"pausedTargeting":[]}`, want: false,
+			wantOut: `{"type":"boolean","value":false}`},
+		{name: "rules in both: targeting is served", flag: `{"type":"boolean","value":false,"targeting":` + pilots + `,"pausedTargeting":[{"value":false}]}`, want: true,
+			wantOut: `{"type":"boolean","value":false,"targeting":` + pilots + `,"pausedTargeting":[{"value":false}]}`},
+	}
+	locA := EvaluationContext{Key: "k", Attributes: map[string]string{"locationId": "loc-a"}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var f Flag
+			if err := json.Unmarshal([]byte(tt.flag), &f); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if got := f.TargetingPaused(); got != tt.wantPaused {
+				t.Errorf("TargetingPaused() = %v, want %v", got, tt.wantPaused)
+			}
+			if got, ok := f.BoolValueFor("flag", locA, !tt.want); !ok || got != tt.want {
+				t.Errorf("BoolValueFor = %v (%v), want %v", got, ok, tt.want)
+			}
+			out, err := json.Marshal(&f)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if string(out) != tt.wantOut {
+				t.Errorf("marshaled %s, want %s", out, tt.wantOut)
+			}
+		})
+	}
+
+	t.Run("evaluating a paused flag does not allocate", func(t *testing.T) {
+		var f Flag
+		if err := json.Unmarshal([]byte(`{"type":"boolean","value":false,"pausedTargeting":`+pilots+`}`), &f); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if allocs := testing.AllocsPerRun(100, func() { _, _ = f.BoolValueFor("flag", locA, true) }); allocs != 0 {
+			t.Errorf("allocated %v times", allocs)
+		}
+	})
 }

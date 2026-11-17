@@ -842,6 +842,117 @@
       ]
     },
     {
+      "name": "targeting turned off: paused rules never apply",
+      "chamber": {
+        "rules": {
+          "paused": {
+            "type": "boolean",
+            "value": false,
+            "pausedTargeting": [
+              {
+                "id": "pilots",
+                "clauses": [
+                  {
+                    "attribute": "locationId",
+                    "op": "in",
+                    "values": [
+                      "loc-a"
+                    ]
+                  }
+                ],
+                "value": true
+              }
+            ]
+          },
+          "paused-rollout": {
+            "type": "string",
+            "value": "default",
+            "pausedTargeting": [
+              {
+                "value": "everyone",
+                "rollout": {
+                  "percentage": 100
+                }
+              }
+            ]
+          },
+          "paused-schedule": {
+            "type": "boolean",
+            "value": false,
+            "pausedTargeting": [
+              {
+                "value": true,
+                "schedule": {
+                  "start": "2026-11-04T14:00:00Z"
+                }
+              }
+            ]
+          },
+          "on": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "id": "pilots",
+                "clauses": [
+                  {
+                    "attribute": "locationId",
+                    "op": "in",
+                    "values": [
+                      "loc-a"
+                    ]
+                  }
+                ],
+                "value": true
+              }
+            ]
+          },
+          "both": {
+            "type": "string",
+            "value": "default",
+            "targeting": [
+              {
+                "value": "targeting"
+              }
+            ],
+            "pausedTargeting": [
+              {
+                "value": "paused"
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "now": "2026-11-04T15:00:00Z",
+          "context": {
+            "key": "user-1",
+            "attributes": {
+              "locationId": "loc-a"
+            }
+          },
+          "expect": {
+            "paused": false,
+            "paused-rollout": "default",
+            "paused-schedule": false,
+            "on": true,
+            "both": "targeting"
+          }
+        },
+        {
+          "context": {},
+          "expect": {
+            "paused": false,
+            "paused-rollout": "default",
+            "paused-schedule": false,
+            "on": false,
+            "both": "targeting"
+          }
+        }
+      ]
+    },
+    {
       "name": "forward compatibility: an unknown operator never matches",
       "chamber": {
         "rules": {

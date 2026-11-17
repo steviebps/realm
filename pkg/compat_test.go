@@ -95,6 +95,11 @@ func TestParseChamberRejectsUnknownTypesAndOperators(t *testing.T) {
 		{"unknown type", `{"rules":{"a":{"type":"futureType","value":1}}}`, `flag "a": type "futureType" is currently not supported`},
 		{"no type", `{"rules":{"a":{"value":1}}}`, `flag "a": type "" is currently not supported`},
 		{"sealed", `{"rules":{"a":{"type":"boolean","value":true,"sealed":true}}}`, ""},
+		{"paused targeting", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"clauses":[{"attribute":"a","op":"in","values":["x"]}],"value":false}]}}}`, ""},
+		{"unknown field in a paused rule", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"value":false,"schedul":{}}]}}}`, `unknown field "rules.a.pausedTargeting[0].schedul"`},
+		{"unknown operator in a paused rule", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"id":"p","clauses":[{"attribute":"a","op":"matchesFuture","values":["x"]}],"value":false}]}}}`, `flag "a": paused targeting rule p: clause on "a": unsupported operator "matchesFuture"`},
+		{"rules in targeting and pausedTargeting", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false}],"pausedTargeting":[{"value":false}]}}}`, `flag "a" has rules in both targeting and pausedTargeting: its targeting is either on (rules in targeting) or off (rules in pausedTargeting)`},
+		{"no rules in pausedTargeting", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false}],"pausedTargeting":[]}}}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

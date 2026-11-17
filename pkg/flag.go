@@ -19,12 +19,21 @@ import (
 // A sealed flag cannot be overridden by the chambers below the one that
 // defines it: with inheritance, their definitions of its key are ignored, and
 // the server refuses writes that add or change one.
+//
+// Turning a flag's targeting off moves its rules from Targeting to
+// PausedTargeting, which is never evaluated, so every context gets the
+// default value; turning it on moves them back. (An SDK that predates
+// PausedTargeting ignores the field, and so serves the default too.)
 type Flag struct {
 	*Rule
 	// Sealed keeps chambers below the one that defines the flag from
 	// overriding it. It has no effect without inheritance.
 	Sealed    bool             `json:"sealed,omitempty"`
 	Targeting []*TargetingRule `json:"targeting,omitempty"`
+	// PausedTargeting holds the flag's targeting rules while its targeting is
+	// turned off. They are validated as Targeting is, but never evaluated.
+	// ParseChamber refuses a flag with rules in both.
+	PausedTargeting []*TargetingRule `json:"pausedTargeting,omitempty"`
 
 	// raw holds a flag of an unknown type as it was read.
 	raw json.RawMessage
@@ -40,9 +49,9 @@ var removedFlagFields = map[string]string{
 }
 
 // UnmarshalJSON validates the flag's default value against its type, and each
-// targeting rule's clauses, rollout, and value. A flag of an unknown type is
-// kept as it is, unvalidated, though its seal is still read, so that a newer
-// realm's sealed flag still seals.
+// targeting rule's clauses, rollout, and value, paused or not. A flag of an
+// unknown type is kept as it is, unvalidated, though its seal is still read,
+// so that a newer realm's sealed flag still seals.
 func (f *Flag) UnmarshalJSON(b []byte) error {
 	var rule Rule
 	if err := json.Unmarshal(b, &rule); err != nil {
@@ -59,6 +68,7 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 	f.Rule = &rule
 	f.Sealed = seal.Sealed
 	f.Targeting = nil
+	f.PausedTargeting = nil
 	f.raw = nil
 
 	if !knownType(rule.Type) {
@@ -77,15 +87,38 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	if v, ok := m["targeting"]; ok {
-		targeting, err := parseTargeting(v, rule.Type)
+	// decoded as encoding/json matches fields (case-insensitively), as
+	// ParseChamber's field check does, so no spelling of either is dropped
+	var rules struct {
+		Targeting       json.RawMessage `json:"targeting"`
+		PausedTargeting json.RawMessage `json:"pausedTargeting"`
+	}
+	if err := json.Unmarshal(b, &rules); err != nil {
+		return err
+	}
+	if rules.Targeting != nil {
+		targeting, err := parseTargeting(rules.Targeting, rule.Type)
 		if err != nil {
 			return err
 		}
 		f.Targeting = targeting
 	}
+	if rules.PausedTargeting != nil {
+		paused, err := parseTargeting(rules.PausedTargeting, rule.Type)
+		if err != nil {
+			return fmt.Errorf("pausedTargeting: %w", err)
+		}
+		f.PausedTargeting = paused
+	}
 
 	return nil
+}
+
+// TargetingPaused reports whether the flag's targeting is turned off: it has
+// rules in PausedTargeting and none in Targeting, so every context gets its
+// default value.
+func (f *Flag) TargetingPaused() bool {
+	return len(f.Targeting) == 0 && len(f.PausedTargeting) > 0
 }
 
 // MarshalJSON writes the flag. A flag of an unknown type is written exactly as
@@ -98,7 +131,8 @@ func (f Flag) MarshalJSON() ([]byte, error) {
 }
 
 // ValueFor resolves the flag value for the given evaluation context: the value
-// of the first targeting rule that applies, or the default value.
+// of the first targeting rule that applies, or the default value. Paused
+// targeting rules never apply.
 func (f *Flag) ValueFor(flagKey string, ec EvaluationContext) interface{} {
 	for _, tr := range f.Targeting {
 		if tr.Applies(flagKey, ec) {

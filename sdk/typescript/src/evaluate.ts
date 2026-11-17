@@ -173,7 +173,8 @@ export function scheduleIncludes(schedule: Schedule | undefined, now: number): b
 
 /**
  * Returns the value of the first targeting rule that applies, or the flag's
- * default. Schedules are evaluated at now, which defaults to the current time.
+ * default. Paused rules (`pausedTargeting`) never apply. Schedules are
+ * evaluated at now, which defaults to the current time.
  */
 export function flagValue(
   flagKey: string,
