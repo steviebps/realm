@@ -1,9 +1,10 @@
 import { useId, useState } from 'react';
 import { Badge } from 'flowbite-react';
-import { HiChevronRight, HiLockClosed } from 'react-icons/hi';
+import { HiChevronRight, HiLockClosed, HiPause } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
 import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
 import { describeDefinition, formatValue, same } from '../utils/describe';
+import { rulesOf, targetingPaused } from '../utils/flags';
 import { Served } from '../utils/provenance';
 import { scheduleEnded } from '../utils/schedule';
 import { encodePath } from '../utils/path';
@@ -124,12 +125,17 @@ const InsteadOf = ({ served }: { served: Served }) => {
       </span>
     );
   }
-  const rules = was.targeting?.length ?? 0;
-  const looksSame = was.type === now.type && same(was.value, now.value) && rules === (now.targeting?.length ?? 0);
+  const rules = rulesOf(was).length;
+  const paused = targetingPaused(was);
+  const looksSame =
+    was.type === now.type &&
+    same(was.value, now.value) &&
+    rules === rulesOf(now).length &&
+    paused === targetingPaused(now);
   return (
     <span>
       instead of <FlagValueView small type={was.type} value={was.value} />
-      {rules > 0 && ` · ${plural(rules, 'rule')}`}
+      {rules > 0 && ` · ${plural(rules, paused ? 'paused rule' : 'rule')}`}
       {was.type !== now.type && ` (${was.type})`}
       {looksSame && ' (rules differ)'}
     </span>
@@ -228,7 +234,8 @@ export const FlagRow = ({
 }) => {
   const [open, setOpen] = useState(false);
   const panelId = useId();
-  const rules = flag.targeting ?? [];
+  const rules = rulesOf(flag);
+  const paused = targetingPaused(flag);
   const rollouts = rules.filter((r) => r.rollout).length;
   const scheduled = rules.filter((r) => r.schedule && !scheduleEnded(r.schedule)).length;
   const overridden = served?.overrides[0]?.path;
@@ -281,6 +288,19 @@ export const FlagRow = ({
                 </span>
               </Badge>
             )}
+            {paused && (
+              <Badge
+                color="warning"
+                size="xs"
+                className="inline-flex align-middle font-medium"
+                title="Its rules are kept but not applied: every context gets the default."
+              >
+                <span className="inline-flex items-center gap-1">
+                  <HiPause aria-hidden="true" className="h-3 w-3" />
+                  Targeting off
+                </span>
+              </Badge>
+            )}
             {hiddenBy && (
               <Badge
                 color="warning"
@@ -307,6 +327,13 @@ export const FlagRow = ({
         >
           {rules.length === 0 ? (
             <span className="text-gray-500 dark:text-gray-400">None</span>
+          ) : paused ? (
+            <>
+              Off: serves the default
+              <span className="block text-xs text-gray-500 dark:text-gray-400">
+                {plural(rules.length, 'rule')} kept
+              </span>
+            </>
           ) : (
             <>
               {plural(rules.length, 'rule')}
@@ -346,6 +373,12 @@ export const FlagRow = ({
               {flag.sealed && !hiddenBy && (
                 <p>
                   Sealed: chambers below <ChamberRef path={source} here={here} /> can&rsquo;t override it.
+                </p>
+              )}
+              {paused && !hiddenBy && !flag.sealed && (
+                <p>
+                  Chambers below <ChamberRef path={source} here={here} /> that override <Mono>{name}</Mono> still serve
+                  their own definitions. Seal it to serve this one everywhere below.
                 </p>
               )}
               {served && served.overrides.length > 0 && (

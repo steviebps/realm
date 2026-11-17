@@ -53,6 +53,11 @@ export type Flag = {
   /** Chambers below the one that defines the flag cannot override it. */
   sealed?: boolean;
   targeting?: TargetingRule[];
+  /**
+   * The rules while the flag's targeting is turned off: kept, but never evaluated, so every context gets the default.
+   * The server refuses a flag with rules in both lists.
+   */
+  pausedTargeting?: TargetingRule[];
 };
 
 /**

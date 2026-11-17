@@ -1,4 +1,5 @@
 import { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
+import { rulesOf, targetingPaused } from './flags';
 import { formatTime } from './schedule';
 
 export const OPERATOR_LABELS: Record<Operator, string> = {
@@ -44,16 +45,31 @@ export type FlagChange = {
 /** Whether two JSON values are equal; server JSON has a stable key order. */
 export const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
+/** How a change describes a flag whose targeting is turned off. */
+const TARGETING_OFF = 'Targeting off: every context gets the default, and the rules are kept';
+
+/** A rule's line: paused rules say so. */
+const ruleLine = (rule: TargetingRule, i: number, paused: boolean, catalog: Catalog) =>
+  `${paused ? 'Paused rule' : 'Rule'} ${i + 1}: ${describeRule(rule, catalog)}`;
+
+const describeRules = (flag: Flag, catalog: Catalog) =>
+  rulesOf(flag).map((r, i) => ruleLine(r, i, targetingPaused(flag), catalog));
+
 const describeFlag = (flag: Flag, catalog: Catalog) => [
   `Default: ${formatValue(flag.value)}`,
-  ...(flag.targeting ?? []).map((r, i) => `Rule ${i + 1}: ${describeRule(r, catalog)}`),
+  ...(targetingPaused(flag) ? [TARGETING_OFF] : []),
+  ...describeRules(flag, catalog),
 ];
 
 /** A flag's definition in plain language: what every context gets, or its default and each rule. */
-export const describeDefinition = (flag: Flag, catalog: Catalog): string[] =>
-  flag.targeting?.length
+export const describeDefinition = (flag: Flag, catalog: Catalog): string[] => {
+  if (targetingPaused(flag)) {
+    return [`Targeting off: every context gets ${formatValue(flag.value)}.`, ...describeRules(flag, catalog)];
+  }
+  return flag.targeting?.length
     ? describeFlag(flag, catalog)
     : [`No targeting: every context gets ${formatValue(flag.value)}.`];
+};
 
 /** How a change describes a flag's seal. */
 const SEALED = "Sealed: chambers below this one can't override it";
@@ -103,14 +119,20 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
       lines.push({ kind: 'remove', text: `Default: ${formatValue(was.value)}` });
       lines.push({ kind: 'add', text: `Default: ${formatValue(now.value)}` });
     }
-    const wasRules = was.targeting ?? [];
-    const nowRules = now.targeting ?? [];
+    // turning targeting off or on moves the rules between lists; only rules that change are listed
+    const wasPaused = targetingPaused(was);
+    const nowPaused = targetingPaused(now);
+    if (wasPaused !== nowPaused) {
+      lines.push({ kind: nowPaused ? 'add' : 'remove', text: TARGETING_OFF });
+    }
+    const wasRules = rulesOf(was);
+    const nowRules = rulesOf(now);
     if (!same(wasRules, nowRules)) {
       wasRules.forEach((r, i) => {
-        if (!same(r, nowRules[i])) lines.push({ kind: 'remove', text: `Rule ${i + 1}: ${describeRule(r, catalog)}` });
+        if (!same(r, nowRules[i])) lines.push({ kind: 'remove', text: ruleLine(r, i, wasPaused, catalog) });
       });
       nowRules.forEach((r, i) => {
-        if (!same(r, wasRules[i])) lines.push({ kind: 'add', text: `Rule ${i + 1}: ${describeRule(r, catalog)}` });
+        if (!same(r, wasRules[i])) lines.push({ kind: 'add', text: ruleLine(r, i, nowPaused, catalog) });
       });
     }
     changes.push({ flag: name, kind: 'changed', lines });
