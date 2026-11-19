@@ -146,24 +146,35 @@ func (c *HttpClient) watch(ctx context.Context, path string, query string) (*htt
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("path", path).Str("query", query).Msg("opening chamber watch stream")
 
-	target := c.address.Scheme + "://" + c.address.Host + "/v1/chambers/" + strings.TrimPrefix(path, "/") + "?" + query
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+	req, err := c.NewRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.URL.RawQuery = query
 	req.Header.Set("Accept", "text/event-stream")
 	c.prepare(req)
 	c.propagator.Inject(ctx, propagation.HeaderCarrier(req.Header))
 	return c.streaming.Do(req)
 }
 
-// NewRequest returns a request for the chamber at path.
+// NewRequest returns a request for the chamber at path, which names the
+// chamber as the server does ("/prod/tenants/"), unescaped. Each segment is
+// escaped here, so a chamber whose name holds "%", "?", "#", or a space is
+// the one addressed, rather than another chamber (or none). A query belongs
+// in the returned request's URL.RawQuery, not in path.
 func (c *HttpClient) NewRequest(ctx context.Context, method string, path string, body io.Reader) (*http.Request, error) {
-	return c.NewAPIRequest(ctx, method, "/v1/chambers/"+strings.TrimPrefix(path, "/"), body)
+	return c.NewAPIRequest(ctx, method, chamberAPIPath(path), body)
+}
+
+// chamberAPIPath returns the server path of the chamber at path, escaped for
+// a URL: "prod/x?y/" becomes "/v1/chambers/prod/x%3Fy/".
+func chamberAPIPath(path string) string {
+	u := url.URL{Path: "/v1/chambers/" + strings.TrimPrefix(path, "/")}
+	return u.EscapedPath()
 }
 
 // NewAPIRequest returns a request for apiPath, a path on the server such as
-// "/v1/keys".
+// "/v1/keys", already escaped for a URL (see url.PathEscape).
 func (c *HttpClient) NewAPIRequest(ctx context.Context, method string, apiPath string, body io.Reader) (*http.Request, error) {
 	logger := logging.Ctx(ctx)
 	logger.DebugCtx(ctx).Str("method", method).Str("path", apiPath).Msg("creating a new request")

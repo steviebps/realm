@@ -154,6 +154,63 @@ func TestSubtreeRequests(t *testing.T) {
 	}
 }
 
+// TestChamberPathsAreEscaped verifies that every request for a chamber
+// addresses the chamber its path names, whatever its name holds: a "?", "#",
+// or "%" in a name is part of the name, not the start of a query, a
+// fragment, or an escape that names another chamber.
+func TestChamberPathsAreEscaped(t *testing.T) {
+	type seen struct{ path, query string }
+	var mu sync.Mutex
+	var got seen
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		got = seen{r.URL.Path, r.URL.RawQuery}
+		mu.Unlock()
+	}))
+	defer srv.Close()
+	c, err := NewHttpClient(&HttpClientConfig{Address: srv.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	requests := []struct {
+		name  string
+		do    func(path string) (*http.Response, error)
+		query string
+	}{
+		{"request", func(p string) (*http.Response, error) { return c.PerformRequest(ctx, http.MethodGet, p, nil) }, ""},
+		{"watch", func(p string) (*http.Response, error) { return c.Watch(ctx, p) }, "watch=true"},
+		{"subtree read", func(p string) (*http.Response, error) { return c.GetSubtree(ctx, p) }, "subtree=true"},
+		{"subtree watch", func(p string) (*http.Response, error) { return c.WatchSubtree(ctx, p) }, "subtree=true&watch=true"},
+	}
+	paths := []struct{ path, want string }{
+		{"/prod/tenants/", "/v1/chambers/prod/tenants/"},
+		{"prod/x?y/", "/v1/chambers/prod/x?y/"},
+		{"prod/x#1/", "/v1/chambers/prod/x#1/"},
+		{"prod/50%/", "/v1/chambers/prod/50%/"},
+		{"prod/a%41/", "/v1/chambers/prod/a%41/"},
+		{"/prod/my tenant/", "/v1/chambers/prod/my tenant/"},
+		{"/prod/münchen/", "/v1/chambers/prod/münchen/"},
+	}
+	for _, rq := range requests {
+		for _, p := range paths {
+			t.Run(rq.name+" "+p.path, func(t *testing.T) {
+				res, err := rq.do(p.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				res.Body.Close()
+				mu.Lock()
+				defer mu.Unlock()
+				if want := (seen{p.want, rq.query}); got != want {
+					t.Errorf("the server saw %+v, want %+v", got, want)
+				}
+			})
+		}
+	}
+}
+
 // TestSubtreeResponsesAreDecompressed verifies that subtree reads and
 // watches ask for gzip and get bodies decompressed as they are read: a
 // watch's first event before the server sends more.

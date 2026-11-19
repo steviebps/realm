@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -36,6 +38,77 @@ func TestClientPutReportsServerErrors(t *testing.T) {
 	err := runPut(t, srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "not allowed to change") {
 		t.Fatalf("expected the server's error, got %v", err)
+	}
+}
+
+// TestClientAddressesChambersByName verifies that the client subcommands act
+// on the chamber their path names, whatever its name holds: "x?y" is not "x"
+// with a query, nor "x#1" "x" with a fragment, so reading or deleting them
+// leaves "x" alone.
+func TestClientAddressesChambersByName(t *testing.T) {
+	ctx := context.Background()
+	stg, err := storage.NewBigCacheStorage(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stg.Close(ctx) })
+	h, err := realmhttp.NewHandler(ctx, realmhttp.HandlerConfig{Storage: stg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	// each chamber's flag names the chamber, so a read shows which one it got
+	for _, p := range []string{"/prod/x/", "/prod/x?y/", "/prod/x?y/child/", "/prod/x#1/", "/prod/50%/"} {
+		value := `{"rules":{"who":{"type":"string","value":"` + p + `"}}}`
+		if err := stg.Put(ctx, storage.StorageEntry{Key: p, Value: []byte(value)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exists := func(p string) bool {
+		t.Helper()
+		_, err := stg.Get(ctx, p)
+		var nf *storage.NotFoundError
+		if err != nil && !errors.As(err, &nf) {
+			t.Fatalf("get %s: %v", p, err)
+		}
+		return err == nil
+	}
+	// Cobra keeps flag values between runs.
+	t.Cleanup(func() { _ = clientDelete.Flags().Set("recursive", "false") })
+	run := func(args ...string) string {
+		t.Helper()
+		var out bytes.Buffer
+		rootCmd.SetOut(&out)
+		rootCmd.SetErr(io.Discard)
+		rootCmd.SetArgs(append(append([]string{"client"}, args...), "--address", srv.URL))
+		t.Cleanup(func() { rootCmd.SetArgs(nil) })
+		if err := rootCmd.Execute(); err != nil {
+			t.Fatalf("client %s: %v", strings.Join(args, " "), err)
+		}
+		return out.String()
+	}
+
+	for _, p := range []string{"prod/x?y/", "prod/x#1/", "prod/50%/"} {
+		if out := run("get", p); !strings.Contains(out, `"/`+p+`"`) {
+			t.Errorf("get %s printed another chamber:\n%s", p, out)
+		}
+	}
+	if out := run("list", "prod/x?y/"); !strings.Contains(out, `"child/"`) {
+		t.Errorf("list prod/x?y/ = %s, want child/", out)
+	}
+
+	run("delete", "prod/x#1/")
+	if exists("/prod/x#1/") {
+		t.Error("delete prod/x#1/ left it in place")
+	}
+	run("delete", "--recursive", "prod/x?y/")
+	if exists("/prod/x?y/") || exists("/prod/x?y/child/") {
+		t.Error("delete --recursive prod/x?y/ left chambers in place")
+	}
+	if !exists("/prod/x/") || !exists("/prod/50%/") {
+		t.Error("deleting other chambers deleted /prod/x/ or /prod/50%/")
 	}
 }
 
