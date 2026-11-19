@@ -93,7 +93,8 @@ type chamberRequest struct {
 	// verb names the operation in spans and messages ("get", "list", ...).
 	verb   string
 	method string
-	// path is the chamber path; query, if set, is appended to the request.
+	// path is the chamber path, unescaped; query, if set, is the request's
+	// query string.
 	path string
 	// endpoint, if set, is the server path requested instead of the chamber
 	// at path, such as "/v1/keys"; path then only names it in messages.
@@ -129,22 +130,18 @@ func runChamberRequest(cmd *cobra.Command, r chamberRequest) error {
 	if r.body != nil {
 		body = bytes.NewReader(r.body)
 	}
-	target := r.path
-	if r.endpoint != "" {
-		target = r.endpoint
-	}
-	if r.query != "" {
-		target += "?" + r.query
-	}
 	var req *http.Request
 	if r.endpoint != "" {
-		req, err = c.NewAPIRequest(ctx, r.method, target, body)
+		req, err = c.NewAPIRequest(ctx, r.method, r.endpoint, body)
 	} else {
-		req, err = c.NewRequest(ctx, r.method, target, body)
+		req, err = c.NewRequest(ctx, r.method, r.path, body)
 	}
 	if err != nil {
 		return fail(err)
 	}
+	// kept apart from the path, which NewRequest escapes: a "?" in a
+	// chamber's name is part of the name
+	req.URL.RawQuery = r.query
 	maps.Copy(req.Header, r.header)
 	res, err := c.Do(req)
 	if err != nil {

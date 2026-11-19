@@ -735,3 +735,36 @@ func TestLoadedRevision(t *testing.T) {
 		t.Errorf("revision = %d, want 13", rlm.Revision(ctx))
 	}
 }
+
+// TestPathNamesItsChamber verifies that realm loads, and watches, the chamber
+// its path names when the name holds a character that is special in URLs:
+// "/prod/x?y/" is not "/prod/x/" with a query.
+func TestPathNamesItsChamber(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v1/chambers/prod/x?y/" {
+					http.NotFound(w, r)
+					return
+				}
+				if r.URL.Query().Get("watch") == "true" {
+					streamOf("streamed")(w, r)
+					return
+				}
+				fmt.Fprintf(w, `{"data":%s}`, chamberJSON("loaded"))
+			}))
+			t.Cleanup(srv.Close)
+			rlm := testRealm(t, srv.URL, nil, WithPath("/prod/x?y/"), WithStreaming(streaming))
+			if err := rlm.Start(); err != nil {
+				t.Fatal(err)
+			}
+			want := "loaded"
+			if streaming {
+				want = "streamed"
+			}
+			if !eventually(5*time.Second, func() bool { return msg(rlm) == want }) {
+				t.Errorf("msg = %q, want %q", msg(rlm), want)
+			}
+		})
+	}
+}
