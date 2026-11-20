@@ -403,7 +403,13 @@ Two wrappers compose backends:
   hierarchy is the current stand-in for "environments / zones". `Get` is built
   from `Layers` (the chamber plus each consulted ancestor, nearest first, in
   `lineage.go`) and `Lineage.Merge`, so the layers view and the merged view
-  cannot disagree. It implements `Unwrap()` so the server can reach the raw
+  cannot disagree. It still reads every layer on each `Get`, but parses and
+  encodes only what changed (`inheritable_cache.go`): it keeps each chamber
+  as last parsed, reused only for the same stored bytes, and each merged view
+  as last encoded, reused only while it was merged from those same parsed
+  chambers. Nothing needs invalidating, so writes through other wrappers or
+  replicas are seen at once; both caches are capped at 8 MiB and forget
+  entries at random. It implements `Unwrap()` so the server can reach the raw
   storage for ETags, history, and the catalog.
 
 Recommended production setups: `postgres` (or `etcd`) for several replicas, or

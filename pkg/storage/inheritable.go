@@ -19,6 +19,9 @@ import (
 type InheritableStorage struct {
 	source Storage
 	tracer trace.Tracer
+	// cache keeps the chambers it parsed and the views it encoded, so that
+	// reads of unchanged chambers do neither again.
+	cache *viewCache
 }
 
 var (
@@ -31,6 +34,7 @@ func NewInheritableStorage(source Storage) (Storage, error) {
 	return &InheritableStorage{
 		source: source,
 		tracer: otel.Tracer("github.com/steviebps/realm"),
+		cache:  newViewCache(maxParsedBytes, maxViewBytes),
 	}, nil
 }
 
@@ -50,6 +54,11 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		recordError(span, err)
 		return nil, err
 	}
+	// a view merged from the very chambers just read encodes the same
+	if value, ok := s.cache.view(lin); ok {
+		span.SetAttributes(attribute.Bool("realm.inheritable.cached", true))
+		return &StorageEntry{Key: logicalPath, Value: bytes.Clone(value), Version: lin.Revision()}, nil
+	}
 	merged, err := lin.Merge()
 	if err != nil {
 		recordError(span, err)
@@ -61,6 +70,7 @@ func (s *InheritableStorage) Get(ctx context.Context, logicalPath string) (*Stor
 		recordError(span, err)
 		return nil, err
 	}
+	s.cache.storeView(lin, bytes.Clone(buf.Bytes()))
 
 	return &StorageEntry{Key: logicalPath, Value: buf.Bytes(), Version: lin.Revision()}, nil
 }
@@ -109,7 +119,7 @@ func (s *InheritableStorage) AncestorSeals(ctx context.Context, logicalPath stri
 			recordError(span, err)
 			return nil, err
 		}
-		for key := range sealedIn(parseLayer(p, entry).Chamber) {
+		for key := range sealedIn(s.cache.parseLayer(p, entry).Chamber) {
 			if _, ok := seals[key]; !ok {
 				seals[key] = p
 			}
@@ -155,7 +165,7 @@ func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*
 		return nil, err
 	}
 
-	layers := []Layer{parseLayer(canonicalChamberPath(logicalPath), leafEntry)}
+	layers := []Layer{s.cache.parseLayer(canonicalChamberPath(logicalPath), leafEntry)}
 	for _, p := range consultedAncestors(logicalPath) {
 		entry, err := s.source.Get(ctx, p)
 		if err != nil {
@@ -168,7 +178,7 @@ func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*
 			}
 			return nil, err
 		}
-		layer := parseLayer(p, entry)
+		layer := s.cache.parseLayer(p, entry)
 		if layer.Err != nil {
 			// skipping it would silently drop its flags (kill switches
 			// included) from every chamber below it
