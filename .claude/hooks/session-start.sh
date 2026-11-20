@@ -34,9 +34,12 @@ fi
 
 # Best-effort UI build so binaries built with '-tags=ui' compile. The React
 # build is slow and network-dependent, so failures never fail the session.
+# 'npm ci' installs exactly what package-lock.json lists and never rewrites
+# it; 'npm install' with an older npm drops lockfile fields and leaves the
+# tree dirty at every session start.
 if [ -d http/realm-ui ]; then
   echo "[session-start] building web UI (best-effort)..."
-  ( cd http/realm-ui && npm install && npm run build ) \
+  ( cd http/realm-ui && npm ci && npm run build ) \
     || echo "[session-start] warning: UI build failed; backend-only work is unaffected"
 fi
 
