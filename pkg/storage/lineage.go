@@ -16,7 +16,8 @@ type Layer struct {
 	// Path is the chamber's canonical path, with a trailing slash.
 	Path string
 	// Chamber is the chamber as stored; nil when there is none at Path or it
-	// cannot be parsed.
+	// cannot be parsed. It may be shared with other reads (see
+	// InheritableStorage), so it must not be modified.
 	Chamber *realm.Chamber
 	// Err says why the chamber cannot be parsed. The inherited view cannot be
 	// built while any layer has one.

@@ -39,11 +39,13 @@ func TestListShouldForwardToSource(t *testing.T) {
 	}
 }
 
-// mapStorage serves fixed entries and fails reads of keys listed in failing.
+// mapStorage serves fixed entries, at the revisions in versions (0 when
+// unlisted), and fails reads of keys listed in failing.
 type mapStorage struct {
 	testStorage
-	entries map[string]string
-	failing map[string]error
+	entries  map[string]string
+	versions map[string]uint64
+	failing  map[string]error
 }
 
 func (m *mapStorage) Get(ctx context.Context, key string) (*StorageEntry, error) {
@@ -54,7 +56,7 @@ func (m *mapStorage) Get(ctx context.Context, key string) (*StorageEntry, error)
 	if !ok {
 		return nil, &NotFoundError{key}
 	}
-	return &StorageEntry{Key: key, Value: []byte(v)}, nil
+	return &StorageEntry{Key: key, Value: []byte(v), Version: m.versions[key]}, nil
 }
 
 func TestGetSurfacesParentReadErrors(t *testing.T) {
