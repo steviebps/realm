@@ -45,10 +45,6 @@ type Layered interface {
 	// Layers returns the lineage of the chamber at logicalPath, or a
 	// NotFoundError when there is no chamber there.
 	Layers(ctx context.Context, logicalPath string) (*Lineage, error)
-	// AncestorSeals maps each flag that an ancestor of logicalPath seals to
-	// the path of the farthest ancestor that seals it: the flags a chamber
-	// at logicalPath cannot define, whether or not one exists there.
-	AncestorSeals(ctx context.Context, logicalPath string) (map[string]string, error)
 	// Ancestry returns what the ancestors of logicalPath say about the flags
 	// a chamber there may define, whether or not one exists there.
 	Ancestry(ctx context.Context, logicalPath string) (*Ancestry, error)
@@ -230,16 +226,7 @@ func ReadAncestry(ctx context.Context, s Storage, logicalPath string) (*Ancestry
 	if layered, ok := s.(Layered); ok {
 		return layered.Ancestry(ctx, logicalPath)
 	}
-	return &Ancestry{Seals: map[string]string{}, Constraints: map[string][]Constrained{}}, nil
-}
-
-// ReadAncestorSeals returns s.AncestorSeals when s applies inheritance, and
-// nil otherwise: without inheritance, nothing is sealed.
-func ReadAncestorSeals(ctx context.Context, s Storage, logicalPath string) (map[string]string, error) {
-	if layered, ok := s.(Layered); ok {
-		return layered.AncestorSeals(ctx, logicalPath)
-	}
-	return nil, nil
+	return ancestryOf(nil), nil
 }
 
 // ReadLineage returns the lineage of the chamber at logicalPath: s.Layers

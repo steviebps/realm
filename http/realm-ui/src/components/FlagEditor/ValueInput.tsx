@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { HelperText, Select, Textarea, TextInput, ToggleSwitch } from 'flowbite-react';
 import { FlagValue, RuleType } from '../../models/response';
-import { allowedValues, Bound, formatValueError, numberRange, validate } from '../../utils/constraints';
+import { allowedValues, Bound, numberRange, refusal } from '../../utils/constraints';
 
 type Props = {
   id: string;
@@ -12,20 +12,9 @@ type Props = {
   onValidityChange?: (valid: boolean) => void;
   /** The constraints the value must satisfy: they bound the input, and a value one refuses is explained. */
   bounds?: Bound[];
-  /** The path of the chamber being edited, so the message names only other chambers' constraints. */
-  here?: string;
 };
 
-/** Why the first of bounds refuses value, naming the chamber whose constraints it is when not here. */
-const refusal = (bounds: Bound[], value: unknown, here?: string) => {
-  for (const { path, schema } of bounds) {
-    const err = validate(schema, value);
-    if (err) return `Not allowed: ${formatValueError(err)}${path === here ? '' : ` (constraints of ${path})`}.`;
-  }
-  return undefined;
-};
-
-export const ValueInput = ({ id, type, value, onChange, onValidityChange, bounds = [], here }: Props) => {
+export const ValueInput = ({ id, type, value, onChange, onValidityChange, bounds = [] }: Props) => {
   const [json, setJSON] = useState(() => JSON.stringify(value, null, 2));
   const [jsonError, setJSONError] = useState('');
 
@@ -40,26 +29,20 @@ export const ValueInput = ({ id, type, value, onChange, onValidityChange, bounds
 
   const schemas = bounds.map((b) => b.schema);
   // a custom value that doesn't parse is explained by its JSON error instead
-  const refused = jsonError ? undefined : refusal(bounds, value, here);
+  const refused = jsonError ? undefined : refusal(bounds, value);
   const errorId = `${id}-refused`;
-  const explained = refused && (
-    <HelperText id={errorId} color="failure">
-      {refused}
-    </HelperText>
-  );
+  // what marks an input whose value is refused
+  const invalid = refused
+    ? { color: 'failure' as const, 'aria-invalid': true, 'aria-describedby': errorId }
+    : { color: jsonError ? ('failure' as const) : undefined };
 
-  switch (type) {
-    case 'boolean':
-      return (
-        <div>
-          <ToggleSwitch id={id} checked={value === true} label={value ? 'true' : 'false'} onChange={onChange} />
-          {explained}
-        </div>
-      );
-    case 'number': {
-      const { min, max, step } = numberRange(schemas);
-      return (
-        <div>
+  const input = () => {
+    switch (type) {
+      case 'boolean':
+        return <ToggleSwitch id={id} checked={value === true} label={value ? 'true' : 'false'} onChange={onChange} />;
+      case 'number': {
+        const { min, max, step } = numberRange(schemas);
+        return (
           <TextInput
             id={id}
             type="number"
@@ -67,82 +50,72 @@ export const ValueInput = ({ id, type, value, onChange, onValidityChange, bounds
             max={max}
             step={step ?? 'any'}
             value={value as number}
-            color={refused ? 'failure' : undefined}
-            aria-invalid={refused ? true : undefined}
-            aria-describedby={refused ? errorId : undefined}
+            {...invalid}
             onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
           />
-          {explained}
-        </div>
-      );
-    }
-    case 'string': {
-      const allowed = allowedValues(schemas);
-      if (allowed) {
+        );
+      }
+      case 'string': {
+        const allowed = allowedValues(schemas);
+        if (!allowed) {
+          return (
+            <TextInput
+              id={id}
+              type="text"
+              value={value as string}
+              {...invalid}
+              onChange={(e) => onChange(e.target.value)}
+            />
+          );
+        }
         // a value saved before the constraints stays selectable, so the editor never changes it unasked
         const options = allowed.includes(value) ? allowed : [value, ...allowed];
         return (
-          <div>
-            <Select
-              id={id}
-              value={value as string}
-              color={refused ? 'failure' : undefined}
-              aria-invalid={refused ? true : undefined}
-              aria-describedby={refused ? errorId : undefined}
-              onChange={(e) => onChange(e.target.value)}
-            >
-              {options.map((v) => (
-                <option key={String(v)} value={String(v)}>
-                  {String(v)}
-                </option>
-              ))}
-            </Select>
-            {explained}
-          </div>
+          <Select id={id} value={value as string} {...invalid} onChange={(e) => onChange(e.target.value)}>
+            {options.map((v) => (
+              <option key={String(v)} value={String(v)}>
+                {String(v)}
+              </option>
+            ))}
+          </Select>
         );
       }
-      return (
-        <div>
-          <TextInput
-            id={id}
-            type="text"
-            value={value as string}
-            color={refused ? 'failure' : undefined}
-            aria-invalid={refused ? true : undefined}
-            aria-describedby={refused ? errorId : undefined}
-            onChange={(e) => onChange(e.target.value)}
-          />
-          {explained}
-        </div>
-      );
+      case 'custom':
+        return (
+          <>
+            <Textarea
+              id={id}
+              rows={4}
+              className="font-mono text-sm"
+              value={json}
+              {...invalid}
+              onChange={(e) => {
+                setJSON(e.target.value);
+                try {
+                  const parsed = JSON.parse(e.target.value) as FlagValue;
+                  setJSONError('');
+                  onValidityChange?.(true);
+                  onChange(parsed);
+                } catch (err) {
+                  setJSONError((err as Error).message);
+                  onValidityChange?.(false);
+                }
+              }}
+            />
+            {jsonError && <HelperText color="failure">Invalid JSON: {jsonError}</HelperText>}
+          </>
+        );
     }
-    case 'custom':
-      return (
-        <div>
-          <Textarea
-            id={id}
-            rows={4}
-            className="font-mono text-sm"
-            value={json}
-            color={jsonError || refused ? 'failure' : undefined}
-            aria-invalid={jsonError || refused ? true : undefined}
-            aria-describedby={refused ? errorId : undefined}
-            onChange={(e) => {
-              setJSON(e.target.value);
-              try {
-                const parsed = JSON.parse(e.target.value) as FlagValue;
-                setJSONError('');
-                onValidityChange?.(true);
-                onChange(parsed);
-              } catch (err) {
-                setJSONError((err as Error).message);
-                onValidityChange?.(false);
-              }
-            }}
-          />
-          {jsonError && <HelperText color="failure">Invalid JSON: {jsonError}</HelperText>}
-          {explained}
-        </div>
-      );
-  }
+  };
+
+  return (
+    <div>
+      {input()}
+      {refused && (
+        <HelperText id={errorId} color="failure">
+          Not allowed: {refused}.
+        </HelperText>
+      )}
+    </div>
+  );
 };

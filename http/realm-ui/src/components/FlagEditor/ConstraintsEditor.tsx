@@ -1,6 +1,8 @@
 import { useId, useState } from 'react';
 import { HelperText, Label, Textarea, TextInput } from 'flowbite-react';
 import { RuleType, Schema } from '../../models/response';
+import { KEYWORDS } from '../../utils/constraints';
+import { messageOf } from '../../utils/strings';
 
 type Props = {
   type: RuleType;
@@ -16,6 +18,13 @@ const EDITED: Partial<Record<RuleType, (keyof Schema)[]>> = {
   number: ['minimum', 'maximum', 'multipleOf'],
   string: ['enum', 'maxLength'],
 };
+
+/** The fields of a number flag's constraints. */
+const NUMBER_FIELDS = [
+  { key: 'minimum', label: 'Minimum' },
+  { key: 'maximum', label: 'Maximum' },
+  { key: 'multipleOf', label: 'Multiple of', placeholder: '1 for whole numbers', min: 0 },
+] as const;
 
 /** Returns constraints with key set, or removed when undefined; undefined when no key is left. */
 const withKey = (constraints: Schema | undefined, key: keyof Schema, value: unknown): Schema | undefined => {
@@ -74,7 +83,7 @@ export const ConstraintsEditor = ({ type, constraints, onChange, onValidityChang
               onValidityChange(true);
               onChange(parsed);
             } catch (err) {
-              setJSONError((err as Error).message);
+              setJSONError(messageOf(err));
               onValidityChange(false);
             }
           }}
@@ -83,8 +92,8 @@ export const ConstraintsEditor = ({ type, constraints, onChange, onValidityChang
           <HelperText color="failure">Invalid JSON: {jsonError}</HelperText>
         ) : (
           <HelperText id={`${id}-schema-help`}>
-            A JSON Schema with only these keywords: type, enum, minimum, maximum, multipleOf, minLength, maxLength,
-            properties, required, additionalProperties (true or false), and items. Leave it empty to allow any value.
+            A JSON Schema with only these keywords: {KEYWORDS} (additionalProperties is true or false). Leave it empty
+            to allow any value.
           </HelperText>
         )}
       </div>
@@ -95,38 +104,20 @@ export const ConstraintsEditor = ({ type, constraints, onChange, onValidityChang
     <div className="flex flex-col gap-3">
       {type === 'number' && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div>
-            <Label htmlFor={`${id}-min`}>Minimum</Label>
-            <TextInput
-              id={`${id}-min`}
-              type="number"
-              step="any"
-              value={constraints?.minimum ?? ''}
-              onChange={(e) => set('minimum', numberOrUndefined(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor={`${id}-max`}>Maximum</Label>
-            <TextInput
-              id={`${id}-max`}
-              type="number"
-              step="any"
-              value={constraints?.maximum ?? ''}
-              onChange={(e) => set('maximum', numberOrUndefined(e.target.value))}
-            />
-          </div>
-          <div>
-            <Label htmlFor={`${id}-step`}>Multiple of</Label>
-            <TextInput
-              id={`${id}-step`}
-              type="number"
-              step="any"
-              min={0}
-              placeholder="1 for whole numbers"
-              value={constraints?.multipleOf ?? ''}
-              onChange={(e) => set('multipleOf', numberOrUndefined(e.target.value))}
-            />
-          </div>
+          {NUMBER_FIELDS.map((field) => (
+            <div key={field.key}>
+              <Label htmlFor={`${id}-${field.key}`}>{field.label}</Label>
+              <TextInput
+                id={`${id}-${field.key}`}
+                type="number"
+                step="any"
+                min={'min' in field ? field.min : undefined}
+                placeholder={'placeholder' in field ? field.placeholder : undefined}
+                value={constraints?.[field.key] ?? ''}
+                onChange={(e) => set(field.key, numberOrUndefined(e.target.value))}
+              />
+            </div>
+          ))}
         </div>
       )}
       {type === 'string' && (

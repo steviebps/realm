@@ -10,22 +10,22 @@ import {
   describeConstraints,
   numberRange,
   parentBounds,
+  formatValueError,
   parseConstraints,
   validate,
 } from './constraints.ts';
 
-// The cases the server runs too (pkg/schema_test.go).
+// The cases the server runs too (pkg/schema_test.go), with the server's words.
 const conformance = JSON.parse(
   readFileSync(new URL('../../../../sdk/conformance/constraints.json', import.meta.url), 'utf8')
 ) as {
-  schemas: { name: string; flagType: RuleType; schema: unknown; valid: boolean }[];
-  values: { name: string; schema: Schema; value: unknown; valid: boolean; path?: string }[];
+  schemas: { name: string; flagType: RuleType; schema: unknown; error?: string }[];
+  values: { name: string; schema: Schema; value: unknown; error?: string }[];
 };
 
 for (const c of conformance.schemas) {
   void test(`conformance: schema: ${c.name}`, () => {
-    const parsed = parseConstraints(c.schema, c.flagType);
-    assert.equal(parsed.error === undefined, c.valid, parsed.error ?? 'valid');
+    assert.equal(parseConstraints(c.schema, c.flagType).error, c.error);
   });
 }
 
@@ -34,30 +34,9 @@ for (const c of conformance.values) {
     const parsed = parseConstraints(c.schema, 'custom');
     assert.equal(parsed.error, undefined);
     const err = validate(parsed.schema, c.value);
-    assert.equal(err === undefined, c.valid, err?.reason ?? 'allowed');
-    if (err && c.path !== undefined) assert.equal(err.path, c.path);
+    assert.equal(err && formatValueError(err), c.error);
   });
 }
-
-void test('errors read as the server writes them', () => {
-  assert.equal(
-    parseConstraints({ pattern: '^a' }, 'string').error,
-    'unknown keyword "pattern": realm checks only type, enum, minimum, maximum, multipleOf, minLength, maxLength, properties, required, additionalProperties, and items'
-  );
-  assert.equal(parseConstraints({ maxLength: 3 }, 'number').error, 'maxLength does not apply to a number flag');
-  assert.equal(
-    parseConstraints({ enum: [24, 100], maximum: 72 }, 'number').error,
-    'enum value 100 is never allowed: 100 is greater than the maximum, 72'
-  );
-  assert.deepEqual(validate({ maximum: 72 }, 7200), { path: '', reason: '7200 is greater than the maximum, 72' });
-  assert.deepEqual(
-    validate({ properties: { lines: { items: { properties: { qty: { minimum: 1 } } } } } }, { lines: [{ qty: 0 }] }),
-    {
-      path: 'lines[0].qty',
-      reason: '0 is less than the minimum, 1',
-    }
-  );
-});
 
 const lineage = (rules: Record<string, Record<string, Flag>>): Lineage => ({
   inheritable: true,
@@ -84,30 +63,15 @@ void test('parentBounds lists the parents that constrain a flag, farthest first'
   assert.deepEqual(parentBounds(null, 'hold', 'number'), []);
 });
 
-void test('constraintProblems names each value a bound refuses, and where the bound is', () => {
+void test('constraintProblems names each value a bound refuses, and the parent that sets it', () => {
   const flag: Flag = { type: 'number', value: 60, targeting: [{ value: 24 }, { value: 96 }] };
-  assert.deepEqual(
-    constraintProblems(
-      flag,
-      [
-        { path: '/', schema: { maximum: 72 } },
-        { path: '/t/', schema: { maximum: 48 } },
-      ],
-      '/t/'
-    ),
-    [
-      'Rule 2: 96 is greater than the maximum, 72 (constraints of /).',
-      'Default: 60 is greater than the maximum, 48.',
-      'Rule 2: 96 is greater than the maximum, 48.',
-    ]
-  );
+  assert.deepEqual(constraintProblems(flag, [{ path: '/', schema: { maximum: 72 } }, { schema: { maximum: 48 } }]), [
+    'Default: 60 is greater than the maximum, 48.',
+    'Rule 2: 96 is greater than the maximum, 72 (constraints of /).',
+  ]);
   // paused rules are checked too
   assert.deepEqual(
-    constraintProblems(
-      { type: 'number', value: 1, pausedTargeting: [{ value: 0 }] },
-      [{ path: '/', schema: { minimum: 1 } }],
-      '/'
-    ),
+    constraintProblems({ type: 'number', value: 1, pausedTargeting: [{ value: 0 }] }, [{ schema: { minimum: 1 } }]),
     ['Rule 1: 0 is less than the minimum, 1.']
   );
 });

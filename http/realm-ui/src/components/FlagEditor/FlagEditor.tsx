@@ -25,8 +25,6 @@ type Props = {
   flag: Flag;
   catalog: Catalog;
   attributes: string[];
-  /** The path of the chamber the flag is defined in. */
-  here: string;
   /** The constraints of the flag in the chambers above, farthest first: every value must satisfy them too. */
   parentBounds: Bound[];
   onCancel: () => void;
@@ -42,7 +40,7 @@ const newRuleKey = () => `rule-${nextRuleKey++}`;
 /** An empty text field removes its field from the flag. */
 const orUndefined = (s: string) => (s.trim() === '' ? undefined : s);
 
-export const FlagEditor = ({ name, flag, catalog, attributes, here, parentBounds, onCancel, onReview }: Props) => {
+export const FlagEditor = ({ name, flag, catalog, attributes, parentBounds, onCancel, onReview }: Props) => {
   const [draft, setDraft] = useState<Flag>(() => structuredClone(flag));
   // Kept apart from the draft, which can't be paused without rules, so that rules added while targeting is off stay
   // paused.
@@ -53,11 +51,11 @@ export const FlagEditor = ({ name, flag, catalog, attributes, here, parentBounds
   const rules = rulesOf(draft);
   // the flag's own constraints bind its values only once they parse; until then their error is the problem
   const own = draft.constraints === undefined ? undefined : parseConstraints(draft.constraints, draft.type);
-  const bounds: Bound[] = [...parentBounds, ...(own?.schema ? [{ path: here, schema: own.schema }] : [])];
+  const bounds: Bound[] = [...parentBounds, ...(own?.schema ? [{ schema: own.schema }] : [])];
   const problems = [
     ...validateFlag(draft),
     ...(own?.error !== undefined ? [`Allowed values: ${own.error}.`] : []),
-    ...constraintProblems(draft, bounds, here),
+    ...constraintProblems(draft, bounds),
   ];
 
   // setRules replaces the rules, and their keys, which must stay in step.
@@ -145,7 +143,6 @@ export const FlagEditor = ({ name, flag, catalog, attributes, here, parentBounds
                 catalog={catalog}
                 attributes={attributes}
                 bounds={bounds}
-                here={here}
                 onChange={(r) =>
                   setRules(
                     rules.map((x, j) => (j === i ? r : x)),
@@ -191,7 +188,6 @@ export const FlagEditor = ({ name, flag, catalog, attributes, here, parentBounds
               onChange={(value) => setDraft({ ...draft, value })}
               onValidityChange={setValidity('default')}
               bounds={bounds}
-              here={here}
             />
           </div>
 

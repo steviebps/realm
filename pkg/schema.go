@@ -84,8 +84,8 @@ func ParseSchema(b []byte) (*Schema, error) {
 
 // parseFlagSchema parses the constraints of a flag of type flagType: as
 // ParseSchema does, except that for a flag of a scalar type the schema must
-// be about values of that type. at locates the schema in errors.
-func parseFlagSchema(b []byte, flagType, at string) (*Schema, error) {
+// be about values of that type.
+func parseFlagSchema(b []byte, flagType string) (*Schema, error) {
 	var implied string
 	switch flagType {
 	case "number", "string", "boolean":
@@ -94,7 +94,7 @@ func parseFlagSchema(b []byte, flagType, at string) (*Schema, error) {
 	default:
 		return nil, &UnsupportedTypeError{RuleType: flagType}
 	}
-	return parseSchema(b, at, implied)
+	return parseSchema(b, "", implied)
 }
 
 // parseSchema parses the schema b, found at at. implied is the JSON type the

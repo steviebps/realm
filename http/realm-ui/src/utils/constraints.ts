@@ -1,10 +1,13 @@
-// Type imports only, so node:test can run this file with Node's type stripping.
-import type { Flag, Lineage, RuleType, Schema, TargetingRule } from '../models/response';
+// Value imports name their .ts file, so node:test can run this file with Node's type stripping.
+import type { Flag, Lineage, RuleType, Schema } from '../models/response';
+import { get } from './provenance.ts';
+import { plural } from './strings.ts';
 
 // A port of the server's checks of flag constraints (pkg/schema.go), so the editor can explain a value before it is
 // saved. The server stays the authority; sdk/conformance/constraints.json holds the cases both must agree on.
 
-const KEYWORDS =
+/** The keywords realm checks, as errors and help text name them. */
+export const KEYWORDS =
   'type, enum, minimum, maximum, multipleOf, minLength, maxLength, properties, required, additionalProperties, and items';
 
 const TYPES = ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'];
@@ -29,7 +32,7 @@ const joinPath = (at: string, name: string) => {
 };
 
 /** A value as JSON for a message, shortened when long. */
-export const describeValue = (v: unknown): string => {
+const describeValue = (v: unknown): string => {
   const s = JSON.stringify(v) ?? String(v);
   const chars = [...s];
   return chars.length <= 60 ? s : `${chars.slice(0, 59).join('')}…`;
@@ -121,7 +124,7 @@ export const validate = (schema: Schema, value: unknown, at = ''): ValueError | 
       if (!own(value, name)) return fail(`required property ${JSON.stringify(name)} is missing`);
     }
     for (const name of Object.keys(value).sort()) {
-      const property = schema.properties && own(schema.properties, name) ? schema.properties[name] : undefined;
+      const property = get(schema.properties, name);
       if (property) {
         const err = validate(property, value[name], joinPath(at, name));
         if (err) return err;
@@ -258,8 +261,8 @@ const parseSchema = (raw: unknown, at: string, implied: string): Parsed => {
   return { schema: s };
 };
 
-/** A chamber's constraints on a flag: where they are defined and the schema. */
-export type Bound = { path: string; schema: Schema };
+/** Constraints on a flag: the schema, and the path of the parent that sets them (none for the flag's own). */
+export type Bound = { path?: string; schema: Schema };
 
 /**
  * The constraints that bind a definition of name in the chamber whose lineage this is: those of each parent that
@@ -272,34 +275,32 @@ export const parentBounds = (lineage: Lineage | null, name: string, type: RuleTy
     .slice(1)
     .reverse()
     .flatMap((layer) => {
-      const flag = layer.status === 'ok' && layer.rules && own(layer.rules, name) ? layer.rules[name] : undefined;
+      const flag = layer.status === 'ok' ? get(layer.rules, name) : undefined;
       if (!flag?.constraints || flag.type !== type) return [];
       const parsed = parseConstraints(flag.constraints, type);
       return parsed.schema ? [{ path: layer.path, schema: parsed.schema }] : [];
     });
 };
 
-/** The first of a flag's values that one of bounds refuses, named for the editor. */
-export const constraintProblems = (flag: Flag, bounds: Bound[], here: string): string[] => {
-  const problems: string[] = [];
-  const values: [string, unknown][] = [
-    ['Default', flag.value],
-    ...rulesOf(flag).map((r, i): [string, unknown] => [`Rule ${i + 1}`, r.value]),
-  ];
+/** Why the first of bounds that refuses value does, naming the parent that sets it; undefined when all allow it. */
+export const refusal = (bounds: Bound[], value: unknown): string | undefined => {
   for (const { path, schema } of bounds) {
-    for (const [where, value] of values) {
-      const err = validate(schema, value);
-      if (err) {
-        const by = path === here ? '' : ` (constraints of ${path})`;
-        problems.push(`${where}: ${formatValueError(err)}${by}.`);
-      }
-    }
+    const err = validate(schema, value);
+    if (err) return `${formatValueError(err)}${path ? ` (constraints of ${path})` : ''}`;
   }
-  return problems;
+  return undefined;
 };
 
-/** The flag's targeting rules whether targeting is on or off (as utils/flags rulesOf, without a value import). */
-const rulesOf = (flag: Flag): TargetingRule[] => (flag.targeting?.length ? flag.targeting : flag.pausedTargeting) ?? [];
+/** Each of a flag's values, paused or not, that bounds refuse, named for the editor. */
+export const constraintProblems = (flag: Flag, bounds: Bound[]): string[] => {
+  const rules = [...(flag.targeting ?? []), ...(flag.pausedTargeting ?? [])];
+  return [['Default', flag.value] as const, ...rules.map((r, i) => [`Rule ${i + 1}`, r.value] as const)].flatMap(
+    ([where, value]) => {
+      const why = refusal(bounds, value);
+      return why ? [`${where}: ${why}.`] : [];
+    }
+  );
+};
 
 /** The bounds of the value of a number flag that every schema allows, for an input's min, max, and step. */
 export const numberRange = (schemas: Schema[]) => {
@@ -334,9 +335,15 @@ export const describeConstraints = (schema: Schema, type: RuleType): string => {
   if (schema.type === 'integer' || schema.multipleOf === 1) parts.push('whole numbers');
   else if (schema.multipleOf !== undefined) parts.push(`multiples of ${schema.multipleOf}`);
   const { minLength, maxLength } = schema;
-  const chars = (n: number) => `${n} character${n === 1 ? '' : 's'}`;
-  if (minLength !== undefined && maxLength !== undefined) parts.push(`${minLength} to ${chars(maxLength)}`);
-  else if (maxLength !== undefined) parts.push(`up to ${chars(maxLength)}`);
-  else if (minLength !== undefined) parts.push(`at least ${chars(minLength)}`);
+  if (minLength !== undefined && maxLength !== undefined)
+    parts.push(`${minLength} to ${plural(maxLength, 'character')}`);
+  else if (maxLength !== undefined) parts.push(`up to ${plural(maxLength, 'character')}`);
+  else if (minLength !== undefined) parts.push(`at least ${plural(minLength, 'character')}`);
   return parts.length ? parts.join(', ') : 'any value';
+};
+
+/** A flag's constraints in plain language, or as JSON when this version cannot parse them. */
+export const summarizeConstraints = (constraints: Schema, type: RuleType): string => {
+  const parsed = parseConstraints(constraints, type);
+  return parsed.schema ? describeConstraints(parsed.schema, type) : JSON.stringify(constraints);
 };

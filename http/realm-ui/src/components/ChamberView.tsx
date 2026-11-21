@@ -9,7 +9,7 @@ import { diffChambers } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
 import { defaultValueFor, rulesOf, targetingPaused, withTargetingPaused } from '../utils/flags';
-import { ancestorsOf, get, provenance } from '../utils/provenance';
+import { aboutOf, ancestorsOf, get, provenance } from '../utils/provenance';
 import { messageOf } from '../utils/strings';
 import { HistoryDrawer } from './HistoryDrawer';
 import { FlagRow, FlagTable } from './FlagTable';
@@ -78,8 +78,7 @@ export const ChamberView = ({ path }: { path: string }) => {
   const allNames = Object.keys(own.rules).sort();
   const here = lineage?.layers[0].path ?? path;
   // a flag without a lifecycle of its own has that of the definition it overrides, as its row shows
-  const lifecycleOf = (name: string) =>
-    own.rules[name].lifecycle ?? get(prov?.own, name)?.overrides.find((d) => d.flag.lifecycle)?.flag.lifecycle;
+  const lifecycleOf = (name: string) => aboutOf(own.rules[name], get(prov?.own, name), 'lifecycle')?.value;
   const hasLifecycles = allNames.some((name) => lifecycleOf(name) !== undefined);
   const ownNames = allNames.filter((name) => {
     if (!hasLifecycles || lifecycleFilter === '') return true;
@@ -360,7 +359,6 @@ export const ChamberView = ({ path }: { path: string }) => {
           flag={editing.flag}
           catalog={catalog}
           attributes={attributes}
-          here={here}
           parentBounds={parentBounds(lineage, editing.name, editing.flag.type)}
           onCancel={() => setEditing(null)}
           onReview={(flag) => {

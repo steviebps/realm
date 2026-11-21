@@ -80,14 +80,17 @@ func (l Lifecycle) known() bool {
 	return l == "" || l == LifecycleTemporary || l == LifecyclePermanent
 }
 
-// flagMeta is what a flag says about itself, decoded from any flag, whatever
-// its type.
-type flagMeta struct {
-	Description string          `json:"description"`
-	Owner       string          `json:"owner"`
-	Lifecycle   Lifecycle       `json:"lifecycle"`
-	Constraints json.RawMessage `json:"constraints"`
-	Sealed      bool            `json:"sealed"`
+// flagFields holds a flag's fields beside its Rule, decoded from any flag,
+// whatever its type, with its targeting rules kept raw so that they can be
+// type-checked against the flag's type.
+type flagFields struct {
+	Description     string          `json:"description"`
+	Owner           string          `json:"owner"`
+	Lifecycle       Lifecycle       `json:"lifecycle"`
+	Constraints     json.RawMessage `json:"constraints"`
+	Sealed          bool            `json:"sealed"`
+	Targeting       json.RawMessage `json:"targeting"`
+	PausedTargeting json.RawMessage `json:"pausedTargeting"`
 }
 
 // removedFlagFields maps fields from earlier releases to migration guidance.
@@ -109,7 +112,7 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 	}
 	// decoded as encoding/json matches fields (case-insensitively), as
 	// ParseChamber's field check does, so no spelling of one is ignored
-	var meta flagMeta
+	var meta flagFields
 	if err := json.Unmarshal(b, &meta); err != nil {
 		var te *json.UnmarshalTypeError
 		if errors.As(err, &te) && te.Field != "" {
@@ -146,24 +149,15 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	// decoded as encoding/json matches fields (case-insensitively), as
-	// ParseChamber's field check does, so no spelling of either is dropped
-	var rules struct {
-		Targeting       json.RawMessage `json:"targeting"`
-		PausedTargeting json.RawMessage `json:"pausedTargeting"`
-	}
-	if err := json.Unmarshal(b, &rules); err != nil {
-		return err
-	}
-	if rules.Targeting != nil {
-		targeting, err := parseTargeting(rules.Targeting, rule.Type)
+	if meta.Targeting != nil {
+		targeting, err := parseTargeting(meta.Targeting, rule.Type)
 		if err != nil {
 			return err
 		}
 		f.Targeting = targeting
 	}
-	if rules.PausedTargeting != nil {
-		paused, err := parseTargeting(rules.PausedTargeting, rule.Type)
+	if meta.PausedTargeting != nil {
+		paused, err := parseTargeting(meta.PausedTargeting, rule.Type)
 		if err != nil {
 			return fmt.Errorf("pausedTargeting: %w", err)
 		}
@@ -184,7 +178,7 @@ func (f *Flag) ParseConstraints() (*Schema, error) {
 	if f.Rule == nil {
 		return nil, errors.New("a flag with constraints must have a type")
 	}
-	return parseFlagSchema(f.Constraints, f.Type, "")
+	return parseFlagSchema(f.Constraints, f.Type)
 }
 
 // CheckValues reports the first of the flag's values that s refuses: its

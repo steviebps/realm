@@ -17,8 +17,6 @@ type Props = {
   attributes: string[];
   /** The constraints the rule's value must satisfy. */
   bounds: Bound[];
-  /** The path of the chamber being edited. */
-  here: string;
   onChange: (rule: TargetingRule) => void;
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
@@ -37,7 +35,6 @@ export const RuleEditor = ({
   catalog,
   attributes,
   bounds,
-  here,
   onChange,
   onMove,
   onRemove,
@@ -178,7 +175,6 @@ export const RuleEditor = ({
           onChange={(value) => onChange({ ...rule, value })}
           onValidityChange={onValidityChange}
           bounds={bounds}
-          here={here}
         />
       </div>
 

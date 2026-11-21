@@ -94,19 +94,6 @@ func (s *InheritableStorage) Layers(ctx context.Context, logicalPath string) (*L
 	return lin, nil
 }
 
-// AncestorSeals maps each flag that an ancestor of logicalPath seals to the
-// path of the farthest ancestor that seals it, as Lineage.Merge resolves
-// seals. Ancestors that are missing or cannot be parsed seal nothing here: one
-// that cannot be parsed fails every inherited read below it until it is fixed,
-// and Merge applies its seals then. A failed read is returned.
-func (s *InheritableStorage) AncestorSeals(ctx context.Context, logicalPath string) (map[string]string, error) {
-	a, err := s.Ancestry(ctx, logicalPath)
-	if err != nil {
-		return nil, err
-	}
-	return a.Seals, nil
-}
-
 // Ancestry returns what the ancestors of logicalPath say about the flags a
 // chamber there may define: which they seal and which they constrain (see
 // Ancestry). A failed read is returned.

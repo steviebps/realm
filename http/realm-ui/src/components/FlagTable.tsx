@@ -1,12 +1,12 @@
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { Badge } from 'flowbite-react';
 import { HiChevronRight, HiLockClosed, HiPause } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
 import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
-import { describeConstraints, parseConstraints } from '../utils/constraints';
+import { summarizeConstraints } from '../utils/constraints';
 import { describeDefinition, formatValue, same } from '../utils/describe';
 import { rulesOf, targetingPaused } from '../utils/flags';
-import { Served } from '../utils/provenance';
+import { aboutOf, Served } from '../utils/provenance';
 import { scheduleEnded } from '../utils/schedule';
 import { encodePath } from '../utils/path';
 import { plural, trimSuffix } from '../utils/strings';
@@ -198,29 +198,11 @@ const HiddenDefinitions = ({ served, here, catalog }: { served: Served; here: st
   </div>
 );
 
-/** What a flag says about itself, shown in its row. */
-type About = 'description' | 'owner' | 'lifecycle';
-
-/**
- * What a flag says about key: its own, or else that of the nearest definition it overrides that says it, with that
- * definition's path. An override that doesn't describe itself is still the flag it overrides.
- */
-const aboutOf = (flag: Flag, served: Served | undefined, key: About): { value: string; from?: string } | undefined => {
-  const value = flag[key];
-  if (value !== undefined) return { value };
-  const def = served?.overrides.find((d) => d.flag[key] !== undefined);
-  return def && { value: def.flag[key] as string, from: def.path };
-};
-
-/** The constraints that bind a flag's definition: its own, then each it overrides, nearest first. */
+/** The constraints that bind a flag's definition, in plain language: its own, then each it overrides, nearest first. */
 const boundsOf = (flag: Flag, served: Served | undefined, here: string) =>
-  [{ path: served?.source ?? here, flag }, ...(served?.overrides ?? [])].flatMap(({ path, flag: def }) => {
-    if (!def.constraints) return [];
-    const parsed = parseConstraints(def.constraints, def.type);
-    return [
-      { path, text: parsed.schema ? describeConstraints(parsed.schema, def.type) : JSON.stringify(def.constraints) },
-    ];
-  });
+  [{ path: served?.source ?? here, flag }, ...(served?.overrides ?? [])].flatMap(({ path, flag: def }) =>
+    def.constraints ? [{ value: summarizeConstraints(def.constraints, def.type), from: path }] : []
+  );
 
 const LIFECYCLE_LABELS: Record<string, string> = {
   temporary: 'Temporary: meant to be removed once it has served its purpose',
@@ -274,6 +256,15 @@ export const FlagRow = ({
   const owner = aboutOf(flag, served, 'owner');
   const lifecycle = aboutOf(flag, served, 'lifecycle');
   const bounds = open ? boundsOf(flag, served, here) : [];
+  const details = [
+    { term: 'Description', about: description ? [description] : [] },
+    { term: 'Owner', about: owner ? [owner] : [] },
+    {
+      term: 'Lifecycle',
+      about: lifecycle ? [{ ...lifecycle, value: LIFECYCLE_LABELS[lifecycle.value] ?? lifecycle.value }] : [],
+    },
+    { term: 'Allowed values', about: bounds },
+  ].filter((d) => d.about.length > 0);
   /** "(from /path/)" after what a flag says about itself when another definition says it. */
   const from = (path?: string) =>
     path && (
@@ -419,48 +410,21 @@ export const FlagRow = ({
         {open && (
           <div role="cell" aria-colspan={4} className="px-4 pb-4 sm:col-span-4">
             <div className="ml-1.5 flex flex-col gap-3 border-l-2 border-gray-300 pl-4 text-sm text-gray-700 dark:border-gray-600 dark:text-gray-300">
-              {(description || owner || lifecycle || bounds.length > 0) && (
+              {details.length > 0 && (
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                  {description && (
-                    <>
-                      <dt className="text-gray-500 dark:text-gray-400">Description</dt>
-                      <dd className="whitespace-pre-line [overflow-wrap:anywhere]">
-                        {description.value}
-                        {from(description.from)}
-                      </dd>
-                    </>
-                  )}
-                  {owner && (
-                    <>
-                      <dt className="text-gray-500 dark:text-gray-400">Owner</dt>
-                      <dd className="[overflow-wrap:anywhere]">
-                        {owner.value}
-                        {from(owner.from)}
-                      </dd>
-                    </>
-                  )}
-                  {lifecycle && (
-                    <>
-                      <dt className="text-gray-500 dark:text-gray-400">Lifecycle</dt>
-                      <dd>
-                        {LIFECYCLE_LABELS[lifecycle.value] ?? lifecycle.value}
-                        {from(lifecycle.from)}
-                      </dd>
-                    </>
-                  )}
-                  {bounds.length > 0 && (
-                    <>
-                      <dt className="text-gray-500 dark:text-gray-400">Allowed values</dt>
+                  {details.map(({ term, about }) => (
+                    <Fragment key={term}>
+                      <dt className="text-gray-500 dark:text-gray-400">{term}</dt>
                       <dd className="flex flex-col">
-                        {bounds.map(({ path, text }) => (
-                          <span key={path} className="[overflow-wrap:anywhere]">
-                            {text}
-                            {path !== source && from(path)}
+                        {about.map((a) => (
+                          <span key={a.from ?? ''} className="whitespace-pre-line [overflow-wrap:anywhere]">
+                            {a.value}
+                            {a.from !== source && from(a.from)}
                           </span>
                         ))}
                       </dd>
-                    </>
-                  )}
+                    </Fragment>
+                  ))}
                 </dl>
               )}
               <div className="flex flex-col">

@@ -79,7 +79,7 @@ Writes are strict, so the subset refuses what it does not check:
 `pkg/schema.go` implements the subset (`Schema`, `ParseSchema`,
 `Schema.Validate`); `http/realm-ui/src/utils/constraints.ts` ports it so the
 editor can explain a value before saving. `sdk/conformance/constraints.json`
-holds the cases both run.
+holds the cases both run, with the error each must report, word for word.
 
 ## Writes are strict, reads are lenient
 
@@ -121,11 +121,14 @@ The server reads the parents with one pass that also yields their seals
 
 ### Adding or tightening constraints
 
-A write that adds a flag's constraints, changes them, or changes the type of
-a constrained flag must not leave a chamber below it serving a value the
-flag no longer allows. So the server lists the chambers below the path
-(`storage.ListTree`, one range read on Postgres, etcd, and boltdb), reads
-them (`ScanLayers`, or one read each elsewhere), and **refuses** the write
+A write that adds a flag's constraints, changes them (compared as JSON
+values, so reordering a schema is no change), or changes the type of a
+constrained flag must not leave a chamber below it serving a value the flag
+no longer allows. Once the chambers above have accepted the write (so a
+flag a parent seals is refused as sealed), the server lists the chambers
+below the path (`storage.ListTree`, one range read on Postgres, etcd, and
+boltdb), reads them (`storage.ReadLayers`: one scan there, one read each
+elsewhere), and **refuses** the write
 when any serves a definition of the flag with another type or a refused
 value, naming up to ten of them:
 

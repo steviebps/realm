@@ -197,17 +197,68 @@ func TestWriteGuardRechecksChanges(t *testing.T) {
 		stored *storage.StorageEntry
 		want   error
 	}{
-		{"checked", &writeGuard{ancestry: empty, inheritable: true, checkedBelow: []string{"hold"}}, nil, nil},
-		{"unchanged since", &writeGuard{ancestry: empty, inheritable: true}, stored, nil},
-		{"changed since", &writeGuard{ancestry: empty, inheritable: true}, nil, storage.ErrConflict},
-		{"without inheritance", &writeGuard{ancestry: empty}, nil, nil},
-		{"no guard", nil, nil, nil},
+		{"checked", &writeGuard{ancestry: empty, scanned: true, checkedBelow: []string{"hold"}}, nil, nil},
+		{"unchanged since", &writeGuard{ancestry: empty, scanned: true}, stored, nil},
+		{"changed since", &writeGuard{ancestry: empty, scanned: true}, nil, storage.ErrConflict},
+		{"nothing checked below", &writeGuard{ancestry: empty}, nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.guard.check(tt.stored, next); err != tt.want {
+			if err := tt.guard.check(tt.stored, nil, next); err != tt.want {
 				t.Fatalf("check = %v, want %v", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestConstraintChecksOrder checks that a write is judged by the chambers
+// above it before those below: a flag a parent seals is refused as sealed,
+// whatever definitions below it would break. It also checks that constraints
+// that differ only in member order are not a change, so they are not
+// checked against the chambers below again.
+func TestConstraintChecksOrder(t *testing.T) {
+	stg, err := storage.NewBigCacheStorage(map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newInheritableTestServerOn(t, stg)
+	base := srv.URL + "/v1/chambers"
+	steps := []struct {
+		name, method, path, body string
+		want                     int
+		wantErrors               []string
+	}{
+		{"the parent", http.MethodPost, "/", `{"rules":{"hold":{"type":"number","value":24}}}`, http.StatusCreated, nil},
+		{"a grandchild", http.MethodPost, "/t/a/b/", `{"rules":{"hold":{"type":"number","value":70}}}`, http.StatusCreated, nil},
+		{"the parent seals it", http.MethodPost, "/", `{"rules":{"hold":{"type":"number","value":24,"sealed":true}}}`, http.StatusCreated, nil},
+		{"constraints below the seal", http.MethodPost, "/t/a/", `{"rules":{"hold":{"type":"number","value":10,"constraints":{"maximum":20}}}}`, http.StatusBadRequest,
+			[]string{`flag "hold" is sealed by /: chambers below it cannot define it`}},
+		{"the parent constrains it", http.MethodPost, "/", `{"rules":{"hold":{"type":"number","value":24,"constraints":{"minimum":1,"maximum":72}}}}`, http.StatusCreated, nil},
+	}
+	for _, s := range steps {
+		status, out := call(t, nil, s.method, base+s.path, s.body, "")
+		if status != s.want {
+			t.Fatalf("%s: %s %s = %d %v, want %d", s.name, s.method, s.path, status, out.Errors, s.want)
+		}
+		if s.wantErrors != nil && !slices.Equal(out.Errors, s.wantErrors) {
+			t.Errorf("%s: errors = %q, want %q", s.name, out.Errors, s.wantErrors)
+		}
+	}
+
+	// a definition below that breaks them, stored around the server (as a
+	// concurrent write might land), is checked only when they change
+	if err := stg.Put(context.Background(), storage.StorageEntry{Key: "/u/", Value: []byte(`{"rules":{"hold":{"type":"number","value":7200}}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []struct {
+		body string
+		want int
+	}{
+		{`{"rules":{"hold":{"type":"number","value":30,"constraints":{"maximum":72,"minimum":1}}}}`, http.StatusCreated},
+		{`{"rules":{"hold":{"type":"number","value":30,"constraints":{"minimum":1,"maximum":70}}}}`, http.StatusBadRequest},
+	} {
+		if status, out := call(t, nil, http.MethodPost, base+"/", s.body, ""); status != s.want {
+			t.Fatalf("POST / %s = %d %v, want %d", s.body, status, out.Errors, s.want)
+		}
 	}
 }

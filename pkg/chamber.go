@@ -260,12 +260,9 @@ func (c *Chamber) checkConstraints() error {
 		if !f.Lifecycle.known() {
 			return fmt.Errorf("flag %q: lifecycle must be %q or %q, not %q", key, LifecycleTemporary, LifecyclePermanent, f.Lifecycle)
 		}
-		if len(f.Constraints) == 0 {
-			continue
-		}
-		s, err := parseFlagSchema(f.Constraints, f.Type, "constraints")
+		s, err := f.ParseConstraints()
 		if err != nil {
-			return fmt.Errorf("flag %q: %w", key, err)
+			return fmt.Errorf("flag %q: constraints: %w", key, err)
 		}
 		if err := f.CheckValues(s); err != nil {
 			return fmt.Errorf("flag %q: %w", key, err)

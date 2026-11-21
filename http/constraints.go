@@ -1,11 +1,12 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"path"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -40,62 +41,41 @@ func (e *constraintError) Error() string {
 	return strings.Join(e.reasons, "; ")
 }
 
-// checkAncestorConstraints refuses next, the chamber a write would store,
-// when a flag it adds or changes (compared with stored, the chamber as
-// stored, or nil) has a type or values that the constraints of a parent's
-// definition of it refuse (constrained is from storage.Ancestry).
-func checkAncestorConstraints(constrained map[string][]storage.Constrained, stored *storage.StorageEntry, next *realm.Chamber) error {
-	if len(constrained) == 0 {
-		return nil
+// breaksParents says why f, the definition of key a write adds or changes,
+// breaks the constraints of a parent's definition of it (defs, farthest
+// first, from storage.Ancestry): it has another type, or values they refuse.
+// It returns "" when f satisfies them all.
+func breaksParents(key string, f *realm.Flag, defs []storage.Constrained) string {
+	if f == nil || f.Rule == nil {
+		return ""
 	}
-	before := storedChamber(stored)
-	var reasons []string
-	for _, key := range slices.Sorted(maps.Keys(next.Rules)) {
-		defs, f := constrained[key], next.Rules[key]
-		if len(defs) == 0 || f == nil || f.Rule == nil {
-			continue
+	for _, def := range defs {
+		if f.Type != def.Flag.Type {
+			return fmt.Sprintf("flag %q is a %s flag in %s, whose constraints bind the chambers below it, so it cannot be a %s flag here", key, def.Flag.Type, def.Path, f.Type)
 		}
-		if old, had := before.Rules[key]; had && sameFlag(old, f) {
-			continue
+		s, err := def.Flag.ParseConstraints()
+		if err != nil {
+			return fmt.Sprintf("flag %q cannot be checked against its constraints in %s: %v", key, def.Path, err)
 		}
-		for _, def := range defs {
-			if f.Type != def.Flag.Type {
-				reasons = append(reasons, fmt.Sprintf("flag %q is a %s flag in %s, whose constraints bind the chambers below it, so it cannot be a %s flag here", key, def.Flag.Type, def.Path, f.Type))
-				break
-			}
-			s, err := def.Flag.ParseConstraints()
-			if err != nil {
-				reasons = append(reasons, fmt.Sprintf("flag %q cannot be checked against its constraints in %s: %v", key, def.Path, err))
-				break
-			}
-			if err := f.CheckValues(s); err != nil {
-				reasons = append(reasons, fmt.Sprintf("flag %q must satisfy its constraints in %s: %v", key, def.Path, err))
-				break
-			}
+		if err := f.CheckValues(s); err != nil {
+			return fmt.Sprintf("flag %q must satisfy its constraints in %s: %v", key, def.Path, err)
 		}
 	}
-	if len(reasons) > 0 {
-		return &constraintError{reasons: reasons}
-	}
-	return nil
+	return ""
 }
 
 // constraintChanges returns, sorted, the keys of the flags in next whose
-// constraints a write adds or changes, compared with before (nil when there
-// is no chamber): those with constraints that before lacks, or has
-// otherwise, or with another type. Their definitions below must be checked
-// against the new constraints.
+// constraints a write adds or changes, compared with before, the chamber as
+// stored: those with constraints that before lacks, or has otherwise, or
+// with another type. Their definitions below must be checked against the new
+// constraints.
 func constraintChanges(before, next *realm.Chamber) []string {
 	var keys []string
 	for key, f := range next.Rules {
-		if f == nil || f.Rule == nil || len(f.Constraints) == 0 {
+		if f == nil || len(f.Constraints) == 0 {
 			continue
 		}
-		var old *realm.Flag
-		if before != nil {
-			old = before.Rules[key]
-		}
-		if old == nil || old.Rule == nil || old.Type != f.Type || !sameJSON(old.Constraints, f.Constraints) {
+		if old := before.Rules[key]; old == nil || old.Type != f.Type || !sameJSON(old.Constraints, f.Constraints) {
 			keys = append(keys, key)
 		}
 	}
@@ -103,12 +83,14 @@ func constraintChanges(before, next *realm.Chamber) []string {
 	return keys
 }
 
-// sameJSON reports whether a and b are the same JSON, ignoring insignificant
-// space.
+// sameJSON reports whether a and b are the same JSON value, whatever their
+// spacing or the order of object members.
 func sameJSON(a, b json.RawMessage) bool {
-	x, errA := json.Marshal(a)
-	y, errB := json.Marshal(b)
-	return errA == nil && errB == nil && string(x) == string(y)
+	if bytes.Equal(a, b) {
+		return true
+	}
+	var x, y any
+	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
 }
 
 // storedChamber decodes the chamber as stored, leniently; a missing chamber,
@@ -126,13 +108,17 @@ func storedChamber(stored *storage.StorageEntry) *realm.Chamber {
 // constraintChanges) with another type, or with values next's constraints
 // for it refuse. Definitions a seal hides are not served, so they are not
 // checked; neither are chambers that cannot be parsed, which fail every read
-// until they are fixed. strg holds chambers as stored (see storage.Raw).
+// until they are fixed. Seals above root are not consulted: guardWrite has
+// already refused a write that changes a flag one seals. strg holds
+// chambers as stored (see storage.Raw).
 //
 // The chambers below are read before the write rather than with it, so a
 // definition written below concurrently may escape the check, as it may
 // escape a seal; it is checked against these constraints when it next
 // changes.
 func checkBelow(ctx context.Context, strg storage.Storage, root string, next *realm.Chamber, keys []string) error {
+	// a flag next seals hides every definition below
+	keys = slices.DeleteFunc(slices.Clone(keys), func(key string) bool { return next.Rules[key].Sealed })
 	if len(keys) == 0 {
 		return nil
 	}
@@ -146,29 +132,15 @@ func checkBelow(ctx context.Context, strg storage.Storage, root string, next *re
 	if len(paths) < 2 {
 		return nil
 	}
-	layers, scanned, err := storage.ScanLayers(ctx, strg, paths)
+	layers, err := storage.ReadLayers(ctx, strg, paths)
 	if err != nil {
 		return err
-	}
-	if !scanned {
-		layers = make(map[string]storage.Layer, len(paths))
-		for _, p := range paths[1:] {
-			l, err := storage.ReadLayer(ctx, strg, p)
-			if err != nil {
-				return err
-			}
-			layers[p] = l
-		}
 	}
 	span.SetAttributes(attribute.Int("realm.server.chambers", len(paths)-1))
 
 	var reasons []string
 	for _, key := range keys {
 		f := next.Rules[key]
-		if f.Sealed {
-			// every definition below is hidden
-			continue
-		}
 		s, err := f.ParseConstraints()
 		if err != nil {
 			// ParseChamber has checked them
@@ -182,8 +154,8 @@ func checkBelow(ctx context.Context, strg storage.Storage, root string, next *re
 				continue
 			}
 			var why string
-			if def.Rule == nil || def.Type != f.Type {
-				why = fmt.Sprintf("a %s flag", typeOf(def))
+			if def.Type != f.Type {
+				why = fmt.Sprintf("a %s flag", def.Type)
 			} else if err := def.CheckValues(s); err != nil {
 				why = err.Error()
 			} else {
@@ -221,7 +193,7 @@ func definitionAt(layers map[string]storage.Layer, p, key string) *realm.Flag {
 // sealedBetween reports whether a chamber strictly between root and its
 // descendant p seals key, hiding p's definition of it.
 func sealedBetween(layers map[string]storage.Layer, root, p, key string) bool {
-	for a := parentPath(p); a != root && len(a) > len(root); a = parentPath(a) {
+	for a := parentPath(p); len(a) > len(root); a = parentPath(a) {
 		if f := definitionAt(layers, a, key); f != nil && f.Sealed {
 			return true
 		}
@@ -237,12 +209,4 @@ func parentPath(p string) string {
 		return dir
 	}
 	return dir + "/"
-}
-
-// typeOf names the type of f in errors.
-func typeOf(f *realm.Flag) string {
-	if f.Rule == nil || f.Type == "" {
-		return "untyped"
-	}
-	return f.Type
 }
