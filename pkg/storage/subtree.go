@@ -187,6 +187,25 @@ func ScanLayers(ctx context.Context, s Storage, paths []string) (layers map[stri
 	return layers, true, nil
 }
 
+// ReadLayers reads the chamber stored at each of paths, which ListTree
+// returned (the root first), as ReadLayer would: with one Scan when Raw(s)
+// is a Scanner (see ScanLayers), and one read of s each otherwise. The
+// layers are held in memory together.
+func ReadLayers(ctx context.Context, s Storage, paths []string) (map[string]Layer, error) {
+	if layers, scanned, err := ScanLayers(ctx, s, paths); scanned || err != nil {
+		return layers, err
+	}
+	layers := make(map[string]Layer, len(paths))
+	for _, p := range paths {
+		l, err := ReadLayer(ctx, s, p)
+		if err != nil {
+			return nil, err
+		}
+		layers[p] = l
+	}
+	return layers, nil
+}
+
 // RawLayers returns a LayerReader that reads each chamber from Raw(s).
 func RawLayers(s Storage) LayerReader {
 	raw := Raw(s)

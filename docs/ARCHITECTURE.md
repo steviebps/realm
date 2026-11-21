@@ -25,6 +25,10 @@ Chamber                        // a namespace: map[flagKey] -> Flag   (json "rul
 - **`Flag`** (`pkg/flag.go`) — a default value plus ordered `targeting` rules.
   `UnmarshalJSON` type-checks every rule value against the flag type and
   rejects the removed `overrides`/`rollout` fields with migration guidance.
+  It also says what it is for (`description`, `owner`, `lifecycle`) and may
+  restrict its values with `constraints`, a JSON Schema subset (`Schema` in
+  `pkg/schema.go`) that `ParseChamber` checks on writes and reads ignore
+  ([design/constraints.md](design/constraints.md)).
 - **`TargetingRule` / `Clause` / `Rollout` / `Schedule`** (`pkg/targeting.go`)
   — a rule applies while its schedule (if any) is in effect, when all its
   clauses match the evaluation context and, if it has a rollout, the context
@@ -112,11 +116,22 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   [design/subtree.md](design/subtree.md).
 - **Sealed flags** — a PUT or PATCH that adds a flag a parent seals, or
   changes the chamber's stored definition of one, is refused with 400 naming
-  the parent (`checkSeals` in `http/handler.go`, from
-  `storage.ReadAncestorSeals`). A definition stored before the seal may stay
+  the parent (`writeGuard.check` in `http/handler.go`, from
+  `storage.ReadAncestry`). A definition stored before the seal may stay
   as it is, so the chamber stays editable. The seals are read before the
   write rather than inside its `Update`: `Lineage.Merge` is what enforces
   them, so a seal that lands during a write still hides what it stores.
+- **Constraints** — a flag's `constraints` bind its definitions below the
+  chamber too (`http/constraints.go`). A PUT or PATCH that adds or changes a
+  flag is refused with 400 when its type or values break the constraints of
+  any parent's definition (read with the seals, in one pass:
+  `storage.ReadAncestry`). A write that adds or changes constraints (judged by
+  JSON value, so reordering is no change) is checked against the chambers
+  above first, then reads the chambers below (`checkBelow`: `ListTree`, then
+  `ReadLayers`) and is refused, naming them, when any serves a definition
+  they refuse; definitions a seal hides are skipped. Within the write's
+  `Update` the server checks that the constraints it changes are those it
+  scanned for, and answers 409 otherwise. See [design/constraints.md](design/constraints.md).
 - **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as
   stored at its path (the inherited view carries none); writes honor `If-Match` / `If-None-Match: *` and return `412` on
   mismatch, checked under a per-path lock (`http/meta.go`). Every write is
@@ -467,6 +482,7 @@ log line of their own.
 | Attribute targeting (ordered rules on `EvaluationContext.Attributes`) | ✅ Done | `pkg/targeting.go`, `pkg/flag.go` |
 | Scheduled rules (one-off time windows) | ✅ Done | `Schedule` in `pkg/targeting.go`; evaluation streams re-send at bounds |
 | Per-flag targeting off (serve the default, keep the rules) | ✅ Done | `PausedTargeting` in `pkg/flag.go`; Pause/Resume in `http/realm-ui` |
+| Flag descriptions, owners, lifecycles, and value constraints (bind the chambers below) | ✅ Done | `pkg/schema.go`, `pkg/flag.go`, `http/constraints.go`, `http/realm-ui` ([design](design/constraints.md)) |
 | Recurring schedules (weekly windows in a time zone) | ⬜ Next | `pkg/targeting.go` |
 | Optimistic concurrency, change history, attribute catalog | ✅ Done | `http/meta.go`, `http/meta_handlers.go` |
 | S3 storage | ✅ Done | `pkg/storage/s3.go` |

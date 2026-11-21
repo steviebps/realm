@@ -24,8 +24,11 @@ cannot override it. Each flag has a default value and ordered
 environment, service, semver `version`, `buildSha`, …), each optionally
 limited to a **deterministic percentage rollout** and/or a one-off **schedule**
 (a time window). A flag's targeting can be **turned off** (its rules move to
-`pausedTargeting`, which is never evaluated, so it serves its default). The
-SDK stays current by
+`pausedTargeting`, which is never evaluated, so it serves its default). A
+flag can carry a `description`, `owner`, and `lifecycle`
+(`temporary` | `permanent`), and **constraints**: a JSON Schema subset its
+values must satisfy on write, which also binds its definitions in the
+chambers below (they may tighten, never loosen). The SDK stays current by
 **polling** (default 15 min) or **real-time streaming** (SSE). The server
 offers ETag optimistic concurrency, per-chamber change history, and an
 attribute catalog (value → label) for the UI; storage includes S3,
@@ -50,7 +53,8 @@ streams (resume with `Last-Event-ID`, SDKs rejecting stale data); subtrees in
 the evaluation endpoint; with
 backends other than Postgres and etcd, run one replica. See
 `docs/ARCHITECTURE.md`, `docs/design/targeting.md`, `docs/design/auth.md`,
-`docs/design/evaluation.md`, and `docs/design/subtree.md`.
+`docs/design/evaluation.md`, `docs/design/subtree.md`, and
+`docs/design/constraints.md`.
 
 **Open source:** keep consumer- or company-specific names out of code, docs,
 examples, and tests; use generic terms (tenant, location, service).
@@ -58,7 +62,8 @@ examples, and tests; use generic terms (tenant, location, service).
 ## Domain vocabulary
 
 Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
-`pkg/context.go`, `pkg/realm.go` — these define the whole model.
+`pkg/schema.go`, `pkg/context.go`, `pkg/realm.go` — these define the whole
+model.
 
 - **Rule** — a typed value: a `type` (`string` | `number` | `boolean` |
   `custom`) and a `value`. `UnmarshalJSON` strictly validates the value against
@@ -76,6 +81,18 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
   `Lineage.Merge` serves the farthest sealing ancestor's definition and hides
   nearer ones, and the server refuses writes below it that add or change
   the flag (an unchanged definition stored before the seal may stay).
+  `Description`, `Owner`, `Lifecycle` are labels. `Constraints` is kept raw
+  (`json.RawMessage`, so newer keywords round-trip); `ParseConstraints`
+  decodes it into a `Schema`, and `CheckValues` checks the default, targeting,
+  and paused values. `ParseChamber` checks both; reads never do.
+- **Schema** (`pkg/schema.go`) — the JSON Schema subset of constraints:
+  `type`, `enum`, `minimum`, `maximum`, `multipleOf`, `minLength`,
+  `maxLength`, `properties`, `required`, `additionalProperties` (bool),
+  `items`. `ParseSchema` refuses any other keyword and inconsistent schemas;
+  `Validate` returns a `*ValueError` with the path of the refused part. The
+  server (`http/constraints.go`) holds every definition to the constraints of
+  each parent that defines the flag (`storage.ReadAncestry`), and refuses a
+  change of constraints that a definition below breaks (`checkBelow`).
 - **TargetingRule** — `Clauses` (ANDed), a `Value`, an optional `Rollout`, and
   an optional `Schedule`.
 - **Clause** — `{attribute, op, values}`; ops `in`, `notIn`, `startsWith`,
@@ -130,12 +147,12 @@ Read `pkg/rule.go`, `pkg/flag.go`, `pkg/targeting.go`, `pkg/chamber.go`,
 | `main.go` | Entry point → `cmd.Execute()` |
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
 | `pkg/` | Core domain + SDK (package `realm`); refresh in `refresh.go`, path templates in `template.go` (parse, resolve), subtree reads and streams in `subtree.go` |
-| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`, `etcd`) and wrappers (`cacheable`, `inheritable`, which reuses unchanged chambers' parses and merged views via `inheritable_cache.go`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`, and `Scanner` (one range read of a prefix: `postgres`, `etcd`, `boltdb`) in `scan.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking; `subtree.go`: `ListTree` (the paths below a root, capped; one `ScanKeys` on a `Scanner`), `ReadTree` (each view, reading each chamber once, with one `Scan` when it can), `WalkTree`, `ScanLayers`, `BuildView` |
+| `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`, `etcd`) and wrappers (`cacheable`, `inheritable`, which reuses unchanged chambers' parses and merged views via `inheritable_cache.go`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`, and `Scanner` (one range read of a prefix: `postgres`, `etcd`, `boltdb`) in `scan.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking; `subtree.go`: `ListTree` (the paths below a root, capped; one `ScanKeys` on a `Scanner`), `ReadTree` (each view, reading each chamber once, with one `Scan` when it can), `WalkTree`, `ScanLayers`, `ReadLayers` (`ScanLayers` or a read each), `BuildView` |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
 | `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`; `pathTemplate` via `src/template.ts` and `src/subtree.ts`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`) |
-| `sdk/conformance/` | Cases the Go and TypeScript tests both run: `evaluation.json` (evaluation; `pkg/conformance_test.go`), `subtree.json` (path-template resolution; `pkg/template_test.go`, `test/subtree.test.ts`) |
-| `http/` | Server handler (`handler.go`), request lifecycle: per-request deadlines, request IDs, access log, panic recovery (`lifecycle.go`), evaluation endpoint and CORS (`evaluate.go`), subtree reads and watches with the per-change shared view cache (`subtree.go`) and their gzip (`compress.go`: `Accept-Encoding` parsing, a pooled per-batch deflate writer with sync flushes), stream broker (`broker.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI serving (`ui.go`; files embedded by `assets.go` behind the `ui` build tag, `assets_stub.go` fallback), `realm-ui/` React app |
+| `sdk/conformance/` | Cases the Go and TypeScript tests both run: `evaluation.json` (evaluation; `pkg/conformance_test.go`), `subtree.json` (path-template resolution; `pkg/template_test.go`, `test/subtree.test.ts`), `constraints.json` (constraint schemas and values; `pkg/schema_test.go`, `http/realm-ui/src/utils/constraints.test.ts`) |
+| `http/` | Server handler (`handler.go`), constraints across chambers (`constraints.go`), request lifecycle: per-request deadlines, request IDs, access log, panic recovery (`lifecycle.go`), evaluation endpoint and CORS (`evaluate.go`), subtree reads and watches with the per-change shared view cache (`subtree.go`) and their gzip (`compress.go`: `Accept-Encoding` parsing, a pooled per-batch deflate writer with sync flushes), stream broker (`broker.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI serving (`ui.go`; files embedded by `assets.go` behind the `ui` build tag, `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |
 | `trace/otel.go` | OpenTelemetry setup |
 | `helper/logging/` | zerolog `TracedLogger` (context-aware, trace-correlated) |
@@ -206,6 +223,13 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   `http/realm-ui/src/utils/describe.ts`. No server change is needed —
   `http/handler.go` persists chambers by unmarshaling into `realm.Chamber` and
   re-marshaling, so tagged fields round-trip automatically.
+- **Add a constraint keyword:** parse and cross-check it in `parseSchema`
+  and check it in `Schema.validate` (`pkg/schema.go`), list it in
+  `schemaKeywords` and `typeKeywords`, port both to
+  `http/realm-ui/src/utils/constraints.ts`, add cases to
+  `sdk/conformance/constraints.json`, add it to `Schema` in
+  `sdk/typescript/src/types.ts` and `http/realm-ui/src/models/response.ts`,
+  and describe it in `docs/design/constraints.md`.
 - **Add a storage backend:** implement `storage.Storage`, register it in
   `StorageOptions` (and `SourcableStorageOptions` if it can be a cache source),
   and add it to `backends` in `pkg/storage/backends_test.go`. A

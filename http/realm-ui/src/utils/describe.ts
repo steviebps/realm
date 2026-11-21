@@ -1,4 +1,5 @@
 import { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
+import { jsonEqual, summarizeConstraints } from './constraints';
 import { rulesOf, targetingPaused } from './flags';
 import { formatTime } from './schedule';
 
@@ -42,8 +43,8 @@ export type FlagChange = {
   lines: { kind: 'add' | 'remove' | 'info'; text: string }[];
 };
 
-/** Whether two JSON values are equal; server JSON has a stable key order. */
-export const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+/** Whether two JSON values are equal, whatever the order of their members. */
+export const same = jsonEqual;
 
 /** How a change describes a flag whose targeting is turned off. */
 const TARGETING_OFF = 'Targeting off: every context gets the default, and the rules are kept';
@@ -74,6 +75,15 @@ export const describeDefinition = (flag: Flag, catalog: Catalog): string[] => {
 /** How a change describes a flag's seal. */
 const SEALED = "Sealed: chambers below this one can't override it";
 
+/** How a change describes each thing a flag says about itself, when it says it. */
+const ABOUT = {
+  description: (f: Flag) => f.description !== undefined && `Description: ${f.description}`,
+  owner: (f: Flag) => f.owner !== undefined && `Owner: ${f.owner}`,
+  lifecycle: (f: Flag) => f.lifecycle !== undefined && `Lifecycle: ${f.lifecycle}`,
+  constraints: (f: Flag) =>
+    f.constraints !== undefined && `Allowed values: ${summarizeConstraints(f.constraints, f.type)}`,
+};
+
 /**
  * Computes a human-readable diff between two chambers, flag by flag, so an
  * editor can confirm exactly what will change before saving.
@@ -93,6 +103,10 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
         kind: 'added',
         lines: [
           { kind: 'info', text: `Type: ${now.type}` },
+          ...Object.values(ABOUT).flatMap((line) => {
+            const text = line(now);
+            return text ? [{ kind: 'info' as const, text }] : [];
+          }),
           ...(now.sealed ? [{ kind: 'info' as const, text: SEALED }] : []),
           ...describeFlag(now, catalog).map((text) => ({ kind: 'add' as const, text })),
         ],
@@ -112,6 +126,18 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
     }
 
     const lines: FlagChange['lines'] = [];
+    for (const [k, line] of Object.entries(ABOUT) as [keyof typeof ABOUT, (f: Flag) => string | false][]) {
+      if (same(was[k], now[k])) continue;
+      let before = line(was);
+      let after = line(now);
+      // constraints whose summaries read the same differ in what the summary leaves out: show them whole
+      if (before && before === after) {
+        before = `Allowed values: ${JSON.stringify(was[k])}`;
+        after = `Allowed values: ${JSON.stringify(now[k])}`;
+      }
+      if (before) lines.push({ kind: 'remove', text: before });
+      if (after) lines.push({ kind: 'add', text: after });
+    }
     if (Boolean(was.sealed) !== Boolean(now.sealed)) {
       lines.push({ kind: now.sealed ? 'add' : 'remove', text: SEALED });
     }

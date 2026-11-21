@@ -45,10 +45,56 @@ type Layered interface {
 	// Layers returns the lineage of the chamber at logicalPath, or a
 	// NotFoundError when there is no chamber there.
 	Layers(ctx context.Context, logicalPath string) (*Lineage, error)
-	// AncestorSeals maps each flag that an ancestor of logicalPath seals to
-	// the path of the farthest ancestor that seals it: the flags a chamber
-	// at logicalPath cannot define, whether or not one exists there.
-	AncestorSeals(ctx context.Context, logicalPath string) (map[string]string, error)
+	// Ancestry returns what the ancestors of logicalPath say about the flags
+	// a chamber there may define, whether or not one exists there.
+	Ancestry(ctx context.Context, logicalPath string) (*Ancestry, error)
+}
+
+// Ancestry is what the chambers above a path say about the flags a chamber
+// there may define: which flags they seal, and which they constrain.
+// Ancestors that are missing or cannot be parsed say nothing: one that cannot
+// be parsed fails every inherited read below it until it is fixed.
+type Ancestry struct {
+	// Seals maps each flag an ancestor seals to the path of the farthest
+	// ancestor that seals it, as Lineage.Merge resolves seals: a chamber at
+	// the path cannot define those flags.
+	Seals map[string]string
+	// Constraints maps each flag that ancestors define with constraints to
+	// those definitions, farthest first: a definition at the path must have
+	// the type of each, and values each one's constraints allow.
+	Constraints map[string][]Constrained
+}
+
+// Constrained is an ancestor's definition of a flag that has constraints.
+type Constrained struct {
+	// Path is the ancestor's path.
+	Path string
+	// Flag is the ancestor's definition. It may be shared with other reads,
+	// so it must not be modified.
+	Flag *realm.Flag
+}
+
+// ancestryOf returns what layers, the ancestors of a path farthest first,
+// say about the flags a chamber at the path may define.
+func ancestryOf(layers []Layer) *Ancestry {
+	a := &Ancestry{Seals: map[string]string{}, Constraints: map[string][]Constrained{}}
+	for _, l := range layers {
+		if l.Chamber == nil || l.Err != nil {
+			continue
+		}
+		for key, flag := range l.Chamber.Rules {
+			if flag == nil {
+				continue
+			}
+			if _, ok := a.Seals[key]; flag.Sealed && !ok {
+				a.Seals[key] = l.Path
+			}
+			if len(flag.Constraints) > 0 {
+				a.Constraints[key] = append(a.Constraints[key], Constrained{Path: l.Path, Flag: flag})
+			}
+		}
+	}
+	return a
 }
 
 // Merge builds the inherited view: the chamber's flags, plus each flag it
@@ -174,13 +220,13 @@ func sealedIn(c *realm.Chamber) iter.Seq[string] {
 	}
 }
 
-// ReadAncestorSeals returns s.AncestorSeals when s applies inheritance, and
-// nil otherwise: without inheritance, nothing is sealed.
-func ReadAncestorSeals(ctx context.Context, s Storage, logicalPath string) (map[string]string, error) {
+// ReadAncestry returns s.Ancestry when s applies inheritance, and an empty
+// Ancestry otherwise: without inheritance, no chamber is above another.
+func ReadAncestry(ctx context.Context, s Storage, logicalPath string) (*Ancestry, error) {
 	if layered, ok := s.(Layered); ok {
-		return layered.AncestorSeals(ctx, logicalPath)
+		return layered.Ancestry(ctx, logicalPath)
 	}
-	return nil, nil
+	return ancestryOf(nil), nil
 }
 
 // ReadLineage returns the lineage of the chamber at logicalPath: s.Layers

@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { Button, Card, Label, RangeSlider, Select, TextInput, ToggleSwitch } from 'flowbite-react';
 import { HiArrowDown, HiArrowUp, HiPlus, HiTrash } from 'react-icons/hi';
 import { Catalog, Clause, Operator, RuleType, TargetingRule } from '../../models/response';
+import { Bound } from '../../utils/constraints';
 import { OPERATOR_LABELS, describeRule } from '../../utils/describe';
 import { fromLocalInput, nextHour, toLocalInput } from '../../utils/schedule';
 import { ValueInput } from './ValueInput';
@@ -14,6 +15,8 @@ type Props = {
   type: RuleType;
   catalog: Catalog;
   attributes: string[];
+  /** The constraints the rule's value must satisfy. */
+  bounds: Bound[];
   onChange: (rule: TargetingRule) => void;
   onMove: (delta: -1 | 1) => void;
   onRemove: () => void;
@@ -31,6 +34,7 @@ export const RuleEditor = ({
   type,
   catalog,
   attributes,
+  bounds,
   onChange,
   onMove,
   onRemove,
@@ -170,6 +174,7 @@ export const RuleEditor = ({
           value={rule.value}
           onChange={(value) => onChange({ ...rule, value })}
           onValidityChange={onValidityChange}
+          bounds={bounds}
         />
       </div>
 

@@ -604,54 +604,67 @@ func TestMergeSeals(t *testing.T) {
 				}
 			}
 
-			// AncestorSeals agrees with the lineage
-			seals, err := inh.(Layered).AncestorSeals(ctx, tt.path)
+			// Ancestry agrees with the lineage
+			a, err := inh.(Layered).Ancestry(ctx, tt.path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !maps.Equal(seals, tt.wantSealedBy) {
-				t.Errorf("AncestorSeals = %v, want %v", seals, tt.wantSealedBy)
+			if !maps.Equal(a.Seals, tt.wantSealedBy) {
+				t.Errorf("Ancestry seals = %v, want %v", a.Seals, tt.wantSealedBy)
 			}
 		})
 	}
 }
 
-func TestAncestorSeals(t *testing.T) {
+func TestAncestry(t *testing.T) {
 	ctx := context.Background()
 	entries := maps.Clone(sealTree)
 	entries["/broken/"] = `{"rules":{"entitlement":{"type":"boolean","value":"nope"},"x":{"type":"number","value":1,"sealed":true}}}`
+	entries["/c/"] = `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}}}}`
+	entries["/c/d/"] = `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":48}},"plain":{"type":"number","value":1}}}`
 	src := &mapStorage{entries: entries}
 	inh, _ := NewInheritableStorage(src)
 
 	tests := []struct {
-		name string
-		path string
-		want map[string]string
+		name            string
+		path            string
+		wantSeals       map[string]string
+		wantConstrained map[string][]string
 	}{
-		{"no chamber at the path", "/t/a/new/", map[string]string{"entitlement": "/", "limit": "/t/", "own": "/t/"}},
-		{"missing parents", "/nope/deeper/", map[string]string{"entitlement": "/"}},
-		{"a parent that cannot be parsed seals nothing", "/broken/child/", map[string]string{"entitlement": "/"}},
+		{"no chamber at the path", "/t/a/new/", map[string]string{"entitlement": "/", "limit": "/t/", "own": "/t/"}, nil},
+		{"missing parents", "/nope/deeper/", map[string]string{"entitlement": "/"}, nil},
+		{"a parent that cannot be parsed seals nothing", "/broken/child/", map[string]string{"entitlement": "/"}, nil},
+		{"constraints, farthest first", "/c/d/e/", map[string]string{"entitlement": "/"}, map[string][]string{"hold": {"/c/", "/c/d/"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ReadAncestorSeals(ctx, inh, tt.path)
+			got, err := ReadAncestry(ctx, inh, tt.path)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !maps.Equal(got, tt.want) {
-				t.Errorf("seals = %v, want %v", got, tt.want)
+			if !maps.Equal(got.Seals, tt.wantSeals) {
+				t.Errorf("seals = %v, want %v", got.Seals, tt.wantSeals)
+			}
+			constrained := map[string][]string{}
+			for key, defs := range got.Constraints {
+				for _, d := range defs {
+					constrained[key] = append(constrained[key], d.Path)
+				}
+			}
+			if len(constrained) != len(tt.wantConstrained) || !maps.EqualFunc(constrained, tt.wantConstrained, slices.Equal) {
+				t.Errorf("constraints = %v, want %v", constrained, tt.wantConstrained)
 			}
 		})
 	}
 
-	if got, err := ReadAncestorSeals(ctx, src, "/t/a/"); got != nil || err != nil {
-		t.Errorf("without inheritance: %v, %v; want nothing sealed", got, err)
+	if got, err := ReadAncestry(ctx, src, "/t/a/"); err != nil || len(got.Seals) != 0 || len(got.Constraints) != 0 {
+		t.Errorf("without inheritance: %+v, %v; want nothing sealed or constrained", got, err)
 	}
-	if _, err := ReadAncestorSeals(ctx, inh, "/t/../x/"); err == nil {
+	if _, err := ReadAncestry(ctx, inh, "/t/../x/"); err == nil {
 		t.Error("a path with .. was accepted")
 	}
 	src.failing = map[string]error{"/t/": errors.New("boom")}
-	if _, err := ReadAncestorSeals(ctx, inh, "/t/a/"); err == nil {
+	if _, err := ReadAncestry(ctx, inh, "/t/a/"); err == nil {
 		t.Error("a failed read of a parent was ignored")
 	}
 }

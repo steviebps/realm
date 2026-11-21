@@ -3,12 +3,13 @@ import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react
 import { HiClock, HiExclamation, HiPause, HiPencil, HiPlay, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
-import { Chamber, Flag, RuleType } from '../models/response';
+import { Chamber, Flag, Lifecycle, RuleType } from '../models/response';
+import { parentBounds } from '../utils/constraints';
 import { diffChambers } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
 import { defaultValueFor, rulesOf, targetingPaused, withTargetingPaused } from '../utils/flags';
-import { ancestorsOf, get, provenance } from '../utils/provenance';
+import { aboutOf, ancestorsOf, get, provenance } from '../utils/provenance';
 import { messageOf } from '../utils/strings';
 import { HistoryDrawer } from './HistoryDrawer';
 import { FlagRow, FlagTable } from './FlagTable';
@@ -56,6 +57,7 @@ export const ChamberView = ({ path }: { path: string }) => {
   const [restoreError, setRestoreError] = useState<string | undefined>();
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<RuleType>('boolean');
+  const [lifecycleFilter, setLifecycleFilter] = useState<Lifecycle | 'unset' | ''>('');
   // lineage is only set once its shape is checked, so layers[0] exists. Memoized so that typing in the
   // form doesn't hand every flag row new provenance objects.
   const lineage = data?.lineage ?? null;
@@ -73,8 +75,16 @@ export const ChamberView = ({ path }: { path: string }) => {
   }
 
   const own = data.own;
-  const ownNames = Object.keys(own.rules).sort();
+  const allNames = Object.keys(own.rules).sort();
   const here = lineage?.layers[0].path ?? path;
+  // a flag without a lifecycle of its own has that of the definition it overrides, as its row shows
+  const lifecycleOf = (name: string) => aboutOf(own.rules[name], get(prov?.own, name), 'lifecycle')?.value;
+  const hasLifecycles = allNames.some((name) => lifecycleOf(name) !== undefined);
+  const ownNames = allNames.filter((name) => {
+    if (!hasLifecycles || lifecycleFilter === '') return true;
+    const lifecycle = lifecycleOf(name);
+    return lifecycleFilter === 'unset' ? lifecycle === undefined : lifecycle === lifecycleFilter;
+  });
   const inheritedFlags = Object.values(prov?.inherited ?? {}).map((s) => s.flag);
   const attributes = Array.from(
     new Set(
@@ -157,22 +167,42 @@ export const ChamberView = ({ path }: { path: string }) => {
       <section aria-labelledby="flags-heading" className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-3">
           <h2 id="flags-heading" className="text-lg font-semibold">
-            Flags <span className="font-normal text-gray-600 dark:text-gray-400">{ownNames.length}</span>
+            Flags{' '}
+            <span className="font-normal text-gray-600 dark:text-gray-400">
+              {ownNames.length === allNames.length ? allNames.length : `${ownNames.length} of ${allNames.length}`}
+            </span>
           </h2>
-          <Button
-            size="xs"
-            color="light"
-            onClick={() => {
-              setRestoreError(undefined);
-              setHistoryOpen(true);
-            }}
-          >
-            <HiClock className="mr-1" /> History
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {hasLifecycles && (
+              <Select
+                sizing="sm"
+                aria-label="Show flags by lifecycle"
+                value={lifecycleFilter}
+                onChange={(e) => setLifecycleFilter(e.target.value as typeof lifecycleFilter)}
+              >
+                <option value="">All lifecycles</option>
+                <option value="temporary">Temporary</option>
+                <option value="permanent">Permanent</option>
+                <option value="unset">Lifecycle not set</option>
+              </Select>
+            )}
+            <Button
+              size="xs"
+              color="light"
+              onClick={() => {
+                setRestoreError(undefined);
+                setHistoryOpen(true);
+              }}
+            >
+              <HiClock className="mr-1" /> History
+            </Button>
+          </div>
         </div>
 
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-          {ownNames.length > 0 ? (
+          {allNames.length > 0 && ownNames.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-gray-500 dark:text-gray-400">No flags here have that lifecycle.</p>
+          ) : ownNames.length > 0 ? (
             <FlagTable labelledBy="flags-heading">
               {ownNames.map((name) => {
                 const flag = own.rules[name];
@@ -329,6 +359,7 @@ export const ChamberView = ({ path }: { path: string }) => {
           flag={editing.flag}
           catalog={catalog}
           attributes={attributes}
+          parentBounds={parentBounds(lineage, editing.name, editing.flag.type)}
           onCancel={() => setEditing(null)}
           onReview={(flag) => {
             // Keep the draft so cancelling the confirmation returns to it.

@@ -25,20 +25,19 @@ export const targetingPaused = (flag: Flag): boolean => !flag.targeting?.length 
 export const rulesOf = (flag: Flag): TargetingRule[] =>
   (targetingPaused(flag) ? flag.pausedTargeting : flag.targeting) ?? [];
 
+/** Returns flag with the given fields set, or removed entirely when undefined. */
+export const withFields = (flag: Flag, fields: Partial<Flag>): Flag =>
+  Object.fromEntries(Object.entries({ ...flag, ...fields }).filter(([, v]) => v !== undefined)) as Flag;
+
 /**
- * Returns flag with rules as its targeting rules: in `targeting`, or in `pausedTargeting` when paused. They sit where
- * the server writes them (after the default value and the seal), and the other list is removed, so a flag never has
- * rules in both. A flag without rules has neither key.
+ * Returns flag with rules as its targeting rules: in `targeting`, or in `pausedTargeting` when paused. The other list
+ * is removed, so a flag never has rules in both. A flag without rules has neither key.
  */
-export const withRules = (flag: Flag, rules: TargetingRule[], paused: boolean): Flag => {
-  const next: Flag = { type: flag.type, value: flag.value, ...(flag.sealed ? { sealed: true } : {}) };
-  if (rules.length) Object.assign(next, { [paused ? 'pausedTargeting' : 'targeting']: rules });
-  // the other fields, in their order, after the rules
-  for (const [key, v] of Object.entries(flag)) {
-    if (key !== 'targeting' && key !== 'pausedTargeting' && !(key in next)) Object.assign(next, { [key]: v });
-  }
-  return next;
-};
+export const withRules = (flag: Flag, rules: TargetingRule[], paused: boolean): Flag =>
+  withFields(flag, {
+    targeting: rules.length && !paused ? rules : undefined,
+    pausedTargeting: rules.length && paused ? rules : undefined,
+  });
 
 /**
  * Returns flag with its targeting turned off (its rules moved to `pausedTargeting`) or on (moved back to
@@ -65,14 +64,7 @@ export const validateFlag = (flag: Flag): string[] => {
 };
 
 /**
- * Returns flag sealed or not. The seal sits where the server writes it (after the default value), and an unsealed
- * flag has no `sealed` key, so toggling the seal off and on again leaves the flag as it was.
+ * Returns flag sealed or not. An unsealed flag has no `sealed` key, so toggling the seal off and on again leaves the
+ * flag as it was.
  */
-export const withSealed = (flag: Flag, sealed: boolean): Flag => {
-  const next: Flag = { type: flag.type, value: flag.value, ...(sealed ? { sealed: true } : {}) };
-  // the other fields, in their order, after the seal
-  for (const [key, v] of Object.entries(flag)) {
-    if (key !== 'sealed' && !(key in next)) Object.assign(next, { [key]: v });
-  }
-  return next;
-};
+export const withSealed = (flag: Flag, sealed: boolean): Flag => withFields(flag, { sealed: sealed || undefined });

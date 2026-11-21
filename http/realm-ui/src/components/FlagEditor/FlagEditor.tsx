@@ -1,8 +1,22 @@
 import { useState } from 'react';
-import { Alert, Button, Checkbox, Label, Modal, ModalBody, ModalFooter, ModalHeader } from 'flowbite-react';
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Label,
+  Modal,
+  ModalBody,
+  ModalFooter,
+  ModalHeader,
+  Select,
+  Textarea,
+  TextInput,
+} from 'flowbite-react';
 import { HiPause, HiPlus } from 'react-icons/hi';
-import { Catalog, Flag, TargetingRule } from '../../models/response';
-import { rulesOf, targetingPaused, validateFlag, withRules, withSealed } from '../../utils/flags';
+import { Catalog, Flag, Lifecycle, TargetingRule } from '../../models/response';
+import { Bound, constraintProblems, describeConstraints, parseConstraints } from '../../utils/constraints';
+import { rulesOf, targetingPaused, validateFlag, withFields, withRules, withSealed } from '../../utils/flags';
+import { ConstraintsEditor } from './ConstraintsEditor';
 import { RuleEditor } from './RuleEditor';
 import { ValueInput } from './ValueInput';
 
@@ -11,6 +25,8 @@ type Props = {
   flag: Flag;
   catalog: Catalog;
   attributes: string[];
+  /** The constraints of the flag in the chambers above, farthest first: every value must satisfy them too. */
+  parentBounds: Bound[];
   onCancel: () => void;
   /** Called with the edited flag; the caller confirms the diff and saves. */
   onReview: (flag: Flag) => void;
@@ -21,7 +37,10 @@ type Props = {
 let nextRuleKey = 0;
 const newRuleKey = () => `rule-${nextRuleKey++}`;
 
-export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview }: Props) => {
+/** An empty text field removes its field from the flag. */
+const orUndefined = (s: string) => (s.trim() === '' ? undefined : s);
+
+export const FlagEditor = ({ name, flag, catalog, attributes, parentBounds, onCancel, onReview }: Props) => {
   const [draft, setDraft] = useState<Flag>(() => structuredClone(flag));
   // Kept apart from the draft, which can't be paused without rules, so that rules added while targeting is off stay
   // paused.
@@ -30,7 +49,14 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
   const [invalid, setInvalid] = useState<Set<string>>(new Set());
   const [showProblems, setShowProblems] = useState(false);
   const rules = rulesOf(draft);
-  const problems = validateFlag(draft);
+  // the flag's own constraints bind its values only once they parse; until then their error is the problem
+  const own = draft.constraints === undefined ? undefined : parseConstraints(draft.constraints, draft.type);
+  const bounds: Bound[] = [...parentBounds, ...(own?.schema ? [{ schema: own.schema }] : [])];
+  const problems = [
+    ...validateFlag(draft),
+    ...(own?.error !== undefined ? [`Allowed values: ${own.error}.`] : []),
+    ...constraintProblems(draft, bounds),
+  ];
 
   // setRules replaces the rules, and their keys, which must stay in step.
   const setRules = (next: TargetingRule[], keys: string[]) => {
@@ -53,6 +79,46 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
       </ModalHeader>
       <ModalBody>
         <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr_1fr]">
+            <div>
+              <Label htmlFor="flag-description">Description</Label>
+              <Textarea
+                id="flag-description"
+                rows={2}
+                placeholder="What the flag is for"
+                value={draft.description ?? ''}
+                onChange={(e) => setDraft(withFields(draft, { description: orUndefined(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="flag-owner">Owner</Label>
+              <TextInput
+                id="flag-owner"
+                placeholder="A team or a person"
+                value={draft.owner ?? ''}
+                onChange={(e) => setDraft(withFields(draft, { owner: orUndefined(e.target.value) }))}
+              />
+            </div>
+            <div>
+              <Label htmlFor="flag-lifecycle">Lifecycle</Label>
+              <Select
+                id="flag-lifecycle"
+                value={draft.lifecycle ?? ''}
+                onChange={(e) =>
+                  setDraft(withFields(draft, { lifecycle: orUndefined(e.target.value) as Lifecycle | undefined }))
+                }
+              >
+                <option value="">Not set</option>
+                <option value="temporary">Temporary</option>
+                <option value="permanent">Permanent</option>
+                {/* a lifecycle a newer server knows stays as it is */}
+                {draft.lifecycle && draft.lifecycle !== 'temporary' && draft.lifecycle !== 'permanent' && (
+                  <option value={draft.lifecycle}>{draft.lifecycle}</option>
+                )}
+              </Select>
+            </div>
+          </div>
+
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Rules are checked top to bottom; the first rule that applies decides the value. If none applies, the default
             is served.
@@ -76,6 +142,7 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
                 type={draft.type}
                 catalog={catalog}
                 attributes={attributes}
+                bounds={bounds}
                 onChange={(r) =>
                   setRules(
                     rules.map((x, j) => (j === i ? r : x)),
@@ -120,8 +187,34 @@ export const FlagEditor = ({ name, flag, catalog, attributes, onCancel, onReview
               value={draft.value}
               onChange={(value) => setDraft({ ...draft, value })}
               onValidityChange={setValidity('default')}
+              bounds={bounds}
             />
           </div>
+
+          {(draft.type !== 'boolean' || draft.constraints !== undefined || parentBounds.length > 0) && (
+            <fieldset className="flex flex-col gap-2 rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+              <legend className="px-1 text-sm font-medium">Allowed values</legend>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Saving is refused when the default or a rule&rsquo;s value falls outside them, here and in every chamber
+                below that overrides <span className="font-mono">{name}</span>.
+              </p>
+              {parentBounds.length > 0 && (
+                <ul className="text-sm text-gray-700 dark:text-gray-300">
+                  {parentBounds.map(({ path, schema }) => (
+                    <li key={path}>
+                      Set by <span className="font-mono">{path}</span>: {describeConstraints(schema, draft.type)}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <ConstraintsEditor
+                type={draft.type}
+                constraints={draft.constraints}
+                onChange={(constraints) => setDraft(withFields(draft, { constraints }))}
+                onValidityChange={setValidity('constraints')}
+              />
+            </fieldset>
+          )}
 
           <div className="flex items-start gap-2">
             <Checkbox

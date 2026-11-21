@@ -52,6 +52,24 @@ export type Provenance = {
   stack: StackEntry[];
 };
 
+/** What a flag says about itself that its rows show. */
+export type About = 'description' | 'owner' | 'lifecycle';
+
+/**
+ * What a flag says about key: its own, or else that of the nearest definition it overrides that says it, with that
+ * definition's path. An override that doesn't describe itself is still the flag it overrides.
+ */
+export const aboutOf = (
+  flag: Flag,
+  served: Served | undefined,
+  key: About
+): { value: string; from?: string } | undefined => {
+  const value = flag[key];
+  if (value !== undefined) return { value };
+  const def = served?.overrides.find((d) => d.flag[key] !== undefined);
+  return def && { value: def.flag[key] as string, from: def.path };
+};
+
 /** record[key] when record has its own key: a flag named "constructor" must not find Object.prototype's. */
 export const get = <T>(record: Record<string, T> | null | undefined, key: string): T | undefined =>
   record && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;

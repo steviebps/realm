@@ -1,11 +1,12 @@
-import { useId, useState } from 'react';
+import { Fragment, useId, useState } from 'react';
 import { Badge } from 'flowbite-react';
 import { HiChevronRight, HiLockClosed, HiPause } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
 import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
+import { summarizeConstraints } from '../utils/constraints';
 import { describeDefinition, formatValue, same } from '../utils/describe';
 import { rulesOf, targetingPaused } from '../utils/flags';
-import { Served } from '../utils/provenance';
+import { aboutOf, Served } from '../utils/provenance';
 import { scheduleEnded } from '../utils/schedule';
 import { encodePath } from '../utils/path';
 import { plural, trimSuffix } from '../utils/strings';
@@ -197,6 +198,17 @@ const HiddenDefinitions = ({ served, here, catalog }: { served: Served; here: st
   </div>
 );
 
+/** The constraints that bind a flag's definition, in plain language: its own, then each it overrides, nearest first. */
+const boundsOf = (flag: Flag, served: Served | undefined, here: string) =>
+  [{ path: served?.source ?? here, flag }, ...(served?.overrides ?? [])].flatMap(({ path, flag: def }) =>
+    def.constraints ? [{ value: summarizeConstraints(def.constraints, def.type), from: path }] : []
+  );
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  temporary: 'Temporary: meant to be removed once it has served its purpose',
+  permanent: 'Permanent: meant to stay',
+};
+
 /**
  * One flag: its key and type, the value it serves by default, and its
  * targeting at a glance. The key opens the flag's details: its definition in
@@ -240,6 +252,27 @@ export const FlagRow = ({
   const scheduled = rules.filter((r) => r.schedule && !scheduleEnded(r.schedule)).length;
   const overridden = served?.overrides[0]?.path;
   const source = served?.source ?? here;
+  const description = aboutOf(flag, served, 'description');
+  const owner = aboutOf(flag, served, 'owner');
+  const lifecycle = aboutOf(flag, served, 'lifecycle');
+  const bounds = open ? boundsOf(flag, served, here) : [];
+  const details = [
+    { term: 'Description', about: description ? [description] : [] },
+    { term: 'Owner', about: owner ? [owner] : [] },
+    {
+      term: 'Lifecycle',
+      about: lifecycle ? [{ ...lifecycle, value: LIFECYCLE_LABELS[lifecycle.value] ?? lifecycle.value }] : [],
+    },
+    { term: 'Allowed values', about: bounds },
+  ].filter((d) => d.about.length > 0);
+  /** "(from /path/)" after what a flag says about itself when another definition says it. */
+  const from = (path?: string) =>
+    path && (
+      <span className="text-gray-500 dark:text-gray-400">
+        {' '}
+        (from <Mono>{path}</Mono>)
+      </span>
+    );
   return (
     <>
       <div
@@ -311,7 +344,25 @@ export const FlagRow = ({
                 Hidden: sealed by <Mono>{hiddenBy}</Mono>
               </Badge>
             )}
+            {lifecycle && (
+              <Badge
+                color={lifecycle.value === 'temporary' ? 'indigo' : 'gray'}
+                size="xs"
+                className="inline-flex align-middle font-medium capitalize"
+                title={LIFECYCLE_LABELS[lifecycle.value] ?? lifecycle.value}
+              >
+                {lifecycle.value}
+              </Badge>
+            )}
           </div>
+          {description && (
+            <p
+              className="line-clamp-2 pl-5 text-xs text-gray-600 [overflow-wrap:anywhere] dark:text-gray-400"
+              title={description.value}
+            >
+              {description.value}
+            </p>
+          )}
         </div>
         <div role="cell" className="flex min-w-0 flex-col items-start gap-1">
           <FlagValueView type={flag.type} value={flag.value} />
@@ -359,6 +410,23 @@ export const FlagRow = ({
         {open && (
           <div role="cell" aria-colspan={4} className="px-4 pb-4 sm:col-span-4">
             <div className="ml-1.5 flex flex-col gap-3 border-l-2 border-gray-300 pl-4 text-sm text-gray-700 dark:border-gray-600 dark:text-gray-300">
+              {details.length > 0 && (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  {details.map(({ term, about }) => (
+                    <Fragment key={term}>
+                      <dt className="text-gray-500 dark:text-gray-400">{term}</dt>
+                      <dd className="flex flex-col">
+                        {about.map((a) => (
+                          <span key={a.from ?? ''} className="whitespace-pre-line [overflow-wrap:anywhere]">
+                            {a.value}
+                            {a.from !== source && from(a.from)}
+                          </span>
+                        ))}
+                      </dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              )}
               <div className="flex flex-col">
                 {describeDefinition(flag, catalog).map((line) => (
                   <span key={line}>{line}</span>

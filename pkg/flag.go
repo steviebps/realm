@@ -3,6 +3,7 @@ package realm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -24,8 +25,26 @@ import (
 // PausedTargeting, which is never evaluated, so every context gets the
 // default value; turning it on moves them back. (An SDK that predates
 // PausedTargeting ignores the field, and so serves the default too.)
+//
+// Description, Owner, and Lifecycle say what the flag is for; nothing
+// enforces them. Constraints restrict the values the flag may take: a write
+// is refused when its default value or any targeting rule's value, paused or
+// not, falls outside them, or outside the constraints of the flag in any
+// chamber above (see ParseChamber, and the server). Reads never check them.
 type Flag struct {
 	*Rule
+	// Description says what the flag is for.
+	Description string `json:"description,omitempty"`
+	// Owner names who is responsible for the flag: a team or a person.
+	Owner string `json:"owner,omitempty"`
+	// Lifecycle says whether the flag is meant to be removed once it has
+	// served its purpose. Empty when unset.
+	Lifecycle Lifecycle `json:"lifecycle,omitempty"`
+	// Constraints is a schema (see Schema) the flag's default value and each
+	// targeting rule's value must satisfy, kept as it was read so that a
+	// newer realm's keywords survive an older one's rewrite. ParseChamber
+	// checks it; ParseConstraints decodes it.
+	Constraints json.RawMessage `json:"constraints,omitempty"`
 	// Sealed keeps chambers below the one that defines the flag from
 	// overriding it. It has no effect without inheritance.
 	Sealed    bool             `json:"sealed,omitempty"`
@@ -42,6 +61,38 @@ type Flag struct {
 // flagAlias is a Flag without its methods, for marshaling.
 type flagAlias Flag
 
+// Lifecycle says whether a flag is meant to be removed once it has served its
+// purpose.
+type Lifecycle string
+
+const (
+	// LifecycleTemporary marks a flag meant to be removed, such as a release
+	// toggle or an experiment.
+	LifecycleTemporary Lifecycle = "temporary"
+	// LifecyclePermanent marks a flag meant to stay, such as a setting or a
+	// kill switch.
+	LifecyclePermanent Lifecycle = "permanent"
+)
+
+// known reports whether this version of realm knows l. Reads accept any
+// lifecycle; ParseChamber refuses one it does not know.
+func (l Lifecycle) known() bool {
+	return l == "" || l == LifecycleTemporary || l == LifecyclePermanent
+}
+
+// flagFields holds a flag's fields beside its Rule, decoded from any flag,
+// whatever its type, with its targeting rules kept raw so that they can be
+// type-checked against the flag's type.
+type flagFields struct {
+	Description     string          `json:"description"`
+	Owner           string          `json:"owner"`
+	Lifecycle       Lifecycle       `json:"lifecycle"`
+	Constraints     json.RawMessage `json:"constraints"`
+	Sealed          bool            `json:"sealed"`
+	Targeting       json.RawMessage `json:"targeting"`
+	PausedTargeting json.RawMessage `json:"pausedTargeting"`
+}
+
 // removedFlagFields maps fields from earlier releases to migration guidance.
 var removedFlagFields = map[string]string{
 	"overrides": "version overrides were replaced by targeting rules with semverGte/semverLte clauses on the \"version\" attribute",
@@ -49,24 +100,35 @@ var removedFlagFields = map[string]string{
 }
 
 // UnmarshalJSON validates the flag's default value against its type, and each
-// targeting rule's clauses, rollout, and value, paused or not. A flag of an
-// unknown type is kept as it is, unvalidated, though its seal is still read,
-// so that a newer realm's sealed flag still seals.
+// targeting rule's clauses, rollout, and value, paused or not. It does not
+// check the flag's constraints or lifecycle (ParseChamber does), so that a
+// stored value never stops a chamber from being read. A flag of an unknown
+// type is kept as it is, unvalidated, though its seal and description are
+// still read, so that a newer realm's sealed flag still seals.
 func (f *Flag) UnmarshalJSON(b []byte) error {
 	var rule Rule
 	if err := json.Unmarshal(b, &rule); err != nil {
 		return err
 	}
 	// decoded as encoding/json matches fields (case-insensitively), as
-	// ParseChamber's field check does, so no spelling of it is ignored
-	var seal struct {
-		Sealed bool `json:"sealed"`
-	}
-	if err := json.Unmarshal(b, &seal); err != nil {
-		return fmt.Errorf("sealed: %w", err)
+	// ParseChamber's field check does, so no spelling of one is ignored
+	var meta flagFields
+	if err := json.Unmarshal(b, &meta); err != nil {
+		var te *json.UnmarshalTypeError
+		if errors.As(err, &te) && te.Field != "" {
+			return fmt.Errorf("%s: %w", te.Field, err)
+		}
+		return err
 	}
 	f.Rule = &rule
-	f.Sealed = seal.Sealed
+	f.Description = meta.Description
+	f.Owner = meta.Owner
+	f.Lifecycle = meta.Lifecycle
+	f.Constraints = nil
+	if len(meta.Constraints) > 0 && !isNull(meta.Constraints) {
+		f.Constraints = meta.Constraints
+	}
+	f.Sealed = meta.Sealed
 	f.Targeting = nil
 	f.PausedTargeting = nil
 	f.raw = nil
@@ -87,24 +149,15 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 		}
 	}
 
-	// decoded as encoding/json matches fields (case-insensitively), as
-	// ParseChamber's field check does, so no spelling of either is dropped
-	var rules struct {
-		Targeting       json.RawMessage `json:"targeting"`
-		PausedTargeting json.RawMessage `json:"pausedTargeting"`
-	}
-	if err := json.Unmarshal(b, &rules); err != nil {
-		return err
-	}
-	if rules.Targeting != nil {
-		targeting, err := parseTargeting(rules.Targeting, rule.Type)
+	if meta.Targeting != nil {
+		targeting, err := parseTargeting(meta.Targeting, rule.Type)
 		if err != nil {
 			return err
 		}
 		f.Targeting = targeting
 	}
-	if rules.PausedTargeting != nil {
-		paused, err := parseTargeting(rules.PausedTargeting, rule.Type)
+	if meta.PausedTargeting != nil {
+		paused, err := parseTargeting(meta.PausedTargeting, rule.Type)
 		if err != nil {
 			return fmt.Errorf("pausedTargeting: %w", err)
 		}
@@ -112,6 +165,60 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 	}
 
 	return nil
+}
+
+// ParseConstraints decodes the flag's Constraints strictly, as ParseSchema
+// does, for a flag of its type: the schema of a "number", "string", or
+// "boolean" flag must be about values of that type. It returns nil when the
+// flag has no constraints.
+func (f *Flag) ParseConstraints() (*Schema, error) {
+	if len(f.Constraints) == 0 {
+		return nil, nil
+	}
+	if f.Rule == nil {
+		return nil, errors.New("a flag with constraints must have a type")
+	}
+	return parseFlagSchema(f.Constraints, f.Type)
+}
+
+// CheckValues reports the first of the flag's values that s refuses: its
+// default value, then each targeting rule's value, then each paused targeting
+// rule's. A nil s allows every value.
+func (f *Flag) CheckValues(s *Schema) error {
+	if s == nil || f.Rule == nil {
+		return nil
+	}
+	if err := checkValue(s, f.Value); err != nil {
+		return fmt.Errorf("default value: %w", err)
+	}
+	for _, rules := range []struct {
+		name  string
+		rules []*TargetingRule
+	}{{"targeting rule", f.Targeting}, {"paused targeting rule", f.PausedTargeting}} {
+		for i, tr := range rules.rules {
+			if err := checkValue(s, tr.Value); err != nil {
+				return fmt.Errorf("%s %s: %w", rules.name, ruleName(tr.ID, i), err)
+			}
+		}
+	}
+	return nil
+}
+
+// checkValue checks v, a flag or targeting rule value as Flag.UnmarshalJSON
+// holds it, against s.
+func checkValue(s *Schema, v any) error {
+	if raw, ok := v.(*json.RawMessage); ok {
+		// a custom value, kept raw
+		if raw == nil {
+			return s.Validate(nil)
+		}
+		var decoded any
+		if err := json.Unmarshal(*raw, &decoded); err != nil {
+			return err
+		}
+		v = decoded
+	}
+	return s.Validate(v)
 }
 
 // TargetingPaused reports whether the flag's targeting is turned off: it has

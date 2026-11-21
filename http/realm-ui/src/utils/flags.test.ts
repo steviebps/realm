@@ -3,12 +3,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Flag } from '../models/response.ts';
-import { rulesOf, targetingPaused, validateFlag, withRules, withSealed, withTargetingPaused } from './flags.ts';
+import {
+  rulesOf,
+  targetingPaused,
+  validateFlag,
+  withFields,
+  withRules,
+  withSealed,
+  withTargetingPaused,
+} from './flags.ts';
 
-void test('withSealed writes the seal where the server does, and removes it entirely', () => {
+void test('withSealed sets the seal, and removes it entirely', () => {
   const flag: Flag = { type: 'boolean', value: false, targeting: [{ value: true }] };
   const sealed = withSealed(flag, true);
-  assert.equal(JSON.stringify(sealed), '{"type":"boolean","value":false,"sealed":true,"targeting":[{"value":true}]}');
+  assert.deepEqual(sealed, { type: 'boolean', value: false, sealed: true, targeting: [{ value: true }] });
   assert.equal(JSON.stringify(withSealed(sealed, false)), JSON.stringify(flag));
   assert.equal(JSON.stringify(withSealed(sealed, true)), JSON.stringify(sealed));
   assert.equal('sealed' in withSealed({ type: 'number', value: 1 }, false), false);
@@ -58,4 +66,13 @@ void test('rules in targeting win over paused ones, as SDKs serve them', () => {
 void test('validateFlag checks paused rules', () => {
   const flag: Flag = { type: 'boolean', value: false, pausedTargeting: [{ value: true, schedule: {} }] };
   assert.deepEqual(validateFlag(flag), ['Rule 1: set a start or an end for the schedule.']);
+});
+
+void test('withFields sets what a flag says about itself, and removes it entirely', () => {
+  const flag: Flag = { type: 'number', value: 24, sealed: true, targeting: [{ value: 48 }] };
+  const about = { description: 'How long an order is held', owner: 'ordering', lifecycle: 'permanent' as const };
+  const described = withFields(flag, about);
+  assert.deepEqual(described, { ...flag, ...about });
+  const bare = withFields(described, { description: undefined, owner: undefined, lifecycle: undefined });
+  assert.equal(JSON.stringify(bare), JSON.stringify(flag));
 });
