@@ -214,18 +214,25 @@ func TestEtcdWatchUnderWritesSeesNoRewind(t *testing.T) {
 	watcher, writer := newEtcd(t, conf), newEtcd(t, conf)
 	changes := watcher.Watch(ctx)
 	const n = 300
+	wrote := make(chan error, 1)
 	go func() {
 		for i := range n {
 			if err := writer.Put(ctx, StorageEntry{Key: "/k" + strconv.Itoa(i) + "/", Value: []byte(`{}`)}); err != nil {
-				t.Errorf("Put: %v", err)
+				wrote <- err
 				return
 			}
 		}
+		wrote <- nil
 	}()
 	for i, c := range receive(t, changes, n) {
 		if want := "/k" + strconv.Itoa(i) + "/"; c.Key != want {
 			t.Fatalf("change %d = %+v, want %s", i, c, want)
 		}
+	}
+	// The watch can report the last write before its Put returns, and
+	// returning cancels ctx: wait for the writer first.
+	if err := <-wrote; err != nil {
+		t.Fatalf("Put: %v", err)
 	}
 }
 
