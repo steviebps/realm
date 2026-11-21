@@ -3,6 +3,7 @@ import { Badge } from 'flowbite-react';
 import { HiChevronRight, HiLockClosed, HiPause } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
 import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
+import { describeConstraints, parseConstraints } from '../utils/constraints';
 import { describeDefinition, formatValue, same } from '../utils/describe';
 import { rulesOf, targetingPaused } from '../utils/flags';
 import { Served } from '../utils/provenance';
@@ -197,6 +198,35 @@ const HiddenDefinitions = ({ served, here, catalog }: { served: Served; here: st
   </div>
 );
 
+/** What a flag says about itself, shown in its row. */
+type About = 'description' | 'owner' | 'lifecycle';
+
+/**
+ * What a flag says about key: its own, or else that of the nearest definition it overrides that says it, with that
+ * definition's path. An override that doesn't describe itself is still the flag it overrides.
+ */
+const aboutOf = (flag: Flag, served: Served | undefined, key: About): { value: string; from?: string } | undefined => {
+  const value = flag[key];
+  if (value !== undefined) return { value };
+  const def = served?.overrides.find((d) => d.flag[key] !== undefined);
+  return def && { value: def.flag[key] as string, from: def.path };
+};
+
+/** The constraints that bind a flag's definition: its own, then each it overrides, nearest first. */
+const boundsOf = (flag: Flag, served: Served | undefined, here: string) =>
+  [{ path: served?.source ?? here, flag }, ...(served?.overrides ?? [])].flatMap(({ path, flag: def }) => {
+    if (!def.constraints) return [];
+    const parsed = parseConstraints(def.constraints, def.type);
+    return [
+      { path, text: parsed.schema ? describeConstraints(parsed.schema, def.type) : JSON.stringify(def.constraints) },
+    ];
+  });
+
+const LIFECYCLE_LABELS: Record<string, string> = {
+  temporary: 'Temporary: meant to be removed once it has served its purpose',
+  permanent: 'Permanent: meant to stay',
+};
+
 /**
  * One flag: its key and type, the value it serves by default, and its
  * targeting at a glance. The key opens the flag's details: its definition in
@@ -240,6 +270,18 @@ export const FlagRow = ({
   const scheduled = rules.filter((r) => r.schedule && !scheduleEnded(r.schedule)).length;
   const overridden = served?.overrides[0]?.path;
   const source = served?.source ?? here;
+  const description = aboutOf(flag, served, 'description');
+  const owner = aboutOf(flag, served, 'owner');
+  const lifecycle = aboutOf(flag, served, 'lifecycle');
+  const bounds = open ? boundsOf(flag, served, here) : [];
+  /** "(from /path/)" after what a flag says about itself when another definition says it. */
+  const from = (path?: string) =>
+    path && (
+      <span className="text-gray-500 dark:text-gray-400">
+        {' '}
+        (from <Mono>{path}</Mono>)
+      </span>
+    );
   return (
     <>
       <div
@@ -311,7 +353,25 @@ export const FlagRow = ({
                 Hidden: sealed by <Mono>{hiddenBy}</Mono>
               </Badge>
             )}
+            {lifecycle && (
+              <Badge
+                color={lifecycle.value === 'temporary' ? 'indigo' : 'gray'}
+                size="xs"
+                className="inline-flex align-middle font-medium capitalize"
+                title={LIFECYCLE_LABELS[lifecycle.value] ?? lifecycle.value}
+              >
+                {lifecycle.value}
+              </Badge>
+            )}
           </div>
+          {description && (
+            <p
+              className="line-clamp-2 pl-5 text-xs text-gray-600 [overflow-wrap:anywhere] dark:text-gray-400"
+              title={description.value}
+            >
+              {description.value}
+            </p>
+          )}
         </div>
         <div role="cell" className="flex min-w-0 flex-col items-start gap-1">
           <FlagValueView type={flag.type} value={flag.value} />
@@ -359,6 +419,50 @@ export const FlagRow = ({
         {open && (
           <div role="cell" aria-colspan={4} className="px-4 pb-4 sm:col-span-4">
             <div className="ml-1.5 flex flex-col gap-3 border-l-2 border-gray-300 pl-4 text-sm text-gray-700 dark:border-gray-600 dark:text-gray-300">
+              {(description || owner || lifecycle || bounds.length > 0) && (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  {description && (
+                    <>
+                      <dt className="text-gray-500 dark:text-gray-400">Description</dt>
+                      <dd className="whitespace-pre-line [overflow-wrap:anywhere]">
+                        {description.value}
+                        {from(description.from)}
+                      </dd>
+                    </>
+                  )}
+                  {owner && (
+                    <>
+                      <dt className="text-gray-500 dark:text-gray-400">Owner</dt>
+                      <dd className="[overflow-wrap:anywhere]">
+                        {owner.value}
+                        {from(owner.from)}
+                      </dd>
+                    </>
+                  )}
+                  {lifecycle && (
+                    <>
+                      <dt className="text-gray-500 dark:text-gray-400">Lifecycle</dt>
+                      <dd>
+                        {LIFECYCLE_LABELS[lifecycle.value] ?? lifecycle.value}
+                        {from(lifecycle.from)}
+                      </dd>
+                    </>
+                  )}
+                  {bounds.length > 0 && (
+                    <>
+                      <dt className="text-gray-500 dark:text-gray-400">Allowed values</dt>
+                      <dd className="flex flex-col">
+                        {bounds.map(({ path, text }) => (
+                          <span key={path} className="[overflow-wrap:anywhere]">
+                            {text}
+                            {path !== source && from(path)}
+                          </span>
+                        ))}
+                      </dd>
+                    </>
+                  )}
+                </dl>
+              )}
               <div className="flex flex-col">
                 {describeDefinition(flag, catalog).map((line) => (
                   <span key={line}>{line}</span>

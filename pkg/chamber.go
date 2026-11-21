@@ -219,12 +219,15 @@ func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 
 // ParseChamber decodes and validates a chamber strictly, as the server does
 // for writes. It is json.Unmarshal into a Chamber, except that a field,
-// operator, or flag type realm does not know, at any level, is an error
-// instead of being ignored: a misspelled "schedule" would otherwise make its
-// rule apply immediately, a misspelled "rules" would replace the chamber with
-// an empty one, and a misspelled operator would never match. It also refuses
-// a flag with rules in both targeting and pausedTargeting. (Reads decode
-// leniently, so a newer server's additions do not break older SDKs.)
+// operator, flag type, lifecycle, or constraint keyword realm does not know,
+// at any level, is an error instead of being ignored: a misspelled "schedule"
+// would otherwise make its rule apply immediately, a misspelled "rules" would
+// replace the chamber with an empty one, and a misspelled operator would
+// never match. It also refuses a flag with rules in both targeting and
+// pausedTargeting, and a flag whose default value or targeting rule values,
+// paused or not, its constraints refuse. (Reads decode leniently, so a newer
+// server's additions do not break older SDKs, and a stored value outside its
+// constraints does not stop a chamber from being served.)
 func ParseChamber(b []byte) (*Chamber, error) {
 	var c Chamber
 	if err := json.Unmarshal(b, &c); err != nil {
@@ -239,7 +242,36 @@ func ParseChamber(b []byte) (*Chamber, error) {
 	if err := c.checkPaused(); err != nil {
 		return nil, err
 	}
+	if err := c.checkConstraints(); err != nil {
+		return nil, err
+	}
 	return &c, nil
+}
+
+// checkConstraints reports the first flag, in key order, with a lifecycle
+// this version of realm does not know, constraints it cannot parse, or a
+// value its constraints refuse.
+func (c *Chamber) checkConstraints() error {
+	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
+		f := c.Rules[key]
+		if f == nil || f.Rule == nil {
+			continue
+		}
+		if !f.Lifecycle.known() {
+			return fmt.Errorf("flag %q: lifecycle must be %q or %q, not %q", key, LifecycleTemporary, LifecyclePermanent, f.Lifecycle)
+		}
+		if len(f.Constraints) == 0 {
+			continue
+		}
+		s, err := parseFlagSchema(f.Constraints, f.Type, "constraints")
+		if err != nil {
+			return fmt.Errorf("flag %q: %w", key, err)
+		}
+		if err := f.CheckValues(s); err != nil {
+			return fmt.Errorf("flag %q: %w", key, err)
+		}
+	}
+	return nil
 }
 
 // checkSupported reports the first flag, in key order, of a type or with an
@@ -316,7 +348,7 @@ var (
 		nested: map[string]*shape{"clauses": clauseShape, "rollout": rolloutShape, "schedule": scheduleShape},
 	}
 	flagShape = &shape{
-		fields: []string{"type", "value", "sealed", "targeting", "pausedTargeting"},
+		fields: []string{"type", "value", "description", "owner", "lifecycle", "constraints", "sealed", "targeting", "pausedTargeting"},
 		nested: map[string]*shape{"targeting": ruleShape, "pausedTargeting": ruleShape},
 	}
 	chamberShape = &shape{fields: []string{"rules"}, nested: map[string]*shape{"rules": {each: flagShape}}}

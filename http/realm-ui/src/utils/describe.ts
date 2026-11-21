@@ -1,4 +1,5 @@
 import { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
+import { describeConstraints, parseConstraints } from './constraints';
 import { rulesOf, targetingPaused } from './flags';
 import { formatTime } from './schedule';
 
@@ -74,6 +75,23 @@ export const describeDefinition = (flag: Flag, catalog: Catalog): string[] => {
 /** How a change describes a flag's seal. */
 const SEALED = "Sealed: chambers below this one can't override it";
 
+/** What a flag says about itself, one line each, as a change describes it. */
+const aboutLines = (flag: Flag): Partial<Record<'description' | 'owner' | 'lifecycle' | 'constraints', string>> => {
+  let constraints: string | undefined;
+  if (flag.constraints !== undefined) {
+    const parsed = parseConstraints(flag.constraints, flag.type);
+    constraints = `Allowed values: ${parsed.schema ? describeConstraints(parsed.schema, flag.type) : JSON.stringify(flag.constraints)}`;
+  }
+  return {
+    description: flag.description === undefined ? undefined : `Description: ${flag.description}`,
+    owner: flag.owner === undefined ? undefined : `Owner: ${flag.owner}`,
+    lifecycle: flag.lifecycle === undefined ? undefined : `Lifecycle: ${flag.lifecycle}`,
+    constraints,
+  };
+};
+
+const ABOUT_KEYS = ['description', 'owner', 'lifecycle', 'constraints'] as const;
+
 /**
  * Computes a human-readable diff between two chambers, flag by flag, so an
  * editor can confirm exactly what will change before saving.
@@ -93,6 +111,10 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
         kind: 'added',
         lines: [
           { kind: 'info', text: `Type: ${now.type}` },
+          ...ABOUT_KEYS.flatMap((k) => {
+            const text = aboutLines(now)[k];
+            return text === undefined ? [] : [{ kind: 'info' as const, text }];
+          }),
           ...(now.sealed ? [{ kind: 'info' as const, text: SEALED }] : []),
           ...describeFlag(now, catalog).map((text) => ({ kind: 'add' as const, text })),
         ],
@@ -112,6 +134,20 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
     }
 
     const lines: FlagChange['lines'] = [];
+    const wasAbout = aboutLines(was);
+    const nowAbout = aboutLines(now);
+    for (const k of ABOUT_KEYS) {
+      if (same(was[k], now[k])) continue;
+      let before = wasAbout[k];
+      let after = nowAbout[k];
+      // constraints whose summaries read the same differ in what the summary leaves out: show them whole
+      if (before !== undefined && before === after) {
+        before = `Allowed values: ${JSON.stringify(was[k])}`;
+        after = `Allowed values: ${JSON.stringify(now[k])}`;
+      }
+      if (before !== undefined) lines.push({ kind: 'remove', text: before });
+      if (after !== undefined) lines.push({ kind: 'add', text: after });
+    }
     if (Boolean(was.sealed) !== Boolean(now.sealed)) {
       lines.push({ kind: now.sealed ? 'add' : 'remove', text: SEALED });
     }

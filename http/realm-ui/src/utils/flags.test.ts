@@ -3,7 +3,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Flag } from '../models/response.ts';
-import { rulesOf, targetingPaused, validateFlag, withRules, withSealed, withTargetingPaused } from './flags.ts';
+import {
+  rulesOf,
+  targetingPaused,
+  validateFlag,
+  withFields,
+  withRules,
+  withSealed,
+  withTargetingPaused,
+} from './flags.ts';
 
 void test('withSealed writes the seal where the server does, and removes it entirely', () => {
   const flag: Flag = { type: 'boolean', value: false, targeting: [{ value: true }] };
@@ -58,4 +66,30 @@ void test('rules in targeting win over paused ones, as SDKs serve them', () => {
 void test('validateFlag checks paused rules', () => {
   const flag: Flag = { type: 'boolean', value: false, pausedTargeting: [{ value: true, schedule: {} }] };
   assert.deepEqual(validateFlag(flag), ['Rule 1: set a start or an end for the schedule.']);
+});
+
+void test('withFields writes what a flag says about itself where the server does, and removes it entirely', () => {
+  const flag: Flag = { type: 'number', value: 24, sealed: true, targeting: [{ value: 48 }] };
+  const described = withFields(flag, {
+    constraints: { minimum: 1, maximum: 72 },
+    owner: 'ordering',
+    description: 'How long an order is held',
+    lifecycle: 'permanent',
+  });
+  assert.equal(
+    JSON.stringify(described),
+    '{"type":"number","value":24,"description":"How long an order is held","owner":"ordering","lifecycle":"permanent","constraints":{"minimum":1,"maximum":72},"sealed":true,"targeting":[{"value":48}]}'
+  );
+  const bare = withFields(described, {
+    description: undefined,
+    owner: undefined,
+    lifecycle: undefined,
+    constraints: undefined,
+  });
+  assert.equal(JSON.stringify(bare), JSON.stringify(flag));
+  // the other helpers keep the order too
+  assert.equal(
+    JSON.stringify(withSealed(withTargetingPaused(described, true), false)),
+    '{"type":"number","value":24,"description":"How long an order is held","owner":"ordering","lifecycle":"permanent","constraints":{"minimum":1,"maximum":72},"pausedTargeting":[{"value":48}]}'
+  );
 });

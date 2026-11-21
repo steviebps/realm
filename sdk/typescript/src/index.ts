@@ -11,8 +11,10 @@ export type {
   EvaluationContext,
   Flag,
   FlagType,
+  Lifecycle,
   Operator,
   Rollout,
   Schedule,
+  Schema,
   TargetingRule,
 } from './types.js';

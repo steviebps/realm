@@ -44,10 +44,58 @@ export interface TargetingRule {
   schedule?: Schedule;
 }
 
+/**
+ * Whether a flag is meant to be removed once it has served its purpose
+ * (`temporary`: a release toggle or an experiment) or to stay (`permanent`: a
+ * setting or a kill switch). A newer server may send others.
+ */
+export type Lifecycle = 'temporary' | 'permanent';
+
+/**
+ * The subset of JSON Schema a flag's values are checked against when it is
+ * written. The server refuses any other keyword, so none is ignored. Keywords
+ * about one JSON type (`minimum`, `maxLength`, `properties`, …) say nothing
+ * about values of another. A newer server may send keywords this version does
+ * not list.
+ */
+export interface Schema {
+  type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';
+  /** The only values allowed, compared as JSON. */
+  enum?: unknown[];
+  /** Inclusive bounds on numbers. */
+  minimum?: number;
+  maximum?: number;
+  /** Numbers must be multiples of it (1 allows only whole numbers). */
+  multipleOf?: number;
+  /** Inclusive bounds on the length of strings, in Unicode code points. */
+  minLength?: number;
+  maxLength?: number;
+  /** The schemas of an object's members, by name. */
+  properties?: Record<string, Schema>;
+  /** The members every object must have. */
+  required?: string[];
+  /** When false, objects may have no members but those `properties` names. */
+  additionalProperties?: boolean;
+  /** The schema of every element of an array. */
+  items?: Schema;
+}
+
 /** A flag: a typed default value plus ordered targeting rules. */
 export interface Flag {
   type: FlagType;
   value: unknown;
+  /** What the flag is for. */
+  description?: string;
+  /** Who is responsible for the flag: a team or a person. */
+  owner?: string;
+  /** Whether the flag is meant to be removed once it has served its purpose. */
+  lifecycle?: Lifecycle;
+  /**
+   * The values the flag may take: the server refuses a write whose default or
+   * targeting rule values (paused or not) fall outside them, or outside the
+   * constraints of the flag in any chamber above. Reads never check them.
+   */
+  constraints?: Schema;
   /**
    * Whether chambers below the one that defines the flag are kept from
    * overriding it. The server applies seals, so a fetched chamber already

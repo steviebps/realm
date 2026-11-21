@@ -26,19 +26,51 @@ export const rulesOf = (flag: Flag): TargetingRule[] =>
   (targetingPaused(flag) ? flag.pausedTargeting : flag.targeting) ?? [];
 
 /**
- * Returns flag with rules as its targeting rules: in `targeting`, or in `pausedTargeting` when paused. They sit where
- * the server writes them (after the default value and the seal), and the other list is removed, so a flag never has
- * rules in both. A flag without rules has neither key.
+ * The order the server writes a flag's fields in. A flag edited here keeps it, so that it compares equal to the flag
+ * the server serves back (see describe.same).
  */
-export const withRules = (flag: Flag, rules: TargetingRule[], paused: boolean): Flag => {
-  const next: Flag = { type: flag.type, value: flag.value, ...(flag.sealed ? { sealed: true } : {}) };
-  if (rules.length) Object.assign(next, { [paused ? 'pausedTargeting' : 'targeting']: rules });
-  // the other fields, in their order, after the rules
-  for (const [key, v] of Object.entries(flag)) {
-    if (key !== 'targeting' && key !== 'pausedTargeting' && !(key in next)) Object.assign(next, { [key]: v });
-  }
-  return next;
+const FIELD_ORDER = [
+  'type',
+  'value',
+  'description',
+  'owner',
+  'lifecycle',
+  'constraints',
+  'sealed',
+  'targeting',
+  'pausedTargeting',
+];
+
+/**
+ * Returns flag with its fields in the order the server writes them, and fields it does not know after them in their
+ * order. Fields set to undefined are left out.
+ */
+export const canonical = (flag: Flag): Flag => {
+  const entries = Object.entries(flag).filter(([, v]) => v !== undefined);
+  const rank = (key: string) => {
+    const i = FIELD_ORDER.indexOf(key);
+    return i < 0 ? FIELD_ORDER.length : i;
+  };
+  // sort is stable, so unknown fields keep their order
+  return Object.fromEntries(entries.sort(([a], [b]) => rank(a) - rank(b))) as Flag;
 };
+
+/**
+ * Returns flag with the given fields set, or removed when undefined, in the order the server writes them. Use it for
+ * what a flag says about itself: its description, owner, lifecycle, and constraints.
+ */
+export const withFields = (flag: Flag, fields: Partial<Flag>): Flag => canonical({ ...flag, ...fields });
+
+/**
+ * Returns flag with rules as its targeting rules: in `targeting`, or in `pausedTargeting` when paused. They sit where
+ * the server writes them, and the other list is removed, so a flag never has rules in both. A flag without rules has
+ * neither key.
+ */
+export const withRules = (flag: Flag, rules: TargetingRule[], paused: boolean): Flag =>
+  withFields(flag, {
+    targeting: rules.length && !paused ? rules : undefined,
+    pausedTargeting: rules.length && paused ? rules : undefined,
+  });
 
 /**
  * Returns flag with its targeting turned off (its rules moved to `pausedTargeting`) or on (moved back to
@@ -65,14 +97,7 @@ export const validateFlag = (flag: Flag): string[] => {
 };
 
 /**
- * Returns flag sealed or not. The seal sits where the server writes it (after the default value), and an unsealed
- * flag has no `sealed` key, so toggling the seal off and on again leaves the flag as it was.
+ * Returns flag sealed or not. The seal sits where the server writes it, and an unsealed flag has no `sealed` key, so
+ * toggling the seal off and on again leaves the flag as it was.
  */
-export const withSealed = (flag: Flag, sealed: boolean): Flag => {
-  const next: Flag = { type: flag.type, value: flag.value, ...(sealed ? { sealed: true } : {}) };
-  // the other fields, in their order, after the seal
-  for (const [key, v] of Object.entries(flag)) {
-    if (key !== 'sealed' && !(key in next)) Object.assign(next, { [key]: v });
-  }
-  return next;
-};
+export const withSealed = (flag: Flag, sealed: boolean): Flag => withFields(flag, { sealed: sealed || undefined });

@@ -100,15 +100,26 @@ func (s *InheritableStorage) Layers(ctx context.Context, logicalPath string) (*L
 // that cannot be parsed fails every inherited read below it until it is fixed,
 // and Merge applies its seals then. A failed read is returned.
 func (s *InheritableStorage) AncestorSeals(ctx context.Context, logicalPath string) (map[string]string, error) {
-	ctx, span := s.tracer.Start(ctx, "InheritableStorage AncestorSeals", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
+	a, err := s.Ancestry(ctx, logicalPath)
+	if err != nil {
+		return nil, err
+	}
+	return a.Seals, nil
+}
+
+// Ancestry returns what the ancestors of logicalPath say about the flags a
+// chamber there may define: which they seal and which they constrain (see
+// Ancestry). A failed read is returned.
+func (s *InheritableStorage) Ancestry(ctx context.Context, logicalPath string) (*Ancestry, error) {
+	ctx, span := s.tracer.Start(ctx, "InheritableStorage Ancestry", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
 	defer span.End()
 
 	if err := ValidatePath(logicalPath); err != nil {
 		recordError(span, err)
 		return nil, err
 	}
-	seals := map[string]string{}
 	// farthest first, so the first ancestor to seal a flag is the farthest
+	var layers []Layer
 	for _, p := range consultedAncestors(logicalPath) {
 		entry, err := s.source.Get(ctx, p)
 		if err != nil {
@@ -119,13 +130,9 @@ func (s *InheritableStorage) AncestorSeals(ctx context.Context, logicalPath stri
 			recordError(span, err)
 			return nil, err
 		}
-		for key := range sealedIn(s.cache.parseLayer(p, entry).Chamber) {
-			if _, ok := seals[key]; !ok {
-				seals[key] = p
-			}
-		}
+		layers = append(layers, s.cache.parseLayer(p, entry))
 	}
-	return seals, nil
+	return ancestryOf(layers), nil
 }
 
 // consultedAncestors returns the ancestors of logicalPath whose flags its

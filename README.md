@@ -165,6 +165,32 @@ In this example:
 larger attribute, for example `locationId`. Refer to
 [docs/design/targeting.md](docs/design/targeting.md) for the full model.
 
+### Descriptions and allowed values
+
+A flag can say what it is for, who owns it, and whether it is `temporary` or
+`permanent`, and can restrict the values it takes with `constraints`, a subset
+of JSON Schema:
+
+```json
+"orders.holdHours": {
+  "type": "number",
+  "value": 24,
+  "description": "How long an online order is held before its stock is released",
+  "owner": "ordering",
+  "lifecycle": "permanent",
+  "constraints": { "minimum": 1, "maximum": 72, "multipleOf": 1 }
+}
+```
+
+The server refuses a write whose default or targeting rule values (paused
+too) fall outside a flag's constraints, or outside the constraints of the
+flag in any chamber above: a child chamber can tighten them but not loosen
+them. Changing a flag's constraints is refused while a chamber below holds a
+value they would refuse. The supported keywords are `type`, `enum`,
+`minimum`, `maximum`, `multipleOf`, `minLength`, `maxLength`, `properties`,
+`required`, `additionalProperties`, and `items`; refer to
+[docs/design/constraints.md](docs/design/constraints.md).
+
 ## Run the server
 
 ### Dev mode
@@ -976,6 +1002,7 @@ realm client get /prod/checkout/
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the data model, request flow, storage, and roadmap.
 - [docs/design/targeting.md](docs/design/targeting.md): the targeting and rollout design.
+- [docs/design/constraints.md](docs/design/constraints.md): flag descriptions and value constraints.
 - [docs/design/auth.md](docs/design/auth.md): the authentication design and the `auth` config.
 - [docs/design/evaluation.md](docs/design/evaluation.md): server-side evaluation and the TypeScript SDK.
 - [docs/design/subtree.md](docs/design/subtree.md): subtree reads and watches, and path templates.

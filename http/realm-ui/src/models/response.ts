@@ -47,9 +47,40 @@ export type TargetingRule = {
   schedule?: Schedule;
 };
 
+/** Whether a flag is meant to be removed once it has served its purpose, or to stay. */
+export type Lifecycle = 'temporary' | 'permanent';
+
+/**
+ * The subset of JSON Schema a flag's values are checked against on write (see utils/constraints). The server refuses
+ * any other keyword.
+ */
+export type Schema = {
+  type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';
+  enum?: unknown[];
+  minimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+  minLength?: number;
+  maxLength?: number;
+  properties?: Record<string, Schema>;
+  required?: string[];
+  additionalProperties?: boolean;
+  items?: Schema;
+};
+
 export type Flag = {
   type: RuleType;
   value: FlagValue;
+  /** What the flag is for. */
+  description?: string;
+  /** Who is responsible for it: a team or a person. */
+  owner?: string;
+  lifecycle?: Lifecycle;
+  /**
+   * The values the flag may take, here and in every chamber below: the server refuses a write whose default or rule
+   * values (paused too) fall outside them.
+   */
+  constraints?: Schema;
   /** Chambers below the one that defines the flag cannot override it. */
   sealed?: boolean;
   targeting?: TargetingRule[];
