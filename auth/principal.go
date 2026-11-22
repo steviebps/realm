@@ -86,6 +86,13 @@ const (
 	KindAnonymous Kind = "anonymous"
 )
 
+// PathRole is a role a signed-in user holds on the chambers at and beneath
+// Path.
+type PathRole struct {
+	Path string `json:"path"`
+	Role Role   `json:"role"`
+}
+
 // Principal is the authenticated caller of a request.
 type Principal struct {
 	Kind Kind `json:"kind"`
@@ -95,9 +102,15 @@ type Principal struct {
 	Name string `json:"name,omitempty"`
 	// Provider is the sign-in provider of a user.
 	Provider string `json:"provider,omitempty"`
-	// Role applies to users (and is RoleAdmin for the admin key and for
-	// anonymous callers).
+	// Role applies to users, on every chamber (and is RoleAdmin for the
+	// admin key and for anonymous callers).
 	Role Role `json:"role"`
+	// Paths applies to users: the roles that grants with paths give them on
+	// the chambers at and beneath those paths. Each entry's role is higher
+	// than Role and than the roles of the entries for paths above its own;
+	// entries are sorted by path, which is in the form NormalizePath returns.
+	// See RoleAt.
+	Paths []PathRole `json:"paths,omitempty"`
 	// Access and Path apply to API keys: the key may act only on chambers
 	// at or beneath Path.
 	Access Access `json:"access,omitempty"`
@@ -128,15 +141,16 @@ func (p *Principal) CanWrite(path string) bool {
 
 // CanReadCatalog reports whether p may read the attribute catalog, which maps
 // attribute values to labels. The catalog belongs to the whole realm rather
-// than to a chamber, and its labels can name every tenant or location, so a
-// key needs read access to the root path: keys scoped beneath it, and
-// evaluate keys (which are public), may not read it.
+// than to a chamber, and its labels can name every tenant or location, so p
+// needs read access to the root path: keys scoped beneath it, evaluate keys
+// (which are public), and users who may read only the chambers beneath some
+// paths may not read it.
 func (p *Principal) CanReadCatalog() bool {
 	return p.allows(AccessRead, RoleViewer, "/")
 }
 
-// allows reports whether p has at least access (for keys, at path) or role
-// (for users).
+// allows reports whether p has at least access (for keys) or role (for
+// users) on the chamber at path.
 func (p *Principal) allows(access Access, role Role, path string) bool {
 	if p == nil {
 		return false
@@ -144,11 +158,32 @@ func (p *Principal) allows(access Access, role Role, path string) bool {
 	if p.Kind == KindKey {
 		return p.Access.atLeast(access) && covers(p.Path, path)
 	}
-	return p.Role >= role
+	return p.RoleAt(path) >= role
+}
+
+// RoleAt returns p's role on the chamber at path: the highest of Role and
+// the roles of the Paths entries that cover path. A path's role is never
+// lower than its parent's, so a user who may read or change a chamber may
+// read or change every chamber beneath it. API keys have no role; their
+// access depends on Access and Path.
+func (p *Principal) RoleAt(path string) Role {
+	if p == nil {
+		return RoleNone
+	}
+	role := p.Role
+	for _, e := range p.Paths {
+		if e.Role > role && covers(e.Path, path) {
+			role = e.Role
+		}
+	}
+	return role
 }
 
 // IsAdmin reports whether p may manage API keys and the catalog. Stored API
-// keys are never administrators; the admin key declared in the config is.
+// keys are never administrators; the admin key declared in the config is. A
+// user is one only with the admin role on every chamber: keys and the
+// catalog belong to the whole realm, so a role on some paths never makes a
+// user an administrator.
 func (p *Principal) IsAdmin() bool {
 	return p != nil && p.Kind != KindKey && p.Role >= RoleAdmin
 }

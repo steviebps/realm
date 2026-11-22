@@ -145,12 +145,25 @@ export type Catalog = Record<string, Record<string, string>>;
 
 export type Role = 'none' | 'viewer' | 'editor' | 'admin';
 
+/** A role a signed-in user holds on the chambers at and beneath a path. */
+export type PathRole = {
+  /** A chamber path, with a trailing slash. */
+  path: string;
+  role: Role;
+};
+
 export type Principal = {
   kind: 'user' | 'key' | 'anonymous';
   id: string;
   name?: string;
   provider?: string;
+  /** A signed-in user's role on every chamber. */
   role: Role;
+  /**
+   * The higher roles a signed-in user holds on the chambers at and beneath some paths, sorted by path. Each is higher
+   * than `role` and than the roles of the paths above its own. Omitted when there are none.
+   */
+  paths?: PathRole[];
 };
 
 export type Provider = {
@@ -163,7 +176,10 @@ export type Provider = {
 export type Me = {
   authEnabled: boolean;
   user: Principal | null;
-  /** Whether the caller may change chambers. */
+  /**
+   * Whether the caller may change every chamber. A signed-in user may also change the chambers beneath their paths
+   * with an editor role: use canEditAt (utils/access) for a chamber.
+   */
   canEdit: boolean;
   /** Whether the caller may manage API keys and the catalog. */
   isAdmin: boolean;

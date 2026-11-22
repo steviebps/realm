@@ -38,7 +38,8 @@ LISTEN/NOTIFY or an etcd watch). Optional
 auth: path-scoped read/write **API keys** for SDKs and automation, an
 optional **admin key** declared in the config (for headless installs; it
 manages keys over `/v1/keys`), and optional OIDC / GitHub **sign-in** with
-viewer / editor / admin roles for the UI.
+viewer / editor / admin roles for the UI, each granted on every chamber or
+only beneath a grant's `paths` (per-path roles; admins are realm-wide).
 Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
 public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
 which also evaluates locally for Node services. Reads, evaluations, and
@@ -134,11 +135,15 @@ model.
   `inheritable` wrapper.
 - **Principal** (`auth/`) — the caller of a request: an API key (`Access`
   evaluate/read/write, `Path` scope), the config's admin key (`KindAdminKey`,
-  `RoleAdmin`), a signed-in user (`Role`), or `auth.Anonymous`
+  `RoleAdmin`), a signed-in user (`Role` on every chamber, plus the higher
+  roles of `Paths`; `RoleAt(path)` combines them), or `auth.Anonymous`
   when the server has no `auth` config. Handlers read it with
   `auth.FromContext(ctx)` and check `CanEvaluate(path)` / `CanRead(path)` /
   `CanWrite(path)` / `CanReadCatalog()` / `IsAdmin()`. Keys are hashed under `/_realm/keys/`; sessions are encrypted
-  cookies; roles are recomputed from config on every request.
+  cookies; roles are recomputed from config on every request
+  (`Config.RolesFor`: each role in `AccessConfig` takes one `Grant` or a
+  list, and a grant's `Paths` limit it). The UI works out each chamber's
+  controls from `/v1/auth/me` in `http/realm-ui/src/utils/access.ts`.
 
 ## Architecture map
 

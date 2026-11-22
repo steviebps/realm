@@ -7,6 +7,7 @@ import (
 	"html"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -83,8 +84,8 @@ func (a *Authenticator) Providers() []ProviderInfo {
 	return list
 }
 
-// session is the content of the session cookie. The role is not stored; it
-// is recomputed from the access configuration on every request, so changes
+// session is the content of the session cookie. Roles are not stored; they
+// are recomputed from the access configuration on every request, so changes
 // to grants apply immediately.
 type session struct {
 	Email    string `json:"email"`
@@ -155,18 +156,22 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	if !safeMethod(r.Method) && !a.sameOrigin(r) {
 		return nil, ErrCrossOrigin
 	}
-	role := a.cfg.RoleFor(s.Provider, s.Email, s.GitHubOrgs)
+	role, paths := a.cfg.RolesFor(s.Provider, s.Email, s.GitHubOrgs)
 	// Memberships are a snapshot from sign-in. Once they are older than
-	// githubOrgsTTL, a user who owes their role to one must sign in again,
-	// so someone removed from an organization loses access promptly.
-	if len(s.GitHubOrgs) > 0 && time.Since(time.Unix(s.OrgsAt, 0)) > a.cfg.githubOrgsTTL &&
-		a.cfg.RoleFor(s.Provider, s.Email, nil) < role {
+	// githubOrgsTTL, a user who owes any of their roles to one must sign in
+	// again, so someone removed from an organization loses access promptly.
+	// Organizations only add grants, and RolesFor returns equal results for
+	// equal roles, so the user owes a role to one exactly when the results
+	// without organizations differ.
+	if len(s.GitHubOrgs) > 0 && time.Since(time.Unix(s.OrgsAt, 0)) > a.cfg.githubOrgsTTL {
+		if r, p := a.cfg.RolesFor(s.Provider, s.Email, nil); r != role || !slices.Equal(p, paths) {
+			return nil, nil
+		}
+	}
+	if role == RoleNone && len(paths) == 0 {
 		return nil, nil
 	}
-	if role == RoleNone {
-		return nil, nil
-	}
-	return &Principal{Kind: KindUser, ID: s.Email, Name: s.Name, Provider: s.Provider, Role: role}, nil
+	return &Principal{Kind: KindUser, ID: s.Email, Name: s.Name, Provider: s.Provider, Role: role, Paths: paths}, nil
 }
 
 // isAdminKey reports whether token is the admin key declared in the config.
@@ -311,7 +316,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		a.signInFailed(w, http.StatusUnauthorized, "Sign-in failed: "+err.Error())
 		return
 	}
-	if a.cfg.RoleFor(name, id.Email, id.GitHubOrgs) == RoleNone {
+	if role, paths := a.cfg.RolesFor(name, id.Email, id.GitHubOrgs); role == RoleNone && len(paths) == 0 {
 		logger.InfoCtx(ctx).Str("provider", name).Str("email", id.Email).Msg("sign-in refused: no role granted")
 		a.signInFailed(w, http.StatusForbidden, fmt.Sprintf("%s has not been given access to this realm. Ask an administrator to grant you a role.", id.Email))
 		return

@@ -6,7 +6,7 @@ realm has two kinds of callers, and each authenticates differently:
 |---|---|---|
 | Applications (SDKs, browsers), automation, the CLI | **API key**, sent as `Authorization: Bearer realm_…` | `evaluate`, `read`, or `write` chambers at or beneath the key's **path** |
 | Headless installs and provisioning | the **admin key** declared in the config, sent the same way | everything an admin may do, including managing API keys |
-| People using the UI | **Sign-in** with an OIDC provider or GitHub, kept in a session cookie | depends on their **role**: viewer, editor, or admin |
+| People using the UI | **Sign-in** with an OIDC provider or GitHub, kept in a session cookie | depends on their **role**: viewer, editor, or admin, on every chamber or on the chambers beneath some **paths** |
 
 Authentication is **off unless the server config has an `auth` block**. Without
 it the server is open to anyone who can reach it (it logs a warning at
@@ -30,8 +30,11 @@ The code lives in `auth/` (keys, sessions, providers, roles) and
       "githubOrgsTTL": "1h",
       "access": {
         "admins":  { "emails": ["owner@example.com"] },
-        "editors": { "domains": ["example.com"] },
-        "viewers": { "githubOrgs": ["example-org"] }
+        "editors": [
+          { "githubOrgs": ["example-org"] },
+          { "domains": ["example.com"], "paths": ["/prod/tenants/"] }
+        ],
+        "viewers": { "domains": ["example.com"] }
       },
       "providers": [
         {
@@ -109,13 +112,65 @@ short-lived encrypted cookie, and (for OIDC) a nonce.
 
 | Role | May |
 |---|---|
-| `viewer` | read chambers, history, and the catalog |
+| `viewer` | read chambers and their history, and (as a viewer of every chamber) the catalog |
 | `editor` | also create, change, delete, and restore chambers |
-| `admin` | also manage API keys and the attribute catalog |
+| `admin` | also manage API keys and the attribute catalog (only on every chamber) |
 
 A grant matches a user by verified **email**, email **domain**, or **GitHub
-organization** (GitHub sign-ins only). A user gets the highest role any grant
-matches. A user matching no grant is refused at sign-in.
+organization** (GitHub sign-ins only). Each role takes one grant or a list of
+them. A user's role on a chamber is the highest role among the grants that
+match them and cover the chamber. A user matching no grant is refused at
+sign-in.
+
+**Roles on paths.** A grant covers every chamber unless it has `paths`, which
+limit it to the chambers at and beneath them, as a key's path limits a key:
+`/prod/tenants/` covers `/prod/tenants/` and `/prod/tenants/acme/`, but not
+`/prod/tenants-old/`. A role never drops from a chamber to the chambers
+beneath it. For example, one install's engineers own the release flags,
+support edits only the tenant chambers, and a compliance owner edits only the
+regulated values:
+
+```json
+"access": {
+  "admins":  { "emails": ["owner@example.com"] },
+  "editors": [
+    { "githubOrgs": ["example-org"] },
+    { "domains": ["example.com"], "paths": ["/prod/tenants/"] },
+    { "emails": ["compliance@example.com"], "paths": ["/prod/regions/"] }
+  ],
+  "viewers": { "domains": ["example.com"] }
+}
+```
+
+Everyone at `example.com` reads every chamber and changes the chambers
+beneath `/prod/tenants/`. The engineers in `example-org` change every
+chamber, and the compliance owner also changes the chambers beneath
+`/prod/regions/`.
+
+- **Admin grants cannot have `paths`.** Administrators manage API keys and
+  the attribute catalog, which belong to the whole realm. The server refuses
+  to start with such a grant; give the editor role on the paths instead.
+- **Paths are checked when the server starts.** realm adds missing slashes
+  and drops empty and `.` segments (`prod//tenants` is `/prod/tenants/`). It
+  refuses `..`, the reserved `/_realm/` prefix, an empty path, and an empty
+  list, which might mean every chamber or none: leave `paths` out to cover
+  every chamber, or write `"/"`. As everywhere in the config, it refuses
+  unknown fields, so a misspelled `"path"` cannot quietly grant a role on
+  every chamber.
+- **Users with roles only on paths** (no grant without paths) may sign in,
+  and may read only the chambers beneath their paths, like a key scoped
+  beneath the root. They cannot list or read the chambers above, nor read
+  the attribute catalog, whose labels can name every tenant.
+  `GET /v1/chambers/<path>?inherit=layers` lists each parent's own flags, so
+  it needs read access to every parent and refuses them with `403`, as it
+  refuses a scoped key; the inherited view (`GET /v1/chambers/<path>`) still
+  serves the parents' flags. A `viewers` grant without paths lets them read
+  everything.
+- **The UI follows the role on each chamber.** `/v1/auth/me` reports the
+  user's role on every chamber (`user.role`) and their higher roles beneath
+  paths (`user.paths`), from which the UI works out which edit controls to
+  offer on each chamber. A chamber a user may not read links to the paths
+  they may.
 
 **Which provider may vouch for an email.** By default every provider may
 vouch for every address, so with both a company IdP and GitHub configured,
@@ -127,19 +182,19 @@ only users who signed in through a provider that claims it. Addresses in
 unclaimed domains still match through any provider, so existing configs keep
 working. Organization grants are unaffected.
 
-The session stores who signed in and through which provider, not their role.
-The role is recomputed from the config on every request, so removing
-someone's grant and restarting the server takes effect immediately. So does
-removing a provider (its sessions end) or adding `hostedDomains` to one (its
-sessions from other domains end).
+The session stores who signed in and through which provider, not their
+roles. Roles are recomputed from the config on every request, so removing
+someone's grant, or changing its paths, and restarting the server takes
+effect immediately. So does removing a provider (its sessions end) or adding
+`hostedDomains` to one (its sessions from other domains end).
 
 **GitHub organization memberships** are read once, at sign-in, and stored in
 the session. They are trusted for `githubOrgsTTL` (default `1h`). After that,
-a user whose role depends on an organization grant must sign in again, which
-reads their memberships afresh, so someone removed from an organization loses
-access within that time. A user with an email or domain grant at least as high
-keeps their session. After upgrading, sessions issued before this check
-existed count as stale.
+a user who owes any of their roles, on any path, to an organization grant
+must sign in again, which reads their memberships afresh, so someone removed
+from an organization loses access within that time. A user whose email and
+domain grants give them the same roles keeps their session. After upgrading,
+sessions issued before this check existed count as stale.
 
 The first administrator is whoever you list under `access.admins`. Installs
 without sign-in start from the admin key instead.
@@ -169,9 +224,10 @@ keys or change the catalog.
 `GET /v1/chambers/<path>?inherit=layers` lists parent chambers' own flags, so
 it also needs read access to every parent chamber it lists. Every chamber
 below the root lists the root chamber `/`, so a key scoped beneath `/` gets
-`403` there; keys scoped to `/`, the admin key, and signed-in users who can
-read chambers are unaffected. The inherited view (`GET /v1/chambers/<path>`)
-is unchanged: it serves the root's flags like any parent's.
+`403` there, as does a signed-in user who may read only beneath some paths;
+keys scoped to `/`, the admin key, and signed-in users who may read every
+chamber are unaffected. The inherited view (`GET /v1/chambers/<path>`) is
+unchanged: it serves the root's flags like any parent's.
 
 A seal binds every writer below the chamber that seals the flag, admins
 included: to change a sealed flag, write the chamber that seals it. A write
@@ -250,13 +306,13 @@ config file.
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `GET /v1/auth/me` | none | `{authEnabled, user, canEdit, isAdmin, providers}`; the UI starts here |
+| `GET /v1/auth/me` | none | `{authEnabled, user, canEdit, isAdmin, providers}`; the UI starts here. `canEdit` says whether the caller may change every chamber; a signed-in user's `user.role` is their role on every chamber, and `user.paths` (`[{path, role}]`, sorted by path) their higher roles beneath paths |
 | `GET /v1/auth/login/<provider>?returnTo=/ui/…` | none | starts sign-in (`returnTo` must be a path under `/ui/`) |
 | `GET /v1/auth/callback/<provider>` | none | finishes sign-in, sets the session cookie |
 | `POST /v1/auth/logout` | none | clears the session cookie |
-| `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)` |
-| `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user; only evaluate keys when the request has an `Origin` header; CORS-enabled for bearer tokens |
-| `/v1/catalog…` | key or session | read: `CanReadCatalog()`, so any signed-in user or a `read`/`write` key scoped to `/`; write: admin |
+| `/v1/chambers/…`, `/v1/history/…` | key or session | read: `CanRead(path)`, write: `CanWrite(path)`; for users, by their role on the path (`RoleAt`) |
+| `POST /v1/evaluate/…` | key or session | `CanEvaluate(path)`: any key covering the path, any signed-in user who may read it; only evaluate keys when the request has an `Origin` header; CORS-enabled for bearer tokens |
+| `/v1/catalog…` | key or session | read: `CanReadCatalog()`, so a signed-in user who may read every chamber, or a `read`/`write` key scoped to `/`; write: admin |
 | `/v1/keys…` | admin session or the admin key | key management |
 | `/ui/` | none | static assets; the app shows the sign-in screen |
 
@@ -293,6 +349,5 @@ identity (an email, `key:<name> (<key id>)`, or `key:admin`) and ignores the sel
 ## Not yet built
 
 - `realm login` for people using the CLI (OIDC device flow); the CLI uses keys.
-- Per-path roles for signed-in users. Roles are global; only keys are
-  path-scoped.
+- Administrators of a path, who would manage the keys scoped beneath it.
 - Key expiry and last-used timestamps.

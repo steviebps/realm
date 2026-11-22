@@ -13,7 +13,9 @@ import { SessionContext, useSession } from './session';
 import { SignIn } from './components/SignIn';
 import { KeysDrawer } from './components/KeysDrawer';
 import { RealmMark } from './components/RealmMark';
+import { PathLink } from './components/FlagTable';
 import { realmTheme } from './theme';
+import { canEditAt, describeRoles, pathsBeneath, roleAt } from './utils/access';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -79,6 +81,8 @@ const UserMenu = ({ path }: { path: string }) => {
   const [keysOpen, setKeysOpen] = useState(false);
   if (!me.user) return null;
   const { isAdmin } = me;
+  // a user's role can differ from chamber to chamber: show the one here
+  const role = roleAt(me, path);
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span
@@ -87,7 +91,12 @@ const UserMenu = ({ path }: { path: string }) => {
       >
         {me.user.name || me.user.id}
       </span>
-      <Badge color={isAdmin ? 'info' : 'gray'}>{me.user.role}</Badge>
+      <Badge
+        color={isAdmin ? 'info' : 'gray'}
+        title={me.user.paths?.length ? `Your role in this chamber. Your roles: ${describeRoles(me.user)}.` : undefined}
+      >
+        {role === 'none' ? 'no access' : role}
+      </Badge>
       {isAdmin && (
         <>
           <Button size="xs" color="light" onClick={() => setKeysOpen(true)}>
@@ -133,7 +142,6 @@ const ActorField = () => {
 
 const Content = () => {
   const me = useSession();
-  const { canEdit } = me;
   const [chamberName, setChamberName] = useState('');
   const location = useLocation();
   const navigate = useNavigate();
@@ -141,11 +149,18 @@ const Content = () => {
   // chamber path itself.
   const pathname = decodePath(location.pathname);
   const path = ensureTrailingSlash(pathname);
+  const childPath = (name: string) => path + ensureTrailingSlash(trimPrefix(name.trim(), '/'));
+
+  // A user who may not change this chamber may still be an editor beneath it,
+  // and create chambers there.
+  const canEdit = canEditAt(me, path);
+  const editableBeneath = canEdit ? [] : pathsBeneath(me, path, 'editor');
+  const cannotCreate = chamberName.trim() !== '' && !canEditAt(me, childPath(chamberName));
 
   const { data: children = [] } = useQuery({ queryKey: ['list', path], queryFn: () => listChambers(path) });
 
   const create = useMutation({
-    mutationFn: (name: string) => createChamber(path + ensureTrailingSlash(trimPrefix(name.trim(), '/'))),
+    mutationFn: (name: string) => createChamber(childPath(name)),
     onSuccess: (_, name) => {
       setChamberName('');
       void queryClient.invalidateQueries({ queryKey: ['list', path] });
@@ -176,11 +191,12 @@ const Content = () => {
         <div className="grid grid-cols-1 gap-8 md:grid-cols-12">
           <aside className="flex flex-col gap-6 md:col-span-3">
             {directories.length > 0 && <SideNav directories={directories} />}
-            {canEdit && (
+            {(canEdit || editableBeneath.length > 0) && (
               <form
                 className="flex flex-col gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
+                  if (cannotCreate) return;
                   create.mutate(chamberName);
                 }}
               >
@@ -193,14 +209,31 @@ const Content = () => {
                     sizing="sm"
                     required
                     className="min-w-0 flex-1 [&_input]:font-mono"
-                    placeholder="prod"
+                    placeholder={canEdit ? 'prod' : editableBeneath[0].path.slice(path.length, -1)}
                     value={chamberName}
+                    color={cannotCreate ? 'failure' : undefined}
+                    aria-describedby={canEdit ? undefined : 'chamber-hint'}
                     onChange={(e) => setChamberName(e.target.value)}
                   />
-                  <Button type="submit" size="sm" color="light" disabled={create.isPending}>
+                  <Button type="submit" size="sm" color="light" disabled={create.isPending || cannotCreate}>
                     Create
                   </Button>
                 </div>
+                {!canEdit && (
+                  <p
+                    id="chamber-hint"
+                    className={`text-xs ${cannotCreate ? 'text-red-700 dark:text-red-400' : 'text-gray-600 dark:text-gray-400'}`}
+                  >
+                    You can create chambers only at or beneath{' '}
+                    {editableBeneath.map((entry, i) => (
+                      <span key={entry.path}>
+                        {i > 0 && (i === editableBeneath.length - 1 ? ' or ' : ', ')}
+                        <PathLink path={entry.path} />
+                      </span>
+                    ))}
+                    .
+                  </p>
+                )}
                 {create.error instanceof Error && <Alert color="failure">{create.error.message}</Alert>}
               </form>
             )}

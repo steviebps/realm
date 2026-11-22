@@ -96,11 +96,18 @@ func forbidden(w http.ResponseWriter, r *http.Request, message string) {
 // meResponse tells the UI whether sign-in is required, who is signed in,
 // what they may do, and how to sign in.
 type meResponse struct {
-	AuthEnabled bool                `json:"authEnabled"`
-	User        *auth.Principal     `json:"user"`
-	CanEdit     bool                `json:"canEdit"`
-	IsAdmin     bool                `json:"isAdmin"`
-	Providers   []auth.ProviderInfo `json:"providers"`
+	AuthEnabled bool `json:"authEnabled"`
+	// User is the caller. A signed-in user's role is their role on every
+	// chamber, and their paths the higher roles they hold on the chambers at
+	// and beneath some paths (see auth.Principal.RoleAt), from which the UI
+	// works out what they may do on each chamber.
+	User *auth.Principal `json:"user"`
+	// CanEdit reports whether the caller may change every chamber. A user
+	// with an editor role on some paths may change the chambers beneath them
+	// too.
+	CanEdit   bool                `json:"canEdit"`
+	IsAdmin   bool                `json:"isAdmin"`
+	Providers []auth.ProviderInfo `json:"providers"`
 }
 
 // handleMe serves GET /v1/auth/me. It never requires credentials.
