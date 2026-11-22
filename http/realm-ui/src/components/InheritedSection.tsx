@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Alert, Badge, Button } from 'flowbite-react';
 import { HiLockClosed } from 'react-icons/hi';
+import { ForbiddenError } from '../api';
 import { Catalog, Flag } from '../models/response';
 import { Provenance, Served, StackEntry } from '../utils/provenance';
 import { plural } from '../utils/strings';
@@ -14,7 +15,7 @@ type Props = {
   /** Null when the lineage could not be loaded. */
   prov: Provenance | null;
   /** Why the lineage could not be loaded. */
-  loadError: string | null;
+  loadError: Error | null;
   onRetry: () => Promise<unknown>;
   catalog: Catalog;
   /** Starts overriding an inherited flag in this chamber; omitted for users who cannot edit. */
@@ -244,13 +245,20 @@ export const InheritedSection = ({ here, prov, loadError, onRetry, catalog, onOv
         )}
       </div>
 
-      {loadError && (
-        <Alert color="warning">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>Couldn&rsquo;t load the parent chambers: {loadError}</span>
-            <RetryButton onRetry={onRetry} />
-          </div>
-        </Alert>
+      {loadError instanceof ForbiddenError ? (
+        // retrying would not help
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          The flags this chamber inherits aren&rsquo;t shown, because you can&rsquo;t read every chamber above it.
+        </p>
+      ) : (
+        loadError && (
+          <Alert color="warning">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>Couldn&rsquo;t load the parent chambers: {loadError.message}</span>
+              <RetryButton onRetry={onRetry} />
+            </div>
+          </Alert>
+        )
       )}
 
       {inheriting && (

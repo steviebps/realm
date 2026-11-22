@@ -111,10 +111,10 @@ it that defines it with constraints, as well as its own:
 - As with seals, only definitions a write **adds or changes** are checked;
   one stored before the constraints may stay as it is.
 
-Path-scoped write keys make this an access control as well as a guardrail:
-the key for `/prod/tenants/acme/` cannot widen `/prod/`'s bounds. (Signed-in
-users' roles are global, so any editor can change any chamber's constraints;
-the review diff shows it.)
+Path-scoped write keys, and editor roles granted on paths, make this an
+access control as well as a guardrail: the key or editor for
+`/prod/tenants/acme/` cannot widen `/prod/`'s bounds. (Whoever may change
+`/prod/` itself can; the review diff shows it.)
 
 The server reads the parents with one pass that also yields their seals
 (`storage.Ancestry`), before the write, as it reads seals.

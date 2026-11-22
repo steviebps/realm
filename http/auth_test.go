@@ -25,6 +25,17 @@ type authTestServer struct {
 
 func newAuthTestServer(t *testing.T) *authTestServer {
 	t.Helper()
+	return newAuthTestServerWith(t, auth.AccessConfig{
+		Admins:  auth.Grants{{Emails: []string{"admin@example.com"}}},
+		Editors: auth.Grants{{Emails: []string{"editor@example.com"}}},
+		Viewers: auth.Grants{{Domains: []string{"example.com"}}},
+	})
+}
+
+// newAuthTestServerWith runs a realm server with authentication whose users
+// get the roles access grants.
+func newAuthTestServerWith(t *testing.T, access auth.AccessConfig) *authTestServer {
+	t.Helper()
 	issuer := authtest.NewIssuer(t, "admin@example.com")
 	var handler http.Handler
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) }))
@@ -41,12 +52,8 @@ func newAuthTestServer(t *testing.T) *authTestServer {
 	handler, err = NewHandler(context.Background(), HandlerConfig{Storage: inh, Auth: &auth.Config{
 		ExternalURL:   srv.URL,
 		SessionSecret: "0123456789abcdef0123456789abcdef",
-		Access: auth.AccessConfig{
-			Admins:  auth.Grant{Emails: []string{"admin@example.com"}},
-			Editors: auth.Grant{Emails: []string{"editor@example.com"}},
-			Viewers: auth.Grant{Domains: []string{"example.com"}},
-		},
-		Providers: []auth.ProviderConfig{{Name: "test", Type: auth.ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}},
+		Access:        access,
+		Providers:     []auth.ProviderConfig{{Name: "test", Type: auth.ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +208,92 @@ func TestRoles(t *testing.T) {
 	}
 	if status, _ := call(t, admin, http.MethodGet, srv.URL+"/v1/keys", "", ""); status != http.StatusOK {
 		t.Errorf("admin key list = %d, want 200", status)
+	}
+}
+
+// TestPathRoles covers grants with paths: a user's role on a chamber is the
+// highest role among the grants that match them and cover its path.
+func TestPathRoles(t *testing.T) {
+	srv := newAuthTestServerWith(t, auth.AccessConfig{
+		Admins: auth.Grants{{Emails: []string{"admin@example.com"}}},
+		Editors: auth.Grants{
+			{Domains: []string{"example.com"}, Paths: []string{"/prod/tenants/"}},
+			{Emails: []string{"compliance@partner.io"}, Paths: []string{"/prod/regions/"}},
+		},
+		Viewers: auth.Grants{{Domains: []string{"example.com"}}},
+	})
+	admin := srv.signIn(t, "admin@example.com")
+	// support reads every chamber and edits the tenants' chambers
+	support := srv.signIn(t, "support@example.com")
+	// compliance may use only the chambers beneath /prod/regions/
+	compliance := srv.signIn(t, "compliance@partner.io")
+	for _, path := range []string{"/prod/", "/prod/tenants/acme/", "/prod/regions/eu/", "/staging/"} {
+		if status, out := call(t, admin, http.MethodPost, srv.URL+"/v1/chambers"+path, chamberBody, ""); status != http.StatusCreated {
+			t.Fatalf("create %s: %d %v", path, status, out.Errors)
+		}
+	}
+
+	for _, tt := range []struct {
+		client *http.Client
+		want   string
+	}{
+		{support, `"role":"viewer","paths":[{"path":"/prod/tenants/","role":"editor"}]},"canEdit":false,"isAdmin":false`},
+		{compliance, `"role":"none","paths":[{"path":"/prod/regions/","role":"editor"}]},"canEdit":false,"isAdmin":false`},
+		{admin, `"role":"admin"},"canEdit":true,"isAdmin":true`},
+	} {
+		if _, out := call(t, tt.client, http.MethodGet, srv.URL+"/v1/auth/me", "", ""); !strings.Contains(string(out.Data), tt.want) {
+			t.Errorf("me = %s, want it to contain %s", out.Data, tt.want)
+		}
+	}
+
+	const evaluation = `{"key":"u1"}`
+	tests := []struct {
+		name               string
+		client             *http.Client
+		method, path, body string
+		want               int
+	}{
+		{"editor path: write beneath it", support, http.MethodPost, "/v1/chambers/prod/tenants/beta/", chamberBody, http.StatusCreated},
+		{"editor path: write at it", support, http.MethodPost, "/v1/chambers/prod/tenants", chamberBody, http.StatusCreated},
+		{"editor path: delete beneath it", support, http.MethodDelete, "/v1/chambers/prod/tenants/beta/", "", http.StatusNoContent},
+		{"editor path: write its parent", support, http.MethodPost, "/v1/chambers/prod/", chamberBody, http.StatusForbidden},
+		{"editor path: prefix lookalike", support, http.MethodPost, "/v1/chambers/prod/tenants-old/", chamberBody, http.StatusForbidden},
+		{"editor path: write elsewhere", support, http.MethodPost, "/v1/chambers/staging/", chamberBody, http.StatusForbidden},
+		{"editor path: recursive delete above it", support, http.MethodDelete, "/v1/chambers/prod/?recursive=true", "", http.StatusForbidden},
+		{"viewer everywhere: list the root", support, http.MethodGet, "/v1/chambers/?list=true", "", http.StatusOK},
+		{"viewer everywhere: layers", support, http.MethodGet, "/v1/chambers/prod/tenants/acme/?inherit=layers", "", http.StatusOK},
+
+		{"path only: read beneath it", compliance, http.MethodGet, "/v1/chambers/prod/regions/eu/", "", http.StatusOK},
+		{"path only: read as stored", compliance, http.MethodGet, "/v1/chambers/prod/regions/eu/?inherit=false", "", http.StatusOK},
+		{"path only: write beneath it", compliance, http.MethodPost, "/v1/chambers/prod/regions/eu/", chamberBody, http.StatusCreated},
+		{"path only: list it", compliance, http.MethodGet, "/v1/chambers/prod/regions/?list=true", "", http.StatusOK},
+		{"path only: history beneath it", compliance, http.MethodGet, "/v1/history/prod/regions/eu/", "", http.StatusOK},
+		{"path only: subtree of it", compliance, http.MethodGet, "/v1/chambers/prod/regions/?subtree=true", "", http.StatusOK},
+		{"path only: evaluate beneath it", compliance, http.MethodPost, "/v1/evaluate/prod/regions/eu/", evaluation, http.StatusOK},
+		{"path only: read a parent", compliance, http.MethodGet, "/v1/chambers/prod/", "", http.StatusForbidden},
+		{"path only: list the root", compliance, http.MethodGet, "/v1/chambers/?list=true", "", http.StatusForbidden},
+		{"path only: history of a parent", compliance, http.MethodGet, "/v1/history/prod/", "", http.StatusForbidden},
+		{"path only: subtree above it", compliance, http.MethodGet, "/v1/chambers/prod/?subtree=true", "", http.StatusForbidden},
+		{"path only: evaluate elsewhere", compliance, http.MethodPost, "/v1/evaluate/staging/", evaluation, http.StatusForbidden},
+		{"path only: write elsewhere", compliance, http.MethodPost, "/v1/chambers/prod/tenants/acme/", chamberBody, http.StatusForbidden},
+		// layers list each parent's own flags, so they need read access to
+		// every parent, as they do for a key scoped beneath the root
+		{"path only: layers", compliance, http.MethodGet, "/v1/chambers/prod/regions/eu/?inherit=layers", "", http.StatusForbidden},
+		// the catalog's labels can name every tenant
+		{"path only: catalog", compliance, http.MethodGet, "/v1/catalog", "", http.StatusForbidden},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if status, out := call(t, tt.client, tt.method, srv.URL+tt.path, tt.body, ""); status != tt.want {
+				t.Errorf("%d %v, want %d", status, out.Errors, tt.want)
+			}
+		})
+	}
+
+	// a recursive delete at the path removes every chamber beneath it
+	status, out := call(t, support, http.MethodDelete, srv.URL+"/v1/chambers/prod/tenants/?recursive=true", "", "")
+	if status != http.StatusOK || string(out.Data) != `{"deleted":["/prod/tenants/","/prod/tenants/acme/"]}` {
+		t.Errorf("recursive delete = %d %s %v", status, out.Data, out.Errors)
 	}
 }
 

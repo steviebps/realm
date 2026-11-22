@@ -140,8 +140,9 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
 - **Auth** (`auth/`, `http/auth.go`) — optional. `withPrincipal` identifies
   each request's caller (an API key bearer token, a UI session cookie, or
   `auth.Anonymous` when auth is off); handlers check `CanRead` / `CanWrite`
-  on the chamber path and `IsAdmin` for keys and the catalog. See
-  `docs/design/auth.md`.
+  on the chamber path and `IsAdmin` for keys and the catalog. A signed-in
+  user's role can differ by path: grants with `paths` raise it on the
+  chambers beneath them (`Principal.RoleAt`). See `docs/design/auth.md`.
 - **Metadata endpoints** (`http/meta_handlers.go`) — `GET /v1/history/<path>`
   (and `?revision=N`) and `/v1/catalog[/<attribute>]`, the application-supplied
   map of attribute values to human-readable labels used by the UI. Metadata is
@@ -494,6 +495,7 @@ log line of their own.
 | Revisions on reads, stream event ids, and in the SDKs | ✅ Done | `Lineage.Revision`, `api.RevisionHeader`, `Realm.Revision`, `revision()` in `sdk/typescript` |
 | Revisioned streams (resume with `Last-Event-ID`, SDKs reject stale data) | ⬜ Next | builds on the event ids above |
 | SDK API keys + OIDC/GitHub sign-in for the UI, roles | ✅ Done | `auth/`, `http/auth.go` |
+| Per-path roles for signed-in users | ✅ Done | `Grant.Paths`, `Config.RolesFor`, `Principal.RoleAt` in `auth/`; `http/realm-ui/src/utils/access.ts` |
 | TypeScript SDK + server-side evaluation endpoint | ✅ Done | `sdk/typescript`, `http/evaluate.go`, shared cases in `sdk/conformance` |
 | Audit log of flag changes | ✅ Done | per-chamber history with the authenticated actor (`http/meta.go`) |
 | Multi-language SDKs | ⬜ Next | new clients against `/v1/chambers` |

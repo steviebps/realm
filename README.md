@@ -27,7 +27,8 @@ services and in browsers, with hooks for React.
 - **Safe editing:** ETag optimistic concurrency and per-chamber change history.
 - **Storage:** file, BoltDB, in-memory, Google Cloud Storage, Amazon S3,
   PostgreSQL, and etcd (the last two support running several replicas).
-- **Optional auth:** OIDC or GitHub sign-in with roles, and path-scoped API keys.
+- **Optional auth:** OIDC or GitHub sign-in with roles on every chamber or
+  beneath chosen paths, and path-scoped API keys.
 - **Browsers and other languages:** the server evaluates flags for a context and
   returns only the values, never the rules.
 
@@ -901,7 +902,9 @@ the default, and the rollout is kept for when you turn targeting back on.
 Authentication has three parts:
 
 - **Sign-in** for the web UI, with any OIDC provider or GitHub. Each user gets
-  the role `viewer`, `editor`, or `admin`.
+  the role `viewer`, `editor`, or `admin`. A grant can give a role only on the
+  chambers beneath some paths, so support can edit the tenant chambers while
+  engineers edit everything.
 - **API keys** for applications and automation. An `evaluate` key is for
   browsers: it can only evaluate flags, so you can put it in front-end code. A
   `read` key is for server SDKs. A `write` key is for automation. Keep `read`

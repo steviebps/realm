@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
 import { HiClock, HiExclamation, HiPause, HiPencil, HiPlay, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
+import { ConflictError, ForbiddenError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
 import { Chamber, Flag, Lifecycle, RuleType } from '../models/response';
 import { parentBounds } from '../utils/constraints';
 import { diffChambers } from '../utils/describe';
@@ -12,9 +12,10 @@ import { defaultValueFor, rulesOf, targetingPaused, withTargetingPaused } from '
 import { aboutOf, ancestorsOf, get, provenance } from '../utils/provenance';
 import { messageOf } from '../utils/strings';
 import { HistoryDrawer } from './HistoryDrawer';
-import { FlagRow, FlagTable } from './FlagTable';
+import { FlagRow, FlagTable, Mono, PathLink } from './FlagTable';
 import { InheritedSection } from './InheritedSection';
 import { useSession } from '../session';
+import { canEditAt } from '../utils/access';
 
 /** Attribute names suggested in the editor, in addition to catalog and in-use names. */
 const CONVENTIONAL_ATTRIBUTES = [
@@ -43,9 +44,34 @@ const attributesIn = (flags: Flag[]) =>
     rulesOf(f).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
   );
 
+/** Says that the user may not read the chamber at path, and links the chambers they may read. */
+const NoAccess = ({ path }: { path: string }) => {
+  const readable = useSession().user?.paths ?? [];
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-dashed border-gray-300 px-4 py-6 text-sm text-gray-600 dark:border-gray-600 dark:text-gray-400">
+      <p>
+        You don&rsquo;t have access to <Mono>{path}</Mono>.
+      </p>
+      {readable.length > 0 && (
+        <>
+          <p>You have access to the chambers at and beneath:</p>
+          <ul className="flex flex-col gap-1">
+            {readable.map((entry) => (
+              <li key={entry.path}>
+                <PathLink path={entry.path} /> ({entry.role})
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+};
+
 export const ChamberView = ({ path }: { path: string }) => {
   const queryClient = useQueryClient();
-  const { canEdit } = useSession();
+  const me = useSession();
+  const canEdit = canEditAt(me, path);
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['chamber', path],
     queryFn: () => getChamber(path),
@@ -65,6 +91,7 @@ export const ChamberView = ({ path }: { path: string }) => {
   const override = useCallback((name: string, flag: Flag) => setEditing({ name, flag, isNew: true }), []);
 
   if (isLoading) return <Spinner aria-label="Loading chamber" size="lg" />;
+  if (error instanceof ForbiddenError) return <NoAccess path={path} />;
   if (error instanceof Error) return <p className="text-red-700 dark:text-red-400">{error.message}</p>;
   if (!data?.own) {
     return (

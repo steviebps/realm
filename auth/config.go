@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"net/url"
@@ -31,8 +33,11 @@ const DefaultGitHubOrgsTTL = time.Hour
 //	  "sessionSecret": "${REALM_SESSION_SECRET}",
 //	  "access": {
 //	    "admins":  {"emails": ["owner@example.com"]},
-//	    "editors": {"domains": ["example.com"]},
-//	    "viewers": {"githubOrgs": ["example-org"]}
+//	    "editors": [
+//	      {"githubOrgs": ["example-org"]},
+//	      {"domains": ["example.com"], "paths": ["/prod/tenants/"]}
+//	    ],
+//	    "viewers": {"domains": ["example.com"]}
 //	  },
 //	  "providers": [
 //	    {"name": "google", "type": "oidc", "issuer": "https://accounts.google.com",
@@ -75,25 +80,73 @@ type Config struct {
 	// domainOwners maps a lowercased email domain to the names of the
 	// providers authoritative for it.
 	domainOwners map[string][]string
+	// grants holds every grant of Access with its role and its paths in
+	// canonical form.
+	grants []roleGrant
 }
 
-// AccessConfig grants roles to signed-in users. A user receives the highest
-// role any grant matches; users matching none are refused.
+// AccessConfig grants roles to signed-in users. Each role takes one grant or
+// a list of them. A user's role on a chamber is the highest role among the
+// grants that match them and cover the chamber's path; users matching no
+// grant are refused.
 type AccessConfig struct {
-	Admins  Grant `json:"admins"`
-	Editors Grant `json:"editors"`
-	Viewers Grant `json:"viewers"`
+	Admins  Grants `json:"admins"`
+	Editors Grants `json:"editors"`
+	Viewers Grants `json:"viewers"`
 }
 
 // Grant matches users by verified email address, email domain, or GitHub
-// organization membership (GitHub sign-ins only). Email and domain entries
-// for a domain that a provider is authoritative for (see
+// organization membership (GitHub sign-ins only), and gives them its role on
+// the chambers at and beneath Paths. Email and domain entries for a domain
+// that a provider is authoritative for (see
 // ProviderConfig.AuthoritativeDomains) match only users who signed in
 // through such a provider.
 type Grant struct {
 	Emails     []string `json:"emails,omitempty"`
 	Domains    []string `json:"domains,omitempty"`
 	GitHubOrgs []string `json:"githubOrgs,omitempty"`
+	// Paths limits the grant to the chambers at and beneath these paths, as
+	// it limits an API key: "/prod/" covers "/prod/" and "/prod/checkout/",
+	// but not "/production/". Without Paths the grant covers every chamber.
+	// Admin grants cannot have paths: administrators manage API keys and
+	// the attribute catalog, which belong to the whole realm.
+	Paths []string `json:"paths,omitempty"`
+}
+
+// Grants are the grants of one role. In JSON a role takes one grant object
+// or an array of them, so configs written before roles took lists, with one
+// object per role, stay valid.
+type Grants []Grant
+
+// UnmarshalJSON accepts a grant object, an array of grant objects, or null
+// (no grants). Like the rest of the server config, it refuses fields a grant
+// does not have: a misspelled "paths" would otherwise give its role on every
+// chamber.
+func (g *Grants) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*g = nil
+		return nil
+	}
+	var list []Grant
+	var err error
+	if bytes.HasPrefix(b, []byte("[")) {
+		err = utils.ReadRequiredInterfaceWith(bytes.NewReader(b), &list)
+	} else {
+		list = make([]Grant, 1)
+		err = utils.ReadRequiredInterfaceWith(bytes.NewReader(b), &list[0])
+	}
+	if err != nil {
+		return fmt.Errorf("invalid grant: %w", err)
+	}
+	*g = list
+	return nil
+}
+
+// roleGrant is a grant with its role. Its paths are canonical, and nil when
+// it covers every chamber.
+type roleGrant struct {
+	role  Role
+	grant Grant
 }
 
 // ProviderConfig is a sign-in provider.
@@ -143,6 +196,11 @@ func (c *Config) validate() error {
 		}
 		c.adminKeyHash = hashSecret(key)
 		c.AdminKey = ""
+	}
+	// Without providers nobody signs in and access is unused, but a broken
+	// grant is still a mistake to report.
+	if err := c.validateAccess(); err != nil {
+		return err
 	}
 	if len(c.Providers) == 0 {
 		if c.adminKeyHash == "" {
@@ -214,6 +272,65 @@ func (c *Config) validate() error {
 	return nil
 }
 
+// validateAccess checks the paths of the grants, and keeps every grant with
+// its role and its paths in canonical form for RolesFor, highest role first.
+func (c *Config) validateAccess() error {
+	c.grants = nil
+	for _, role := range []struct {
+		name   string
+		role   Role
+		grants Grants
+	}{
+		{"admins", RoleAdmin, c.Access.Admins},
+		{"editors", RoleEditor, c.Access.Editors},
+		{"viewers", RoleViewer, c.Access.Viewers},
+	} {
+		for i, g := range role.grants {
+			where := "auth.access." + role.name
+			if len(role.grants) > 1 {
+				where += fmt.Sprintf("[%d]", i)
+			}
+			if role.role == RoleAdmin && g.Paths != nil {
+				return fmt.Errorf("%s cannot have paths: administrators manage API keys and the attribute catalog, which belong to the whole realm; grant the editor role on those paths instead", where)
+			}
+			var err error
+			if g.Paths, err = grantPaths(g.Paths); err != nil {
+				return fmt.Errorf("%s: %w", where, err)
+			}
+			c.grants = append(c.grants, roleGrant{role: role.role, grant: g})
+		}
+	}
+	return nil
+}
+
+// grantPaths returns a grant's paths in canonical form (see scopePath), or
+// nil when the grant covers every chamber: it has no paths, or "/" is one.
+func grantPaths(paths []string) ([]string, error) {
+	if paths == nil {
+		return nil, nil
+	}
+	if len(paths) == 0 {
+		// Covering nothing and covering everything are both plausible
+		// readings of an empty list; neither is assumed.
+		return nil, errors.New(`paths is empty: list the paths the grant covers, or leave "paths" out to cover every chamber`)
+	}
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		if p == "" {
+			// likely a value that was meant to be filled in
+			return nil, errors.New(`paths has an empty path: write "/" to cover every chamber`)
+		}
+		var err error
+		if out[i], err = scopePath(p); err != nil {
+			return nil, fmt.Errorf("paths: %w", err)
+		}
+	}
+	if slices.Contains(out, "/") {
+		return nil, nil
+	}
+	return out, nil
+}
+
 // parseTTL parses the positive duration value of the named setting, or
 // returns def when value is empty.
 func parseTTL(name, value string, def time.Duration) (time.Duration, error) {
@@ -240,19 +357,45 @@ func normalizeDomains(provider, field string, domains []string) ([]string, error
 	return out, nil
 }
 
-// RoleFor returns the highest role granted to a user who signed in through
-// the named provider.
-func (c *Config) RoleFor(provider, email string, githubOrgs []string) Role {
+// RolesFor returns the roles granted to a user who signed in through the
+// named provider: their role on every chamber, from the matching grants
+// without paths, and the higher roles that matching grants with paths give
+// them on the chambers at and beneath those paths, in the form
+// Principal.Paths describes. The user may not sign in when they have neither:
+// RoleNone and no paths.
+//
+// The result depends only on the role each chamber gets, so two sets of
+// grants that give every chamber the same role return equal results.
+func (c *Config) RolesFor(provider, email string, githubOrgs []string) (Role, []PathRole) {
 	vouched := email != "" && c.vouchesFor(provider, email)
-	switch {
-	case c.Access.Admins.matches(email, vouched, githubOrgs):
-		return RoleAdmin
-	case c.Access.Editors.matches(email, vouched, githubOrgs):
-		return RoleEditor
-	case c.Access.Viewers.matches(email, vouched, githubOrgs):
-		return RoleViewer
+	var granted Principal
+	var onPaths []PathRole
+	for _, g := range c.grants {
+		if g.role <= granted.Role {
+			// grants come highest role first: none of the rest adds anything
+			break
+		}
+		if !g.grant.matches(email, vouched, githubOrgs) {
+			continue
+		}
+		if g.grant.Paths == nil {
+			granted.Role = g.role
+		}
+		for _, p := range g.grant.Paths {
+			onPaths = append(onPaths, PathRole{Path: p, Role: g.role})
+		}
 	}
-	return RoleNone
+	// Sorted by path, highest role first, each entry comes after the entries
+	// for the paths above it: keep those that raise the role on their path.
+	slices.SortFunc(onPaths, func(a, b PathRole) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), cmp.Compare(b.Role, a.Role))
+	})
+	for _, e := range onPaths {
+		if e.Role > granted.RoleAt(e.Path) {
+			granted.Paths = append(granted.Paths, e)
+		}
+	}
+	return granted.Role, granted.Paths
 }
 
 // vouchesFor reports whether provider may vouch for email in email and

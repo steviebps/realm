@@ -46,6 +46,9 @@ export class UnauthorizedError extends Error {
   }
 }
 
+/** Thrown when the caller may not do what a request asks, such as read a chamber outside their paths. */
+export class ForbiddenError extends Error {}
+
 /** Dispatched on window whenever a request is refused for lack of a session. */
 export const UNAUTHORIZED_EVENT = 'realm:unauthorized';
 
@@ -54,11 +57,12 @@ const errorFrom = async (res: Response) => {
     window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     return new UnauthorizedError();
   }
+  const Failure = res.status === 403 ? ForbiddenError : Error;
   try {
     const body = (await res.json()) as { errors?: string[] };
-    return new Error(body.errors?.join('; ') || res.statusText);
+    return new Failure(body.errors?.join('; ') || res.statusText);
   } catch {
-    return new Error(res.statusText);
+    return new Failure(res.statusText);
   }
 };
 
@@ -90,26 +94,26 @@ export type LoadedChamber = {
   etag: string | null;
   /** The chamber and the parent chambers it inherits from, or null when they could not be loaded. */
   lineage: Lineage | null;
-  /** Why the lineage could not be loaded. */
-  lineageError: string | null;
+  /** Why the lineage could not be loaded: a ForbiddenError when the caller may not read every parent chamber. */
+  lineageError: Error | null;
 };
 
 const OLDER_SERVER = "This server doesn't report where inherited flags come from. Update it to see parent chambers.";
 
 /**
  * Loads the lineage of the chamber at path. It never throws: a failure is
- * returned as a message, so that the chamber stays editable without it.
+ * returned, so that the chamber stays editable without it.
  */
 const getLineage = async (path: string): Promise<Pick<LoadedChamber, 'lineage' | 'lineageError'>> => {
   try {
     const lineage = await dataFrom<Lineage | undefined>(await fetch(chamberURL(path, '?inherit=layers')));
     // A server that predates ?inherit=layers answers with the inherited chamber instead.
     if (typeof lineage?.inheritable !== 'boolean' || !Array.isArray(lineage.layers) || lineage.layers.length === 0) {
-      return { lineage: null, lineageError: OLDER_SERVER };
+      return { lineage: null, lineageError: new Error(OLDER_SERVER) };
     }
     return { lineage, lineageError: null };
   } catch (err) {
-    return { lineage: null, lineageError: messageOf(err) };
+    return { lineage: null, lineageError: err instanceof Error ? err : new Error(messageOf(err)) };
   }
 };
 

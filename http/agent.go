@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/steviebps/realm/utils"
 )
 
 type Operation string
@@ -33,22 +34,7 @@ type AgentRequest struct {
 // reserved-prefix check and is only cleaned up later by a storage backend.
 // ".." segments are kept, for storage to reject.
 func logicalPath(req *http.Request, routePrefix string) string {
-	return canonicalPath(strings.TrimPrefix(req.URL.Path, routePrefix))
-}
-
-// canonicalPath roots p, gives it a trailing slash, and drops empty and "."
-// segments ("a//./b" → "/a/b/").
-func canonicalPath(p string) string {
-	var b strings.Builder
-	b.WriteByte('/')
-	for seg := range strings.SplitSeq(p, "/") {
-		if seg == "" || seg == "." {
-			continue
-		}
-		b.WriteString(seg)
-		b.WriteByte('/')
-	}
-	return b.String()
+	return utils.CanonicalPath(strings.TrimPrefix(req.URL.Path, routePrefix))
 }
 
 func buildAgentRequest(req *http.Request) *AgentRequest {

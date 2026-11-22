@@ -23,6 +23,23 @@ func TestPathSplit(t *testing.T) {
 	}
 }
 
+func TestCanonicalPath(t *testing.T) {
+	for in, want := range map[string]string{
+		"":          "/",
+		"/":         "/",
+		"a":         "/a/",
+		"//a//b/":   "/a/b/",
+		"/./a/./":   "/a/",
+		"/a/../b/":  "/a/../b/",
+		"/_realm":   "/_realm/",
+		"a new one": "/a new one/",
+	} {
+		if got := CanonicalPath(in); got != want {
+			t.Errorf("CanonicalPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestExpandEnvRef(t *testing.T) {
 	t.Setenv("REALM_TEST_SECRET", "s3cret")
 	for in, want := range map[string]string{
