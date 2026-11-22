@@ -108,6 +108,23 @@ func EnsureTrailingSlash(s string) string {
 	return s
 }
 
+// CanonicalPath roots p, gives it a trailing slash, and drops empty and "."
+// segments ("a//./b" → "/a/b/"): the form the server reads chamber paths in,
+// and keys' and grants' paths are stored in. ".." segments are kept, for
+// storage to reject.
+func CanonicalPath(p string) string {
+	var b strings.Builder
+	b.WriteByte('/')
+	for seg := range strings.SplitSeq(p, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		b.WriteString(seg)
+		b.WriteByte('/')
+	}
+	return b.String()
+}
+
 func pathSplit(p string) []string {
 	dir, last := path.Split(p)
 	if dir == "/" {

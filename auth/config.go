@@ -2,16 +2,14 @@ package auth
 
 import (
 	"bytes"
-	"encoding/json"
+	"cmp"
 	"errors"
 	"fmt"
 	"net/url"
-	"path"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/steviebps/realm/pkg/storage"
 	"github.com/steviebps/realm/utils"
 )
 
@@ -125,20 +123,17 @@ type Grants []Grant
 // does not have: a misspelled "paths" would otherwise give its role on every
 // chamber.
 func (g *Grants) UnmarshalJSON(b []byte) error {
-	b = bytes.TrimSpace(b)
-	if bytes.Equal(b, []byte("null")) {
+	if string(b) == "null" {
 		*g = nil
 		return nil
 	}
-	dec := json.NewDecoder(bytes.NewReader(b))
-	dec.DisallowUnknownFields()
-	var list Grants
+	var list []Grant
 	var err error
-	if len(b) > 0 && b[0] == '[' {
-		err = dec.Decode((*[]Grant)(&list))
+	if bytes.HasPrefix(b, []byte("[")) {
+		err = utils.ReadRequiredInterfaceWith(bytes.NewReader(b), &list)
 	} else {
-		list = make(Grants, 1)
-		err = dec.Decode(&list[0])
+		list = make([]Grant, 1)
+		err = utils.ReadRequiredInterfaceWith(bytes.NewReader(b), &list[0])
 	}
 	if err != nil {
 		return fmt.Errorf("invalid grant: %w", err)
@@ -147,13 +142,11 @@ func (g *Grants) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// roleGrant is a grant with its role.
+// roleGrant is a grant with its role. Its paths are canonical, and nil when
+// it covers every chamber.
 type roleGrant struct {
 	role  Role
 	grant Grant
-	// paths holds the grant's paths in canonical form; nil when it has none
-	// and covers every chamber.
-	paths []string
 }
 
 // ProviderConfig is a sign-in provider.
@@ -280,7 +273,7 @@ func (c *Config) validate() error {
 }
 
 // validateAccess checks the paths of the grants, and keeps every grant with
-// its role and its paths in canonical form for RolesFor.
+// its role and its paths in canonical form for RolesFor, highest role first.
 func (c *Config) validateAccess() error {
 	c.grants = nil
 	for _, role := range []struct {
@@ -300,20 +293,18 @@ func (c *Config) validateAccess() error {
 			if role.role == RoleAdmin && g.Paths != nil {
 				return fmt.Errorf("%s cannot have paths: administrators manage API keys and the attribute catalog, which belong to the whole realm; grant the editor role on those paths instead", where)
 			}
-			paths, err := grantPaths(g.Paths)
-			if err != nil {
+			var err error
+			if g.Paths, err = grantPaths(g.Paths); err != nil {
 				return fmt.Errorf("%s: %w", where, err)
 			}
-			c.grants = append(c.grants, roleGrant{role: role.role, grant: g, paths: paths})
+			c.grants = append(c.grants, roleGrant{role: role.role, grant: g})
 		}
 	}
 	return nil
 }
 
-// grantPaths returns a grant's paths in canonical form, the form the server
-// reads request paths in: rooted, with a trailing slash, and without empty or
-// "." segments ("prod//tenants" → "/prod/tenants/"). It returns nil when the
-// grant has no paths, and so covers every chamber.
+// grantPaths returns a grant's paths in canonical form (see scopePath), or
+// nil when the grant covers every chamber: it has no paths, or "/" is one.
 func grantPaths(paths []string) ([]string, error) {
 	if paths == nil {
 		return nil, nil
@@ -323,21 +314,19 @@ func grantPaths(paths []string) ([]string, error) {
 		// readings of an empty list; neither is assumed.
 		return nil, errors.New(`paths is empty: list the paths the grant covers, or leave "paths" out to cover every chamber`)
 	}
-	out := make([]string, 0, len(paths))
-	for _, p := range paths {
+	out := make([]string, len(paths))
+	for i, p := range paths {
 		if p == "" {
-			// likely a value that was meant to be filled in; "/" covers every chamber
+			// likely a value that was meant to be filled in
 			return nil, errors.New(`paths has an empty path: write "/" to cover every chamber`)
 		}
-		if err := storage.ValidatePath(p); err != nil {
-			return nil, fmt.Errorf("paths: %q: %w", p, err)
+		var err error
+		if out[i], err = scopePath(p); err != nil {
+			return nil, fmt.Errorf("paths: %w", err)
 		}
-		// ".." is refused above, so Clean only drops empty and "." segments
-		canonical := NormalizePath(path.Clean("/" + p))
-		if storage.IsReservedPath(canonical) {
-			return nil, fmt.Errorf("paths: %q is under %s, which is reserved for realm's own data", p, storage.ReservedPrefix)
-		}
-		out = append(out, canonical)
+	}
+	if slices.Contains(out, "/") {
+		return nil, nil
 	}
 	return out, nil
 }
@@ -379,44 +368,34 @@ func normalizeDomains(provider, field string, domains []string) ([]string, error
 // grants that give every chamber the same role return equal results.
 func (c *Config) RolesFor(provider, email string, githubOrgs []string) (Role, []PathRole) {
 	vouched := email != "" && c.vouchesFor(provider, email)
-	everywhere := RoleNone
-	// the highest role the grants with paths give on each path
-	var onPath map[string]Role
+	var granted Principal
+	var onPaths []PathRole
 	for _, g := range c.grants {
+		if g.role <= granted.Role {
+			// grants come highest role first: none of the rest adds anything
+			break
+		}
 		if !g.grant.matches(email, vouched, githubOrgs) {
 			continue
 		}
-		for _, p := range g.paths {
-			if p == "/" {
-				everywhere = max(everywhere, g.role)
-				continue
-			}
-			if onPath == nil {
-				onPath = map[string]Role{}
-			}
-			onPath[p] = max(onPath[p], g.role)
+		if g.grant.Paths == nil {
+			granted.Role = g.role
 		}
-		if g.paths == nil {
-			everywhere = max(everywhere, g.role)
+		for _, p := range g.grant.Paths {
+			onPaths = append(onPaths, PathRole{Path: p, Role: g.role})
 		}
 	}
-
-	// Keep the paths whose role is higher than what covers them already:
-	// the role on every chamber, and the roles on the paths above theirs.
-	var paths []PathRole
-	for p, role := range onPath {
-		above := everywhere
-		for q, r := range onPath {
-			if q != p && strings.HasPrefix(p, q) {
-				above = max(above, r)
-			}
-		}
-		if role > above {
-			paths = append(paths, PathRole{Path: p, Role: role})
+	// Sorted by path, highest role first, each entry comes after the entries
+	// for the paths above it: keep those that raise the role on their path.
+	slices.SortFunc(onPaths, func(a, b PathRole) int {
+		return cmp.Or(strings.Compare(a.Path, b.Path), cmp.Compare(b.Role, a.Role))
+	})
+	for _, e := range onPaths {
+		if e.Role > granted.RoleAt(e.Path) {
+			granted.Paths = append(granted.Paths, e)
 		}
 	}
-	slices.SortFunc(paths, func(a, b PathRole) int { return strings.Compare(a.Path, b.Path) })
-	return everywhere, paths
+	return granted.Role, granted.Paths
 }
 
 // vouchesFor reports whether provider may vouch for email in email and

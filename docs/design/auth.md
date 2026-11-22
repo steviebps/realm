@@ -150,27 +150,22 @@ chamber, and the compliance owner also changes the chambers beneath
 - **Admin grants cannot have `paths`.** Administrators manage API keys and
   the attribute catalog, which belong to the whole realm. The server refuses
   to start with such a grant; give the editor role on the paths instead.
-- **Paths are checked when the server starts.** realm adds missing slashes
-  and drops empty and `.` segments (`prod//tenants` is `/prod/tenants/`). It
-  refuses `..`, the reserved `/_realm/` prefix, an empty path, and an empty
+- **Paths are checked when the server starts,** as a key's path is checked
+  when the key is created: realm adds missing slashes and drops empty and `.`
+  segments (`prod//tenants` is `/prod/tenants/`), and refuses `..` and the
+  reserved `/_realm/` prefix. It also refuses an empty path and an empty
   list, which might mean every chamber or none: leave `paths` out to cover
   every chamber, or write `"/"`. As everywhere in the config, it refuses
   unknown fields, so a misspelled `"path"` cannot quietly grant a role on
   every chamber.
 - **Users with roles only on paths** (no grant without paths) may sign in,
   and may read only the chambers beneath their paths, like a key scoped
-  beneath the root. They cannot list or read the chambers above, nor read
-  the attribute catalog, whose labels can name every tenant.
-  `GET /v1/chambers/<path>?inherit=layers` lists each parent's own flags, so
-  it needs read access to every parent and refuses them with `403`, as it
-  refuses a scoped key; the inherited view (`GET /v1/chambers/<path>`) still
-  serves the parents' flags. A `viewers` grant without paths lets them read
+  beneath the root: not the chambers above, the attribute catalog (whose
+  labels can name every tenant), or `?inherit=layers` (see
+  [API keys](#api-keys)). A `viewers` grant without paths lets them read
   everything.
-- **The UI follows the role on each chamber.** `/v1/auth/me` reports the
-  user's role on every chamber (`user.role`) and their higher roles beneath
-  paths (`user.paths`), from which the UI works out which edit controls to
-  offer on each chamber. A chamber a user may not read links to the paths
-  they may.
+- **The UI follows the role on each chamber** (from `/v1/auth/me`), and a
+  chamber a user may not read links to the paths they may.
 
 **Which provider may vouch for an email.** By default every provider may
 vouch for every address, so with both a company IdP and GitHub configured,

@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
 import { HiClock, HiExclamation, HiPause, HiPencil, HiPlay, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ConflictError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
+import { ConflictError, ForbiddenError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
 import { Chamber, Flag, Lifecycle, RuleType } from '../models/response';
 import { parentBounds } from '../utils/constraints';
 import { diffChambers } from '../utils/describe';
@@ -15,7 +15,7 @@ import { HistoryDrawer } from './HistoryDrawer';
 import { FlagRow, FlagTable, Mono, PathLink } from './FlagTable';
 import { InheritedSection } from './InheritedSection';
 import { useSession } from '../session';
-import { canEditAt, canReadAt, pathsWith } from '../utils/access';
+import { canEditAt } from '../utils/access';
 
 /** Attribute names suggested in the editor, in addition to catalog and in-use names. */
 const CONVENTIONAL_ATTRIBUTES = [
@@ -46,7 +46,7 @@ const attributesIn = (flags: Flag[]) =>
 
 /** Says that the user may not read the chamber at path, and links the chambers they may read. */
 const NoAccess = ({ path }: { path: string }) => {
-  const readable = pathsWith(useSession(), 'viewer');
+  const readable = useSession().user?.paths ?? [];
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-dashed border-gray-300 px-4 py-6 text-sm text-gray-600 dark:border-gray-600 dark:text-gray-400">
       <p>
@@ -91,10 +91,8 @@ export const ChamberView = ({ path }: { path: string }) => {
   const override = useCallback((name: string, flag: Flag) => setEditing({ name, flag, isNew: true }), []);
 
   if (isLoading) return <Spinner aria-label="Loading chamber" size="lg" />;
-  if (error instanceof Error) {
-    if (!canReadAt(me, path)) return <NoAccess path={path} />;
-    return <p className="text-red-700 dark:text-red-400">{error.message}</p>;
-  }
+  if (error instanceof ForbiddenError) return <NoAccess path={path} />;
+  if (error instanceof Error) return <p className="text-red-700 dark:text-red-400">{error.message}</p>;
   if (!data?.own) {
     return (
       <p className="rounded-xl border border-dashed border-gray-300 px-4 py-6 text-sm text-gray-600 dark:border-gray-600 dark:text-gray-400">
@@ -376,7 +374,6 @@ export const ChamberView = ({ path }: { path: string }) => {
           here={here}
           prov={prov}
           loadError={data.lineageError}
-          unreadableParents={ancestorsOf(here).filter((parent) => !canReadAt(me, parent))}
           onRetry={refetch}
           catalog={catalog}
           onOverride={canEdit ? override : undefined}

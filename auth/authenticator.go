@@ -164,7 +164,8 @@ func (a *Authenticator) Authenticate(r *http.Request) (*Principal, error) {
 	// equal roles, so the user owes a role to one exactly when the results
 	// without organizations differ.
 	if len(s.GitHubOrgs) > 0 && time.Since(time.Unix(s.OrgsAt, 0)) > a.cfg.githubOrgsTTL {
-		if r, p := a.cfg.RolesFor(s.Provider, s.Email, nil); r != role || !slices.Equal(p, paths) {
+		roleWithoutOrgs, pathsWithoutOrgs := a.cfg.RolesFor(s.Provider, s.Email, nil)
+		if roleWithoutOrgs != role || !slices.Equal(pathsWithoutOrgs, paths) {
 			return nil, nil
 		}
 	}

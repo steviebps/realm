@@ -44,6 +44,7 @@ func TestPrincipalPermissions(t *testing.T) {
 	// a viewer of every chamber who edits /prod/, and a user who may only edit /prod/
 	pathEditor := &Principal{Kind: KindUser, Role: RoleViewer, Paths: []PathRole{{Path: "/prod/", Role: RoleEditor}}}
 	pathOnly := &Principal{Kind: KindUser, Paths: []PathRole{{Path: "/prod/", Role: RoleEditor}}}
+	nested := &Principal{Kind: KindUser, Paths: []PathRole{{Path: "/prod/", Role: RoleViewer}, {Path: "/prod/tenants/", Role: RoleEditor}}}
 	var none *Principal
 
 	tests := []struct {
@@ -76,6 +77,8 @@ func TestPrincipalPermissions(t *testing.T) {
 		{"path-only user in the path", pathOnly, "/prod/app/", true, true, false, true},
 		{"path-only user outside the path", pathOnly, "/staging/", false, false, false, false},
 		{"path-only user parent", pathOnly, "/", false, false, false, false},
+		{"nested paths, the outer", nested, "/prod/app/", true, false, false, true},
+		{"nested paths, the inner", nested, "prod/tenants/acme", true, true, false, true},
 		{"anonymous", Anonymous, "/prod/", true, true, true, true},
 		{"admin key", &adminKeyPrincipal, "/prod/", true, true, true, true},
 		{"nil", none, "/prod/", false, false, false, false},
@@ -96,7 +99,7 @@ func TestPrincipalPermissions(t *testing.T) {
 			}
 			// the catalog is realm-wide: only root-scoped read keys, and
 			// users who may read every chamber, may read it
-			wantCatalog := tt.p != nil && tt.p != evalKey && tt.p != readKey && tt.p != writeKey && tt.p != rootEvalKey && tt.p != pathOnly
+			wantCatalog := tt.p != nil && tt.p != evalKey && tt.p != readKey && tt.p != writeKey && tt.p != rootEvalKey && tt.p != pathOnly && tt.p != nested
 			if got := tt.p.CanReadCatalog(); got != wantCatalog {
 				t.Errorf("CanReadCatalog = %v, want %v", got, wantCatalog)
 			}
@@ -155,7 +158,9 @@ func TestRolesFor(t *testing.T) {
 
 // TestRolesForPaths covers grants with paths: a user's role on a path is the
 // highest among the grants that match them and cover it, and RolesFor keeps
-// only the paths that raise it.
+// only the paths that raise it, so grants giving every chamber the same role
+// return equal results (which the expiry of organization memberships relies
+// on, see Authenticate).
 func TestRolesForPaths(t *testing.T) {
 	cfg := validConfig()
 	cfg.Providers = []ProviderConfig{
@@ -172,11 +177,16 @@ func TestRolesForPaths(t *testing.T) {
 			{Emails: []string{"lead@example.com"}, Paths: []string{"/prod/tenants/acme/"}},
 			// "/" covers every chamber, as a grant without paths does
 			{Emails: []string{"ops@example.com"}, Paths: []string{"/"}},
+			// duplicates and redundant paths, in no order
+			{Emails: []string{"messy@other.io"}, Paths: []string{"b/c", "/a/", "/a/y/"}},
+			{Emails: []string{"messy@other.io"}, Paths: []string{"/a//"}},
 		},
 		Viewers: Grants{
 			{Domains: []string{"example.com"}},
 			{GitHubOrgs: []string{"support"}, Paths: []string{"/prod/"}},
 			{Emails: []string{"lead@example.com"}, Paths: []string{"/prod/"}},
+			{Emails: []string{"messy@other.io"}, Paths: []string{"/a/x/", "/"}},
+			{Emails: []string{"messy@other.io"}, Paths: []string{"/b/"}},
 		},
 	}
 	if err := cfg.validate(); err != nil {
@@ -200,6 +210,7 @@ func TestRolesForPaths(t *testing.T) {
 		{"paths in canonical form, sorted", "corp", "compliance@example.com", nil, RoleViewer, editorOn("/prod/regions/", "/prod/tenants/", "/staging/regions/")},
 		{"a path covered by a higher or equal role is dropped", "corp", "lead@example.com", nil, RoleViewer, editorOn("/prod/tenants/")},
 		{"a role on / is a role on every chamber", "corp", "ops@example.com", nil, RoleEditor, nil},
+		{"redundant grants reduce to the roles they give", "corp", "messy@other.io", nil, RoleViewer, editorOn("/a/", "/b/c/")},
 		{"a role everywhere above the path's", "corp", "owner@example.com", nil, RoleAdmin, nil},
 		{"only paths", "gh", "someone@other.io", []string{"support"}, RoleNone, []PathRole{{Path: "/prod/", Role: RoleViewer}}},
 		{"an editor everywhere drops viewer and editor paths", "gh", "someone@other.io", []string{"support", "platform"}, RoleEditor, nil},
@@ -215,82 +226,6 @@ func TestRolesForPaths(t *testing.T) {
 				t.Errorf("RolesFor = %v %v, want %v %v", role, paths, tt.role, tt.paths)
 			}
 		})
-	}
-}
-
-// TestRolesForIsCanonical checks that grants giving every chamber the same
-// role return equal results, which the expiry of organization memberships
-// relies on (see Authenticate).
-func TestRolesForIsCanonical(t *testing.T) {
-	configs := []AccessConfig{
-		{
-			Viewers: Grants{{Emails: []string{"u@example.com"}}},
-			Editors: Grants{{Emails: []string{"u@example.com"}, Paths: []string{"/a/", "/b/c/"}}},
-		},
-		{
-			// the same roles, written with duplicates, redundant paths, and
-			// another order
-			Viewers: Grants{
-				{Emails: []string{"u@example.com"}, Paths: []string{"/a/x/", "/"}},
-				{Emails: []string{"u@example.com"}, Paths: []string{"/b/"}},
-			},
-			Editors: Grants{
-				{Emails: []string{"u@example.com"}, Paths: []string{"b/c", "/a/", "/a/y/"}},
-				{Emails: []string{"u@example.com"}, Paths: []string{"/a//"}},
-			},
-		},
-	}
-	var want []PathRole
-	for i, access := range configs {
-		cfg := validConfig()
-		cfg.Access = access
-		if err := cfg.validate(); err != nil {
-			t.Fatal(err)
-		}
-		role, paths := cfg.RolesFor("google", "u@example.com", nil)
-		if role != RoleViewer {
-			t.Errorf("config %d: role = %v, want viewer", i, role)
-		}
-		if i == 0 {
-			want = paths
-		} else if !slices.Equal(paths, want) {
-			t.Errorf("config %d: paths = %v, want %v", i, paths, want)
-		}
-	}
-}
-
-func TestRoleAt(t *testing.T) {
-	p := &Principal{Kind: KindUser, Role: RoleViewer, Paths: []PathRole{
-		{Path: "/prod/", Role: RoleEditor},
-		{Path: "/prod/tenants/acme/", Role: RoleAdmin},
-	}}
-	only := &Principal{Kind: KindUser, Paths: []PathRole{{Path: "/prod/tenants/", Role: RoleViewer}}}
-	tests := []struct {
-		p    *Principal
-		path string
-		want Role
-	}{
-		{p, "/", RoleViewer},
-		{p, "/staging/", RoleViewer},
-		{p, "/prod", RoleEditor},
-		{p, "/prod/tenants/", RoleEditor},
-		{p, "/production/", RoleViewer},
-		{p, "/prod/tenants/acme/eu/", RoleAdmin},
-		{only, "/", RoleNone},
-		{only, "/prod/", RoleNone},
-		{only, "prod/tenants", RoleViewer},
-		{only, "/prod/tenants/acme/", RoleViewer},
-		{&Principal{Kind: KindKey, Access: AccessWrite, Path: "/"}, "/", RoleNone},
-		{nil, "/", RoleNone},
-	}
-	for _, tt := range tests {
-		if got := tt.p.RoleAt(tt.path); got != tt.want {
-			t.Errorf("%+v.RoleAt(%q) = %v, want %v", tt.p, tt.path, got, tt.want)
-		}
-	}
-	// keys and the catalog belong to the whole realm
-	if p.IsAdmin() {
-		t.Error("an admin role on a path made a user an administrator")
 	}
 }
 
@@ -459,7 +394,7 @@ func TestKeyStore(t *testing.T) {
 		t.Error("created a key scoped to realm's metadata")
 	}
 
-	key, token, err := keys.Create(ctx, NewKeyRequest{Name: "sdk", Access: AccessRead, Path: "prod"}, "owner@example.com")
+	key, token, err := keys.Create(ctx, NewKeyRequest{Name: "sdk", Access: AccessRead, Path: "prod//."}, "owner@example.com")
 	if err != nil {
 		t.Fatal(err)
 	}

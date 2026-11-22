@@ -203,7 +203,8 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   reads use, accepts them so older SDKs survive newer servers: an unknown
   operator never matches, and an unknown-type flag cannot be served. Unknown
   operators and types round-trip byte for byte.
-- **Paths are canonicalized once** (`canonicalPath` in `http/agent.go`) and
+- **Paths are canonicalized once** (`utils.CanonicalPath`: request paths in
+  `logicalPath`, `http/agent.go`; key and grant paths in `auth.scopePath`) and
   never unescaped twice; check `storage.IsReservedPath` on the canonical form.
 - **Domain types validate in `UnmarshalJSON`.** Values that depend on the
   flag's type (like `TargetingRule.Value`) are type-checked by the owning

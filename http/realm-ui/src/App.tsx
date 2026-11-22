@@ -15,7 +15,7 @@ import { KeysDrawer } from './components/KeysDrawer';
 import { RealmMark } from './components/RealmMark';
 import { PathLink } from './components/FlagTable';
 import { realmTheme } from './theme';
-import { canEditAt, describeRoles, pathsBeneath, roleAt } from './utils/access';
+import { canEditAt, describeRoles, editorPathsBeneath, roleAt } from './utils/access';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -154,7 +154,7 @@ const Content = () => {
   // A user who may not change this chamber may still be an editor beneath it,
   // and create chambers there.
   const canEdit = canEditAt(me, path);
-  const editableBeneath = canEdit ? [] : pathsBeneath(me, path, 'editor');
+  const editableBeneath = canEdit ? [] : editorPathsBeneath(me, path);
   const cannotCreate = chamberName.trim() !== '' && !canEditAt(me, childPath(chamberName));
 
   const { data: children = [] } = useQuery({ queryKey: ['list', path], queryFn: () => listChambers(path) });
@@ -164,7 +164,7 @@ const Content = () => {
     onSuccess: (_, name) => {
       setChamberName('');
       void queryClient.invalidateQueries({ queryKey: ['list', path] });
-      void navigate(encodePath(path + trimSuffix(trimPrefix(name.trim(), '/'), '/')));
+      void navigate(encodePath(trimSuffix(childPath(name), '/')));
     },
   });
 
@@ -196,7 +196,6 @@ const Content = () => {
                 className="flex flex-col gap-2"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (cannotCreate) return;
                   create.mutate(chamberName);
                 }}
               >
@@ -227,7 +226,7 @@ const Content = () => {
                     You can create chambers only at or beneath{' '}
                     {editableBeneath.map((entry, i) => (
                       <span key={entry.path}>
-                        {i > 0 && (i === editableBeneath.length - 1 ? ' or ' : ', ')}
+                        {i > 0 && ', '}
                         <PathLink path={entry.path} />
                       </span>
                     ))}

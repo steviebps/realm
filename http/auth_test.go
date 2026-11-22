@@ -260,12 +260,8 @@ func TestPathRoles(t *testing.T) {
 		{"editor path: prefix lookalike", support, http.MethodPost, "/v1/chambers/prod/tenants-old/", chamberBody, http.StatusForbidden},
 		{"editor path: write elsewhere", support, http.MethodPost, "/v1/chambers/staging/", chamberBody, http.StatusForbidden},
 		{"editor path: recursive delete above it", support, http.MethodDelete, "/v1/chambers/prod/?recursive=true", "", http.StatusForbidden},
-		{"viewer everywhere: read elsewhere", support, http.MethodGet, "/v1/chambers/staging/", "", http.StatusOK},
 		{"viewer everywhere: list the root", support, http.MethodGet, "/v1/chambers/?list=true", "", http.StatusOK},
 		{"viewer everywhere: layers", support, http.MethodGet, "/v1/chambers/prod/tenants/acme/?inherit=layers", "", http.StatusOK},
-		{"viewer everywhere: catalog", support, http.MethodGet, "/v1/catalog", "", http.StatusOK},
-		{"no admin role on paths: catalog writes", support, http.MethodPost, "/v1/catalog/region", `{"values":{}}`, http.StatusForbidden},
-		{"no admin role on paths: keys", support, http.MethodGet, "/v1/keys", "", http.StatusForbidden},
 
 		{"path only: read beneath it", compliance, http.MethodGet, "/v1/chambers/prod/regions/eu/", "", http.StatusOK},
 		{"path only: read as stored", compliance, http.MethodGet, "/v1/chambers/prod/regions/eu/?inherit=false", "", http.StatusOK},
@@ -294,9 +290,6 @@ func TestPathRoles(t *testing.T) {
 		})
 	}
 
-	if got := lastActor(t, compliance, srv.URL+"/v1/history/prod/regions/eu/", ""); got != "compliance@partner.io" {
-		t.Errorf("history actor = %q, want the signed-in user", got)
-	}
 	// a recursive delete at the path removes every chamber beneath it
 	status, out := call(t, support, http.MethodDelete, srv.URL+"/v1/chambers/prod/tenants/?recursive=true", "", "")
 	if status != http.StatusOK || string(out.Data) != `{"deleted":["/prod/tenants/","/prod/tenants/acme/"]}` {

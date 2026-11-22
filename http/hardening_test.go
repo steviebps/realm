@@ -121,23 +121,6 @@ func TestReservedPathsIgnoreCase(t *testing.T) {
 	}
 }
 
-func TestCanonicalPath(t *testing.T) {
-	for in, want := range map[string]string{
-		"":          "/",
-		"/":         "/",
-		"a":         "/a/",
-		"//a//b/":   "/a/b/",
-		"/./a/./":   "/a/",
-		"/a/../b/":  "/a/../b/",
-		"/_realm":   "/_realm/",
-		"a new one": "/a new one/",
-	} {
-		if got := canonicalPath(in); got != want {
-			t.Errorf("canonicalPath(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestReadiness(t *testing.T) {
 	stg, err := storage.NewBigCacheStorage(map[string]string{})
 	if err != nil {

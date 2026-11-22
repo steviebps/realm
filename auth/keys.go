@@ -93,15 +93,9 @@ func (r *NewKeyRequest) validate() error {
 	if !r.Access.valid() {
 		return fmt.Errorf("access must be %q, %q, or %q", AccessEvaluate, AccessRead, AccessWrite)
 	}
-	if r.Path == "" {
-		r.Path = "/"
-	}
-	if err := storage.ValidatePath(r.Path); err != nil {
-		return err
-	}
-	r.Path = NormalizePath(r.Path)
-	if storage.IsReservedPath(r.Path) {
-		return fmt.Errorf("path must not be under %s", storage.ReservedPrefix)
+	var err error
+	if r.Path, err = scopePath(r.Path); err != nil {
+		return fmt.Errorf("path %w", err)
 	}
 	return nil
 }

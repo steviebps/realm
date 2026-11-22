@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Me, PathRole, Role } from '../models/response.ts';
-import { canEditAt, canReadAt, describeRoles, pathsBeneath, roleAt } from './access.ts';
+import { canEditAt, describeRoles, editorPathsBeneath, roleAt } from './access.ts';
 
 const signedIn = (role: Role, paths?: PathRole[]): Me => ({
   authEnabled: true,
@@ -32,10 +32,8 @@ void test("a user's role on a chamber is the highest among the paths that cover 
   for (const [me, path, want] of cases) {
     assert.equal(roleAt(me, path), want, `${me.user?.role} ${JSON.stringify(me.user?.paths)} at ${path}`);
   }
-  assert.ok(canReadAt(support, '/'));
   assert.ok(!canEditAt(support, '/prod/'));
   assert.ok(canEditAt(support, '/prod/tenants/acme/'));
-  assert.ok(!canReadAt(compliance, '/prod/'));
 });
 
 void test('without sign-in, everyone may do what the server reports', () => {
@@ -44,22 +42,22 @@ void test('without sign-in, everyone may do what the server reports', () => {
   assert.ok(canEditAt(open, '/'));
 });
 
-void test('the paths beneath a chamber where a role reaches a level', () => {
+void test('the paths beneath a chamber where a user may edit', () => {
   const me = signedIn('none', [
     { path: '/prod/regions/', role: 'editor' },
     { path: '/prod/tenants/', role: 'viewer' },
     { path: '/staging/', role: 'editor' },
   ]);
   assert.deepEqual(
-    pathsBeneath(me, '/prod/', 'editor').map((e) => e.path),
+    editorPathsBeneath(me, '/prod/').map((e) => e.path),
     ['/prod/regions/']
   );
   assert.deepEqual(
-    pathsBeneath(me, '/', 'viewer').map((e) => e.path),
-    ['/prod/regions/', '/prod/tenants/', '/staging/']
+    editorPathsBeneath(me, '/').map((e) => e.path),
+    ['/prod/regions/', '/staging/']
   );
   // not the chamber itself
-  assert.deepEqual(pathsBeneath(me, '/staging/', 'editor'), []);
+  assert.deepEqual(editorPathsBeneath(me, '/staging/'), []);
 });
 
 void test("a user's roles in words", () => {

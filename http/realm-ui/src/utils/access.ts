@@ -6,14 +6,10 @@ import type { Me, PathRole, Principal, Role } from '../models/response';
 
 const rank: Record<Role, number> = { none: 0, viewer: 1, editor: 2, admin: 3 };
 
-/** Whether role includes everything min allows. */
-export const atLeast = (role: Role, min: Role) => rank[role] >= rank[min];
+const atLeast = (role: Role, min: Role) => rank[role] >= rank[min];
 
-/**
- * Whether the chamber at path is prefix or beneath it: "/prod/" covers "/prod/" and "/prod/web/", but not
- * "/production/". Both are chamber paths with a trailing slash.
- */
-export const covers = (prefix: string, path: string) => path.startsWith(prefix);
+/** Whether the chamber at path is prefix or beneath it ("/prod/" covers "/prod/web/", not "/production/"). */
+const covers = (prefix: string, path: string) => path.startsWith(prefix);
 
 /**
  * The caller's role on the chamber at path (with a trailing slash). A signed-in user has the highest of their role on
@@ -29,19 +25,12 @@ export const roleAt = (me: Me, path: string): Role => {
   return role;
 };
 
-/** Whether the caller may read the chamber at path, its history, and the chambers beneath it. */
-export const canReadAt = (me: Me, path: string) => atLeast(roleAt(me, path), 'viewer');
-
 /** Whether the caller may create, change, and delete the chamber at path, and the chambers beneath it. */
 export const canEditAt = (me: Me, path: string) => atLeast(roleAt(me, path), 'editor');
 
-/** The signed-in user's paths whose role includes min, sorted by path. */
-export const pathsWith = (me: Me, min: Role): PathRole[] =>
-  (me.user?.paths ?? []).filter((entry) => atLeast(entry.role, min));
-
-/** The signed-in user's paths strictly beneath path whose role includes min. */
-export const pathsBeneath = (me: Me, path: string, min: Role): PathRole[] =>
-  pathsWith(me, min).filter((entry) => entry.path !== path && covers(path, entry.path));
+/** The signed-in user's paths strictly beneath path where they may edit, sorted by path. */
+export const editorPathsBeneath = (me: Me, path: string): PathRole[] =>
+  (me.user?.paths ?? []).filter((e) => atLeast(e.role, 'editor') && e.path !== path && covers(path, e.path));
 
 /** A signed-in user's roles in words: "viewer of every chamber, editor of /prod/tenants/". */
 export const describeRoles = (user: Principal): string =>

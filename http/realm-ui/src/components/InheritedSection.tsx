@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Alert, Badge, Button } from 'flowbite-react';
 import { HiLockClosed } from 'react-icons/hi';
+import { ForbiddenError } from '../api';
 import { Catalog, Flag } from '../models/response';
 import { Provenance, Served, StackEntry } from '../utils/provenance';
 import { plural } from '../utils/strings';
@@ -14,9 +15,7 @@ type Props = {
   /** Null when the lineage could not be loaded. */
   prov: Provenance | null;
   /** Why the lineage could not be loaded. */
-  loadError: string | null;
-  /** The parent chambers the user may not read, nearest first: the server shows the lineage only to those who may. */
-  unreadableParents: string[];
+  loadError: Error | null;
   onRetry: () => Promise<unknown>;
   catalog: Catalog;
   /** Starts overriding an inherited flag in this chamber; omitted for users who cannot edit. */
@@ -206,7 +205,7 @@ const RetryButton = ({ onRetry }: { onRetry: Props['onRetry'] }) => {
  * serves each one, nearest first, with a line for each ancestor that
  * contributes nothing and why.
  */
-export const InheritedSection = ({ here, prov, loadError, unreadableParents, onRetry, catalog, onOverride }: Props) => {
+export const InheritedSection = ({ here, prov, loadError, onRetry, catalog, onOverride }: Props) => {
   const inheriting = prov?.inheritable === true;
   const broken = prov?.inherited === null;
   const count = inheriting && prov.inherited ? Object.keys(prov.inherited).length : null;
@@ -246,27 +245,21 @@ export const InheritedSection = ({ here, prov, loadError, unreadableParents, onR
         )}
       </div>
 
-      {loadError &&
-        (unreadableParents.length > 0 ? (
-          // retrying would not help
-          <p className="text-sm text-gray-600 dark:text-gray-400">
-            The flags this chamber inherits aren&rsquo;t shown, because you don&rsquo;t have access to{' '}
-            {unreadableParents.map((path, i) => (
-              <span key={path}>
-                {i > 0 && (i === unreadableParents.length - 1 ? ' and ' : ', ')}
-                <Mono>{path}</Mono>
-              </span>
-            ))}
-            .
-          </p>
-        ) : (
+      {loadError instanceof ForbiddenError ? (
+        // retrying would not help
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          The flags this chamber inherits aren&rsquo;t shown, because you can&rsquo;t read every chamber above it.
+        </p>
+      ) : (
+        loadError && (
           <Alert color="warning">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span>Couldn&rsquo;t load the parent chambers: {loadError}</span>
+              <span>Couldn&rsquo;t load the parent chambers: {loadError.message}</span>
               <RetryButton onRetry={onRetry} />
             </div>
           </Alert>
-        ))}
+        )
+      )}
 
       {inheriting && (
         <ol aria-label="Parent chambers, nearest first" className="flex flex-col gap-3">

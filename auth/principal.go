@@ -7,6 +7,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/steviebps/realm/pkg/storage"
+	"github.com/steviebps/realm/utils"
 )
 
 // Role is the level of access granted to a signed-in user. Higher roles
@@ -108,8 +111,8 @@ type Principal struct {
 	// Paths applies to users: the roles that grants with paths give them on
 	// the chambers at and beneath those paths. Each entry's role is higher
 	// than Role and than the roles of the entries for paths above its own;
-	// entries are sorted by path, which is in the form NormalizePath returns.
-	// See RoleAt.
+	// entries are sorted by path, which is canonical (see scopePath). See
+	// RoleAt.
 	Paths []PathRole `json:"paths,omitempty"`
 	// Access and Path apply to API keys: the key may act only on chambers
 	// at or beneath Path.
@@ -220,6 +223,19 @@ func NormalizePath(path string) string {
 // covers reports whether the scope prefix includes path.
 func covers(prefix, path string) bool {
 	return strings.HasPrefix(NormalizePath(path), NormalizePath(prefix))
+}
+
+// scopePath checks the path an API key or a grant is limited to, and returns
+// it in canonical form (see utils.CanonicalPath), as request paths are read.
+func scopePath(path string) (string, error) {
+	if err := storage.ValidatePath(path); err != nil {
+		return "", fmt.Errorf("%q: %w", path, err)
+	}
+	path = utils.CanonicalPath(path)
+	if storage.IsReservedPath(path) {
+		return "", fmt.Errorf("%q is under %s, which is reserved for realm's own data", path, storage.ReservedPrefix)
+	}
+	return path, nil
 }
 
 type principalKey struct{}
