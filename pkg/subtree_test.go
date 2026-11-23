@@ -262,7 +262,7 @@ func TestSubtreeErrorsKeepViews(t *testing.T) {
 			}
 		}
 		if logs.count("could not build some chamber views") != 1 {
-			t.Errorf("the views that could not be built were not logged once: %s", logs.buf.String())
+			t.Errorf("the views that could not be built were not logged once: %s", logs.String())
 		}
 	})
 
@@ -540,7 +540,7 @@ func TestSubtreeStreamRejectsNonSubtrees(t *testing.T) {
 				t.Fatal(err)
 			}
 			if !eventually(5*time.Second, func() bool { return logs.count("something other than a subtree") > 0 }) {
-				t.Fatalf("not logged: %s", logs.buf.String())
+				t.Fatalf("not logged: %s", logs.String())
 			}
 			// realm waits minutes before asking again
 			time.Sleep(300 * time.Millisecond)
