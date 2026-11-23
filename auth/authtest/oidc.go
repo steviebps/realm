@@ -28,10 +28,13 @@ const (
 
 // Issuer is a fake OIDC issuer that approves every authorization request as
 // the current user, checking PKCE and echoing the nonce like a real issuer.
+// Like a real issuer, it sends the browser back only to a redirect URI
+// registered with RegisterRedirect.
 type Issuer struct {
 	*httptest.Server
 
 	mu            sync.Mutex
+	redirectURIs  []string
 	email         string
 	emailVerified bool
 	extra         map[string]any
@@ -98,6 +101,29 @@ func (iss *Issuer) SetClaim(name string, value any) {
 	iss.extra[name] = value
 }
 
+// RegisterRedirect registers uri, such as
+// "<externalURL>/v1/auth/callback/<provider>", as a redirect URI of the
+// client. An authorization request naming any other redirect_uri is refused.
+func (iss *Issuer) RegisterRedirect(uri string) {
+	iss.mu.Lock()
+	defer iss.mu.Unlock()
+	iss.redirectURIs = append(iss.redirectURIs, uri)
+}
+
+// registeredRedirect returns the registered redirect URI equal to uri, so
+// that a redirect goes to a URI the test registered, never to one taken from
+// the request.
+func (iss *Issuer) registeredRedirect(uri string) (string, bool) {
+	iss.mu.Lock()
+	defer iss.mu.Unlock()
+	for _, registered := range iss.redirectURIs {
+		if registered == uri {
+			return registered, true
+		}
+	}
+	return "", false
+}
+
 // LastAuthorize returns the query parameters of the latest authorization
 // request.
 func (iss *Issuer) LastAuthorize() url.Values {
@@ -123,17 +149,22 @@ func (iss *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad authorization request", http.StatusBadRequest)
 		return
 	}
-	code := rand.Text()
-	iss.mu.Lock()
-	iss.lastAuthorize = q
-	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: q.Get("redirect_uri"), email: iss.email, verified: iss.emailVerified, extra: maps.Clone(iss.extra)}
-	iss.mu.Unlock()
-
-	target, err := url.Parse(q.Get("redirect_uri"))
+	redirectURI, ok := iss.registeredRedirect(q.Get("redirect_uri"))
+	if !ok {
+		http.Error(w, "unregistered redirect_uri", http.StatusBadRequest)
+		return
+	}
+	target, err := url.Parse(redirectURI)
 	if err != nil {
 		http.Error(w, "bad redirect_uri", http.StatusBadRequest)
 		return
 	}
+	code := rand.Text()
+	iss.mu.Lock()
+	iss.lastAuthorize = q
+	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: redirectURI, email: iss.email, verified: iss.emailVerified, extra: maps.Clone(iss.extra)}
+	iss.mu.Unlock()
+
 	v := target.Query()
 	v.Set("code", code)
 	v.Set("state", q.Get("state"))

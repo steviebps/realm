@@ -495,6 +495,7 @@ func TestOIDCSignIn(t *testing.T) {
 		}
 		c.Providers = []ProviderConfig{{Name: "test", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}}
 	})
+	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/test")
 
 	t.Run("admin signs in and returns where they started", func(t *testing.T) {
 		browser := authtest.Browser(t)
@@ -586,6 +587,7 @@ func TestCrossOriginWritesAreRefused(t *testing.T) {
 		c.Access = AccessConfig{Admins: Grants{{Emails: []string{"owner@example.com"}}}}
 		c.Providers = []ProviderConfig{{Name: "test", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}}
 	})
+	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/test")
 	browser := authtest.Browser(t)
 	get(t, browser, srv.URL+"/v1/auth/login/test")
 	u, _ := url.Parse(srv.URL)
@@ -821,6 +823,7 @@ func TestHostedDomain(t *testing.T) {
 		c.Access = AccessConfig{Viewers: Grants{{Domains: []string{"example.com"}}}}
 		c.Providers = []ProviderConfig{{Name: "google", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret, HostedDomains: []string{"Example.com"}}}
 	})
+	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/google")
 	tests := []struct {
 		name       string
 		hd         any
@@ -864,6 +867,7 @@ func TestSessionsFollowProviderConfig(t *testing.T) {
 		c.Access = access
 		c.Providers = []ProviderConfig{google}
 	})
+	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/google")
 	issuer.SetClaim("hd", "example.com")
 	browser := authtest.Browser(t)
 	if status, _ := get(t, browser, srv.URL+"/v1/auth/login/google"); status != http.StatusOK {
@@ -925,6 +929,8 @@ func TestAuthoritativeDomains(t *testing.T) {
 		}
 	})
 	useFakeGitHub(a, "gh", gh)
+	corp.RegisterRedirect(srv.URL + "/v1/auth/callback/corp")
+	partner.RegisterRedirect(srv.URL + "/v1/auth/callback/partner")
 
 	tests := []struct {
 		name, provider, email string

@@ -58,6 +58,7 @@ func newAuthTestServerWith(t *testing.T, access auth.AccessConfig) *authTestServ
 	if err != nil {
 		t.Fatal(err)
 	}
+	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/test")
 	return &authTestServer{Server: srv, issuer: issuer}
 }
 
