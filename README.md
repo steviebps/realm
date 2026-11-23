@@ -790,7 +790,7 @@ curl -X POST http://localhost:8080/v1/evaluate/prod/web/ \
 Until the first evaluation arrives, the hooks return their fallbacks, or
 the `bootstrap` or stored values for the context if you set the client's
 `bootstrap` or `storage` options (see
-[Starting offline](sdk/typescript/README.md#starting-offline));
+[Start offline](sdk/typescript/README.md#start-offline));
 `useRealmStatus()` tells you when it has arrived and where the values came from. When a value changes on the server,
 React renders the components that use that flag again. For every hook, refer
 to [sdk/typescript/README.md](sdk/typescript/README.md#react).
@@ -1014,3 +1014,8 @@ realm client get /prod/checkout/
 ## License
 
 realm is licensed under the Apache License 2.0. Refer to [LICENSE.txt](LICENSE.txt).
+
+The release archives and the container image (in `/usr/share/doc/realm/`)
+also carry `THIRD_PARTY_NOTICES.md`: the licenses of the Go modules and UI
+packages built into realm, written by `go run ./scripts/notices` after the UI
+is built. The running server serves the UI's part at `/ui/licenses.md`.

@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -28,10 +29,13 @@ const (
 
 // Issuer is a fake OIDC issuer that approves every authorization request as
 // the current user, checking PKCE and echoing the nonce like a real issuer.
+// Like a real issuer, it sends the browser back only to a redirect URI
+// registered with RegisterRedirect.
 type Issuer struct {
 	*httptest.Server
 
 	mu            sync.Mutex
+	redirectURIs  []string
 	email         string
 	emailVerified bool
 	extra         map[string]any
@@ -98,6 +102,15 @@ func (iss *Issuer) SetClaim(name string, value any) {
 	iss.extra[name] = value
 }
 
+// RegisterRedirect registers uri, such as
+// "<externalURL>/v1/auth/callback/<provider>", as a redirect URI of the
+// client. An authorization request naming any other redirect_uri is refused.
+func (iss *Issuer) RegisterRedirect(uri string) {
+	iss.mu.Lock()
+	defer iss.mu.Unlock()
+	iss.redirectURIs = append(iss.redirectURIs, uri)
+}
+
 // LastAuthorize returns the query parameters of the latest authorization
 // request.
 func (iss *Issuer) LastAuthorize() url.Values {
@@ -125,13 +138,21 @@ func (iss *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	code := rand.Text()
 	iss.mu.Lock()
+	i := slices.Index(iss.redirectURIs, q.Get("redirect_uri"))
+	if i < 0 {
+		iss.mu.Unlock()
+		http.Error(w, "unregistered redirect_uri", http.StatusBadRequest)
+		return
+	}
+	// Redirect to the registered URI, never to the request's value.
+	redirectURI := iss.redirectURIs[i]
 	iss.lastAuthorize = q
-	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: q.Get("redirect_uri"), email: iss.email, verified: iss.emailVerified, extra: maps.Clone(iss.extra)}
+	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: redirectURI, email: iss.email, verified: iss.emailVerified, extra: maps.Clone(iss.extra)}
 	iss.mu.Unlock()
 
-	target, err := url.Parse(q.Get("redirect_uri"))
+	target, err := url.Parse(redirectURI)
 	if err != nil {
-		http.Error(w, "bad redirect_uri", http.StatusBadRequest)
+		http.Error(w, "bad registered redirect URI", http.StatusInternalServerError)
 		return
 	}
 	v := target.Query()

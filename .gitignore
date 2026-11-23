@@ -3,3 +3,5 @@ realm
 .realm/
 realm.exe
 e2e-server.log
+# written by scripts/notices for releases
+/THIRD_PARTY_NOTICES.md
