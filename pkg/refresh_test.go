@@ -65,6 +65,13 @@ func (b *syncBuffer) Write(p []byte) (int, error) {
 	return b.buf.Write(p)
 }
 
+// String returns what has been written so far.
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 // count returns how many lines contain s.
 func (b *syncBuffer) count(s string) int {
 	b.mu.Lock()
@@ -405,10 +412,16 @@ func TestFailuresAreLoggedOnce(t *testing.T) {
 	if !eventually(5*time.Second, func() bool { return msg(rlm) == "one" }) {
 		t.Fatal("did not recover")
 	}
-	if n := logs.count("could not load flags"); n != 1 {
-		t.Errorf("%d failure lines for %d failures, want 1:\n%s", n, requests.Load()-1, logs.buf.String())
+	// The recovery is logged just after the new snapshot is published, so
+	// wait for the line rather than count it as soon as the flags change.
+	const recovered = "flags loaded after earlier failures"
+	if !eventually(5*time.Second, func() bool { return logs.count(recovered) > 0 }) {
+		t.Fatalf("recovery not logged:\n%s", logs.String())
 	}
-	if n := logs.count("flags loaded after earlier failures"); n != 1 {
+	if n := logs.count("could not load flags"); n != 1 {
+		t.Errorf("%d failure lines for %d failures, want 1:\n%s", n, requests.Load()-1, logs.String())
+	}
+	if n := logs.count(recovered); n != 1 {
 		t.Errorf("%d recovery lines, want 1", n)
 	}
 }
