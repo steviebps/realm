@@ -15,6 +15,8 @@ type Props = {
   type: RuleType;
   catalog: Catalog;
   attributes: string[];
+  /** Rollout seeds used in this chamber and the ones above it, suggested for the seed field. */
+  seeds: string[];
   /** The constraints the rule's value must satisfy. */
   bounds: Bound[];
   onChange: (rule: TargetingRule) => void;
@@ -34,6 +36,7 @@ export const RuleEditor = ({
   type,
   catalog,
   attributes,
+  seeds,
   bounds,
   onChange,
   onMove,
@@ -185,7 +188,7 @@ export const RuleEditor = ({
           onChange={(on) => onChange({ ...rule, rollout: on ? { percentage: 10 } : undefined })}
         />
         {rule.rollout && (
-          <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[2fr_1fr]">
+          <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-[2fr_1fr_1fr]">
             <div>
               <Label htmlFor={`${attrListId}-pct`}>
                 {rule.rollout.percentage}% of matching {rule.rollout.bucketBy || 'key'}s
@@ -215,6 +218,29 @@ export const RuleEditor = ({
                 }
               />
             </div>
+            <div>
+              <Label htmlFor={`${attrListId}-seed`}>Seed</Label>
+              <TextInput
+                id={`${attrListId}-seed`}
+                sizing="sm"
+                className="[&_input]:font-mono"
+                list={`${attrListId}-seeds`}
+                placeholder="flag key"
+                value={rule.rollout.seed ?? ''}
+                onChange={(e) =>
+                  onChange({ ...rule, rollout: { ...rule.rollout!, seed: e.target.value || undefined } })
+                }
+              />
+              <datalist id={`${attrListId}-seeds`}>
+                {seeds.map((s) => (
+                  <option key={s} value={s} />
+                ))}
+              </datalist>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400 sm:col-span-3">
+              Without a seed, each flag picks its own {rule.rollout.bucketBy || 'key'}s. Rollouts that share a seed
+              reach the same ones, and changing the seed picks new ones.
+            </p>
           </div>
         )}
       </div>

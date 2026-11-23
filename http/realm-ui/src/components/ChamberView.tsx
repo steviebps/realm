@@ -44,6 +44,8 @@ const attributesIn = (flags: Flag[]) =>
     rulesOf(f).flatMap((r) => [...(r.clauses ?? []).map((c) => c.attribute), r.rollout?.bucketBy ?? ''])
   );
 
+const seedsIn = (flags: Flag[]) => flags.flatMap((f) => rulesOf(f).map((r) => r.rollout?.seed ?? ''));
+
 /** Says that the user may not read the chamber at path, and links the chambers they may read. */
 const NoAccess = ({ path }: { path: string }) => {
   const readable = useSession().user?.paths ?? [];
@@ -122,6 +124,7 @@ export const ChamberView = ({ path }: { path: string }) => {
       ].filter(Boolean)
     )
   ).sort();
+  const seeds = Array.from(new Set(seedsIn([...Object.values(own.rules), ...inheritedFlags]).filter(Boolean))).sort();
   const typed = newName.trim();
   const typedInherited = typed in own.rules ? undefined : get(prov?.inherited, typed);
   // a parent that seals the typed key: this chamber cannot define it
@@ -386,6 +389,7 @@ export const ChamberView = ({ path }: { path: string }) => {
           flag={editing.flag}
           catalog={catalog}
           attributes={attributes}
+          seeds={seeds}
           parentBounds={parentBounds(lineage, editing.name, editing.flag.type)}
           onCancel={() => setEditing(null)}
           onReview={(flag) => {

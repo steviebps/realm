@@ -29,7 +29,8 @@ export const describeRule = (rule: TargetingRule, catalog: Catalog) => {
   const when = rule.clauses?.length ? rule.clauses.map((c) => describeClause(c, catalog)).join(' AND ') : 'everyone';
   let serve = `serve ${formatValue(rule.value)}`;
   if (rule.rollout) {
-    serve += ` to ${rule.rollout.percentage}% (by ${rule.rollout.bucketBy || 'key'})`;
+    const seed = rule.rollout.seed ? `, seed ${rule.rollout.seed}` : '';
+    serve += ` to ${rule.rollout.percentage}% (by ${rule.rollout.bucketBy || 'key'}${seed})`;
   }
   if (rule.schedule) {
     serve += `, ${describeSchedule(rule.schedule)}`;
