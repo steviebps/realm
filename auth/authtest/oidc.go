@@ -13,6 +13,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -110,20 +111,6 @@ func (iss *Issuer) RegisterRedirect(uri string) {
 	iss.redirectURIs = append(iss.redirectURIs, uri)
 }
 
-// registeredRedirect returns the registered redirect URI equal to uri, so
-// that a redirect goes to a URI the test registered, never to one taken from
-// the request.
-func (iss *Issuer) registeredRedirect(uri string) (string, bool) {
-	iss.mu.Lock()
-	defer iss.mu.Unlock()
-	for _, registered := range iss.redirectURIs {
-		if registered == uri {
-			return registered, true
-		}
-	}
-	return "", false
-}
-
 // LastAuthorize returns the query parameters of the latest authorization
 // request.
 func (iss *Issuer) LastAuthorize() url.Values {
@@ -149,22 +136,25 @@ func (iss *Issuer) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad authorization request", http.StatusBadRequest)
 		return
 	}
-	redirectURI, ok := iss.registeredRedirect(q.Get("redirect_uri"))
-	if !ok {
+	code := rand.Text()
+	iss.mu.Lock()
+	i := slices.Index(iss.redirectURIs, q.Get("redirect_uri"))
+	if i < 0 {
+		iss.mu.Unlock()
 		http.Error(w, "unregistered redirect_uri", http.StatusBadRequest)
 		return
 	}
-	target, err := url.Parse(redirectURI)
-	if err != nil {
-		http.Error(w, "bad redirect_uri", http.StatusBadRequest)
-		return
-	}
-	code := rand.Text()
-	iss.mu.Lock()
+	// Redirect to the registered URI, never to the request's value.
+	redirectURI := iss.redirectURIs[i]
 	iss.lastAuthorize = q
 	iss.codes[code] = grant{nonce: q.Get("nonce"), challenge: q.Get("code_challenge"), redirectURI: redirectURI, email: iss.email, verified: iss.emailVerified, extra: maps.Clone(iss.extra)}
 	iss.mu.Unlock()
 
+	target, err := url.Parse(redirectURI)
+	if err != nil {
+		http.Error(w, "bad registered redirect URI", http.StatusInternalServerError)
+		return
+	}
 	v := target.Query()
 	v.Set("code", code)
 	v.Set("state", q.Get("state"))

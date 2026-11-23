@@ -474,6 +474,13 @@ func realmServer(t *testing.T, configure func(*Config)) (*Authenticator, *httpte
 	return a, srv
 }
 
+// testOIDCProvider configures the OIDC provider name to sign in through iss, and
+// registers its callback URL with iss.
+func testOIDCProvider(c *Config, name string, iss *authtest.Issuer) ProviderConfig {
+	iss.RegisterRedirect(c.ExternalURL + CallbackPath + name)
+	return ProviderConfig{Name: name, Type: ProviderOIDC, Issuer: iss.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}
+}
+
 func get(t *testing.T, c *http.Client, target string) (int, string) {
 	t.Helper()
 	res, err := c.Get(target)
@@ -493,9 +500,8 @@ func TestOIDCSignIn(t *testing.T) {
 			Editors: Grants{{Emails: []string{"support@partner.io"}, Paths: []string{"/prod/tenants/"}}},
 			Viewers: Grants{{Domains: []string{"example.com"}}},
 		}
-		c.Providers = []ProviderConfig{{Name: "test", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}}
+		c.Providers = []ProviderConfig{testOIDCProvider(c, "test", issuer)}
 	})
-	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/test")
 
 	t.Run("admin signs in and returns where they started", func(t *testing.T) {
 		browser := authtest.Browser(t)
@@ -585,9 +591,8 @@ func TestCrossOriginWritesAreRefused(t *testing.T) {
 	issuer := authtest.NewIssuer(t, "owner@example.com")
 	a, srv := realmServer(t, func(c *Config) {
 		c.Access = AccessConfig{Admins: Grants{{Emails: []string{"owner@example.com"}}}}
-		c.Providers = []ProviderConfig{{Name: "test", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}}
+		c.Providers = []ProviderConfig{testOIDCProvider(c, "test", issuer)}
 	})
-	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/test")
 	browser := authtest.Browser(t)
 	get(t, browser, srv.URL+"/v1/auth/login/test")
 	u, _ := url.Parse(srv.URL)
@@ -821,9 +826,10 @@ func TestHostedDomain(t *testing.T) {
 	issuer := authtest.NewIssuer(t, "someone@example.com")
 	_, srv := realmServer(t, func(c *Config) {
 		c.Access = AccessConfig{Viewers: Grants{{Domains: []string{"example.com"}}}}
-		c.Providers = []ProviderConfig{{Name: "google", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret, HostedDomains: []string{"Example.com"}}}
+		google := testOIDCProvider(c, "google", issuer)
+		google.HostedDomains = []string{"Example.com"}
+		c.Providers = []ProviderConfig{google}
 	})
-	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/google")
 	tests := []struct {
 		name       string
 		hd         any
@@ -862,12 +868,12 @@ func TestHostedDomain(t *testing.T) {
 func TestSessionsFollowProviderConfig(t *testing.T) {
 	issuer := authtest.NewIssuer(t, "someone@example.com")
 	access := AccessConfig{Viewers: Grants{{Domains: []string{"example.com"}}}}
-	google := ProviderConfig{Name: "google", Type: ProviderOIDC, Issuer: issuer.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret}
+	var google ProviderConfig
 	_, srv := realmServer(t, func(c *Config) {
+		google = testOIDCProvider(c, "google", issuer)
 		c.Access = access
 		c.Providers = []ProviderConfig{google}
 	})
-	issuer.RegisterRedirect(srv.URL + "/v1/auth/callback/google")
 	issuer.SetClaim("hd", "example.com")
 	browser := authtest.Browser(t)
 	if status, _ := get(t, browser, srv.URL+"/v1/auth/login/google"); status != http.StatusOK {
@@ -922,15 +928,15 @@ func TestAuthoritativeDomains(t *testing.T) {
 			Editors: Grants{{Domains: []string{"example.com"}}},
 			Viewers: Grants{{Domains: []string{"partner.io"}}},
 		}
+		corpProvider := testOIDCProvider(c, "corp", corp)
+		corpProvider.AuthoritativeDomains = []string{"example.com"}
 		c.Providers = []ProviderConfig{
-			{Name: "corp", Type: ProviderOIDC, Issuer: corp.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret, AuthoritativeDomains: []string{"example.com"}},
-			{Name: "partner", Type: ProviderOIDC, Issuer: partner.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret},
+			corpProvider,
+			testOIDCProvider(c, "partner", partner),
 			{Name: "gh", Type: ProviderGitHub, ClientID: "id", ClientSecret: "secret"},
 		}
 	})
 	useFakeGitHub(a, "gh", gh)
-	corp.RegisterRedirect(srv.URL + "/v1/auth/callback/corp")
-	partner.RegisterRedirect(srv.URL + "/v1/auth/callback/partner")
 
 	tests := []struct {
 		name, provider, email string
