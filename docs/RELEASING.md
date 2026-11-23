@@ -81,20 +81,35 @@ is set up on npm. To turn it on:
 
 1. **Publish the first version from your machine.** npm only lets you add a
    trusted publisher to a package that already exists. Use a version that
-   can't collide with a future tag, such as `0.0.1`:
+   can't collide with a future tag, such as `0.0.1`. Pass
+   `--provenance=false`: the package's `publishConfig` asks for provenance,
+   which npm can only generate in CI.
 
    ```bash
    cd sdk/typescript && npm ci && npm version 0.0.1 --no-git-tag-version
-   npm publish --access public
+   npm publish --access public --provenance=false
    git checkout package.json package-lock.json
    ```
 
 2. **Add the trusted publisher, shortly before the next tag.** On
-   npmjs.com, open the package's settings, add a trusted publisher for
-   GitHub Actions with repository `steviebps/realm` and workflow
-   `release.yml`, and disallow token publishing. npm expires a trusted
-   publisher that hasn't published within 48 hours of being added, so do
-   this when you are about to release, and add it again if it lapses.
+   npmjs.com, open the package's **Settings**:
+   - Under **Trusted publishing**, choose GitHub Actions: organization or
+     user `steviebps`, repository `realm`, workflow filename `release.yml`,
+     no environment. Under **Allowed actions**, check **Allow `npm
+     publish`** and leave **Allow `npm dist-tag`** unchecked. npm marks
+     the first "Not recommended": without it, the workflow could only
+     stage each version for a maintainer to approve on npmjs.com, and the
+     release workflow publishes directly so that one tag releases
+     everything. It sets the dist-tag (`latest` or `next`) as it
+     publishes, so it never runs `npm dist-tag`.
+   - Under **Publishing access**, choose "Require two-factor authentication
+     and disallow tokens", then **Update Package Settings**. The trusted
+     publisher still works: it authenticates with OIDC, not a token.
+
+   A new trusted publisher expires if it doesn't publish within two days,
+   so add it when you are about to release. If it lapses, delete it and
+   add a new one.
+
 3. **Enable the job.** Under Settings → Secrets and variables → Actions →
    Variables, add the repository variable `NPM_PUBLISH` with the value
    `true`.
