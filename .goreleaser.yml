@@ -3,6 +3,8 @@ version: 2
 before:
   hooks:
     - go mod download
+    # the notices the archives ship; the release workflow builds the UI first
+    - go run ./scripts/notices -o THIRD_PARTY_NOTICES.md
 builds:
   - env:
       - CGO_ENABLED=0
@@ -25,7 +27,11 @@ archives:
     format_overrides:
       - goos: windows
         formats: zip
+    # replaces GoReleaser's default list, so the license files are named here
     files:
+      - LICENSE.txt
+      - THIRD_PARTY_NOTICES.md
+      - README.md
       - configs/*
 checksum:
   name_template: 'checksums.txt'
@@ -56,4 +62,4 @@ homebrew_casks:
       template: https://github.com/steviebps/realm/releases/download/{{ .Tag }}/{{ .ArtifactName }}
       using: ":homebrew_curl"
     homepage: "https://github.com/steviebps/realm"
-    license: "Apache 2.0"
+    license: "Apache-2.0"

@@ -28,6 +28,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=ui /src/http/realm-ui/dist ./http/realm-ui/dist
+# The third-party notices the image ships (scripts/notices), the same for
+# every architecture.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    go run ./scripts/notices -o THIRD_PARTY_NOTICES.md
 # Declared late so the layers above are shared across architectures and versions.
 ARG TARGETOS TARGETARCH
 ARG VERSION=development
@@ -42,6 +46,7 @@ LABEL org.opencontainers.image.title="realm" \
       org.opencontainers.image.source="https://github.com/steviebps/realm" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=build /out/realm /usr/local/bin/realm
+COPY --from=build /src/LICENSE.txt /src/THIRD_PARTY_NOTICES.md /usr/share/doc/realm/
 # Writable data directory for the file and boltdb backends; WORKDIR creates it
 # owned by the image's nonroot user.
 USER nonroot:nonroot
