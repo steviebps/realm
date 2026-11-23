@@ -25,6 +25,8 @@ type Props = {
   flag: Flag;
   catalog: Catalog;
   attributes: string[];
+  /** Rollout seeds used in this chamber and the ones above it, suggested for each rule's seed. */
+  seeds: string[];
   /** The constraints of the flag in the chambers above, farthest first: every value must satisfy them too. */
   parentBounds: Bound[];
   onCancel: () => void;
@@ -40,7 +42,7 @@ const newRuleKey = () => `rule-${nextRuleKey++}`;
 /** An empty text field removes its field from the flag. */
 const orUndefined = (s: string) => (s.trim() === '' ? undefined : s);
 
-export const FlagEditor = ({ name, flag, catalog, attributes, parentBounds, onCancel, onReview }: Props) => {
+export const FlagEditor = ({ name, flag, catalog, attributes, seeds, parentBounds, onCancel, onReview }: Props) => {
   const [draft, setDraft] = useState<Flag>(() => structuredClone(flag));
   // Kept apart from the draft, which can't be paused without rules, so that rules added while targeting is off stay
   // paused.
@@ -142,6 +144,7 @@ export const FlagEditor = ({ name, flag, catalog, attributes, parentBounds, onCa
                 type={draft.type}
                 catalog={catalog}
                 attributes={attributes}
+                seeds={seeds}
                 bounds={bounds}
                 onChange={(r) =>
                   setRules(
