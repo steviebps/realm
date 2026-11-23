@@ -1014,3 +1014,8 @@ realm client get /prod/checkout/
 ## License
 
 realm is licensed under the Apache License 2.0. Refer to [LICENSE.txt](LICENSE.txt).
+
+The release archives and the container image (in `/usr/share/doc/realm/`)
+also carry `THIRD_PARTY_NOTICES.md`: the licenses of the Go modules and UI
+packages built into realm, written by `go run ./scripts/notices` after the UI
+is built. The running server serves the UI's part at `/ui/licenses.md`.
