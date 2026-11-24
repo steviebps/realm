@@ -134,3 +134,28 @@ export interface EvaluatedFlag {
 
 /** Flag results keyed by flag name. */
 export type EvaluatedFlags = Record<string, EvaluatedFlag>;
+
+/**
+ * Flags evaluated on the server for one context, for a page rendered there:
+ * pass it to the BrowserClient that renders the page on the server and to
+ * the one that hydrates it in the browser, so both serve the same values
+ * from the first render. ServerClient.initialState makes one. It is plain
+ * JSON; serializeInitialState writes it safely into an HTML page.
+ */
+export interface InitialState {
+  /** Who the flags were evaluated for, as the server receives contexts. */
+  context: EvaluationContext;
+  /**
+   * Every flag's value for context, in the shape allFlags returns; absent
+   * when the ServerClient had no chamber for context (before its first load,
+   * say), so the page renders fallbacks and is not ready.
+   */
+  flags?: EvaluatedFlags;
+  /**
+   * The path of the chamber evaluated, which a BrowserClient without a path
+   * option evaluates too.
+   */
+  path?: string;
+  /** The server's storage revision of the chamber evaluated, if it reported one. */
+  revision?: number;
+}

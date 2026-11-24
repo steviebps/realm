@@ -41,4 +41,38 @@ describe.skipIf(!address)('against a real server', () => {
       client.stop();
     }
   });
+
+  it('ServerClient.initialState matches the server\'s evaluation, so a hydrated page keeps its values', async () => {
+    await put('e2e/ts/ssr/', {
+      rules: {
+        plan: {
+          type: 'string',
+          value: 'free',
+          targeting: [{ clauses: [{ attribute: 'tier', op: 'in', values: ['3'] }], value: 'pro' }],
+        },
+      },
+    });
+    // process-wide attributes would make the render's values differ from the browser's
+    const server = new ServerClient({ address: address!, path: '/e2e/ts/ssr/', attributes: { tier: '3' } });
+    try {
+      await server.start();
+      for (const context of [{ key: 'vip' }, { key: 'u1', attributes: { tier: 3 } }, { key: 'u2' }]) {
+        const state = server.initialState(context as never);
+        const browser = new BrowserClient({ address: address!, path: '/e2e/ts/ssr/', initialState: state, streaming: false });
+        try {
+          expect(browser.source()).toBe('render');
+          const rendered = browser.allFlags();
+          await browser.start();
+          expect(browser.source()).toBe('network');
+          expect(browser.allFlags()).toEqual(rendered);
+        } finally {
+          browser.stop();
+        }
+      }
+      expect(server.initialState({ key: 'u1', attributes: { tier: '3' } }).flags?.plan?.value).toBe('pro');
+      expect(server.initialState({ key: 'u2' }).flags?.plan?.value).toBe('free');
+    } finally {
+      server.stop();
+    }
+  });
 });

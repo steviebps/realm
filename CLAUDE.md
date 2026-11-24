@@ -42,7 +42,9 @@ viewer / editor / admin roles for the UI, each granted on every chamber or
 only beneath a grant's `paths` (per-path roles; admins are realm-wide).
 Browsers use **server-side evaluation** (`POST /v1/evaluate/<path>`, with
 public `evaluate` keys) through the **TypeScript SDK** (`sdk/typescript`),
-which also evaluates locally for Node services. Reads, evaluations, and
+which also evaluates locally for Node services, and renders React pages on
+the server with each user's values (`ServerClient.initialState` → a
+`BrowserClient`'s `initialState`), hydrating without a mismatch. Reads, evaluations, and
 stream events carry the storage revision of the (inherited) chamber
 (`X-Realm-Revision`, event `id`), which the SDKs expose (`Realm.Revision(ctx)`,
 `revision()`). A multi-tenant service can read or watch every chamber below
@@ -155,7 +157,7 @@ model.
 | `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`, `etcd`) and wrappers (`cacheable`, `inheritable`, which reuses unchanged chambers' parses and merged views via `inheritable_cache.go`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`, and `Scanner` (one range read of a prefix: `postgres`, `etcd`, `boltdb`) in `scan.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking; `subtree.go`: `ListTree` (the paths below a root, capped; one `ScanKeys` on a `Scanner`), `ReadTree` (each view, reading each chamber once, with one `Scan` when it can), `WalkTree`, `ScanLayers`, `ReadLayers` (`ScanLayers` or a read each), `BuildView` |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
-| `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`; `pathTemplate` via `src/template.ts` and `src/subtree.ts`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`) |
+| `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`; `pathTemplate` via `src/template.ts` and `src/subtree.ts`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`; server rendering and hydration read the client's construction-time `initialState` / `bootstrap`, made by `ServerClient.initialState`) |
 | `sdk/conformance/` | Cases the Go and TypeScript tests both run: `evaluation.json` (evaluation; `pkg/conformance_test.go`), `subtree.json` (path-template resolution; `pkg/template_test.go`, `test/subtree.test.ts`), `constraints.json` (constraint schemas and values; `pkg/schema_test.go`, `http/realm-ui/src/utils/constraints.test.ts`) |
 | `http/` | Server handler (`handler.go`), constraints across chambers (`constraints.go`), request lifecycle: per-request deadlines, request IDs, access log, panic recovery (`lifecycle.go`), evaluation endpoint and CORS (`evaluate.go`), subtree reads and watches with the per-change shared view cache (`subtree.go`) and their gzip (`compress.go`: `Accept-Encoding` parsing, a pooled per-batch deflate writer with sync flushes), stream broker (`broker.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI serving (`ui.go`; files embedded by `assets.go` behind the `ui` build tag, `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |

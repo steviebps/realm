@@ -33,6 +33,7 @@ if (realm.bool('new-checkout', { key: user.id, attributes: { tenantId: user.tena
 - [Read flags on a server: `ServerClient`](#read-flags-on-a-server-serverclient)
 - [Read flags in a browser: `BrowserClient`](#read-flags-in-a-browser-browserclient)
 - [React](#react)
+  - [Server rendering](#server-rendering)
 - [How clients stay current](#how-clients-stay-current)
 - [API reference](#api-reference)
 - [Learn more](#learn-more)
@@ -184,6 +185,7 @@ realm.string('banner', context, '');
 realm.number('max-items', context, 50);
 realm.json<{ limit: number }>('quota', context, { limit: 10 }); // a copy you may change
 realm.allFlags(context); // every flag's value, for example to bootstrap a page
+realm.initialState(context); // the same, for a page rendered on the server (see Server rendering)
 ```
 
 Attributes in the context win over the process-wide `attributes` and
@@ -293,6 +295,9 @@ flags.source(); // 'cache' if this context was evaluated here before, else 'boot
 void flags.start().catch(() => {}); // offline: keeps serving those values and retries
 ```
 
+For a page rendered on the server, use the `initialState` option instead;
+see [Server rendering](#server-rendering).
+
 **`storage`** saves the latest evaluated values (never the rules) for each
 context, and reads them back for that context only:
 
@@ -320,6 +325,7 @@ to another context. When storage holds values for the context, those win.
 | `source()` | Values are | `isReady()` |
 |---|---|---|
 | `undefined` | none yet: getters return their fallbacks | `false` |
+| `'render'` | from the `initialState` option: a server render's evaluation | `true` |
 | `'bootstrap'` | from the `bootstrap` option | `false` |
 | `'cache'` | from `storage`: an earlier evaluation of this context | `false` |
 | `'network'` | the server's evaluation for the current context | `true` |
@@ -370,14 +376,135 @@ does not trigger that.
 | `useNumberFlag(flag, fallback)` | a number flag's value |
 | `useJsonFlag<T>(flag, fallback)` | a custom (JSON) flag's value: the component's own copy, the same object until the value changes |
 | `useAllFlags()` | every flag's value (read only) |
-| `useRealmStatus()` | `{ ready, source, error }`: whether the evaluation for the current context has arrived, where the values came from, and why starting failed, if it did |
+| `useRealmStatus()` | `{ ready, source, error }`: whether the evaluation for the current context has arrived (or a server render's, from `initialState`), where the values came from, and why starting failed, if it did |
 | `useRealmClient()` | the provider's `BrowserClient` |
 
 Until the provider's context has values, hooks return their fallbacks, or
 the `bootstrap` or stored values for that context if you set those options;
 `ready` stays `false` until the server answers. Hooks throw outside a
-`RealmProvider`. During server rendering (`renderToString` and friends), flag
-hooks return their fallbacks.
+`RealmProvider`.
+
+### Server rendering
+
+A page rendered on the server (`renderToString`, `renderToPipeableStream`,
+Next.js, Remix, …) can render with the right flag values for its user, and
+hydrate in the browser without a flash of fallbacks or a hydration mismatch.
+Your server evaluates the user's flags once with a `ServerClient`, renders
+with them, and sends them with the page; the browser's `BrowserClient` starts
+from the same values, then keeps them current.
+
+1. Make the client in one place, from an `InitialState`, so the server and the
+   browser build it the same way:
+
+   ```ts
+   // flags.ts
+   import { BrowserClient, localStorageAdapter, type InitialState } from '@steviebps/realm-sdk';
+
+   export function createFlags(initialState?: InitialState) {
+     return new BrowserClient({
+       address: 'https://realm.example.com',
+       token: 'realm_…', // an evaluate key
+       path: '/prod/web/',
+       initialState, // also sets the context
+       storage: localStorageAdapter(), // stores nothing on the server
+     });
+   }
+   ```
+
+2. On the server, evaluate the request's context and render with a client
+   made for that request (never share one between requests). Effects don't
+   run on the server, so this client never makes a request:
+
+   ```tsx
+   import { serializeInitialState, ServerClient } from '@steviebps/realm-sdk';
+   import { renderToString } from 'react-dom/server';
+
+   const realm = new ServerClient({ address: 'https://realm.example.com', token: process.env.REALM_TOKEN, path: '/prod/web/' });
+   await realm.start(); // once, at startup
+
+   app.get('*', (req, res) => {
+     const initialState = realm.initialState({ key: req.user.id, attributes: { tenantId: req.user.tenantId } });
+     const html = renderToString(<App flags={createFlags(initialState)} />);
+     res.send(`<!doctype html><div id="root">${html}</div>
+       <script id="realm-state" type="application/json">${serializeInitialState(initialState)}</script>
+       <script type="module" src="/client.js"></script>`);
+   });
+   ```
+
+3. In the browser, hydrate with the same state:
+
+   ```tsx
+   import { hydrateRoot } from 'react-dom/client';
+
+   const initialState = JSON.parse(document.getElementById('realm-state')!.textContent!);
+   hydrateRoot(document.getElementById('root')!, <App flags={createFlags(initialState)} />);
+   ```
+
+   ```tsx
+   export function App({ flags }: { flags: BrowserClient }) {
+     return (
+       <RealmProvider client={flags}>
+         <Checkout />
+       </RealmProvider>
+     );
+   }
+   ```
+
+`App` can also pass the provider a `context` prop, as above; give it the same
+context the state was made for (attribute order doesn't matter, and numbers
+match their strings), or hooks render fallbacks for it.
+
+On the server and while the page hydrates (even content inside `Suspense`
+that hydrates late), hooks return exactly the state's values, with
+`useRealmStatus()` reporting `{ ready: true, source: 'render' }`, so
+components that wait for `ready` render real content and React never sees a
+mismatch. After hydration the client evaluates the same context on the
+server and keeps it current; values in `storage`, which are older, never
+show through.
+
+`initialState(context)` evaluates the context as the browser's client will
+ask the server to, so the values don't change when that evaluation arrives.
+So the `ServerClient`'s process-wide `attributes` and `version` are not
+applied: put attributes the browser needs in the context. The state carries
+the `path` of the chamber it was evaluated from (with `pathTemplate`, resolved
+the same way), which the browser's client evaluates unless you give it a
+`path`. Until the `ServerClient` has a chamber for the context (before its
+first load, say), the state has no flags, and the page renders fallbacks with
+`ready` `false`.
+
+If `start()` fails in the browser (a wrong key, say), `ready` stays `true`
+for the rendered values, and `useRealmStatus().error` says why. A page served
+from an HTTP cache carries its state from when it was rendered, which wins
+over stored values until the browser's evaluation arrives; don't cache pages
+rendered for a user.
+
+Write the state into HTML with `serializeInitialState` (or your framework's
+own serialization), not plain `JSON.stringify`: it escapes `<`, `>`, and `&`,
+so a context attribute can't close the `<script>` element.
+
+With a framework such as Next.js, pass the state as a prop from server code
+and make the client once per page in a client component:
+
+```tsx
+'use client';
+export function Flags({ initialState, children }: { initialState: InitialState; children: ReactNode }) {
+  const [flags] = useState(() => createFlags(initialState));
+  return <RealmProvider client={flags}>{children}</RealmProvider>;
+}
+```
+
+```tsx
+// app/layout.tsx, a server component
+const initialState = realm.initialState({ key: user.id, attributes: { tenantId: user.tenantId } });
+return <Flags initialState={initialState}>{children}</Flags>;
+```
+
+Server components can't use hooks; read flags in them with the
+`ServerClient` directly (`realm.bool('new-checkout', context, false)`).
+
+A client built with `bootstrap` instead also renders those values on the
+server and while hydrating, but as `source: 'bootstrap'`, with `ready`
+`false`. Without either option, hooks render their fallbacks on the server.
 
 ## How clients stay current
 
@@ -452,9 +579,10 @@ Both clients take these options:
 
 | Option | Default | Description |
 |---|---|---|
-| `context` | `{}` | Who flags are evaluated for; change it with `identify`. |
+| `context` | `{}`, or `initialState`'s | Who flags are evaluated for; change it with `identify`. |
 | `storage` | none | Where to keep each context's latest values. See [Start offline](#start-offline). |
 | `bootstrap` | none | Evaluated values for `context` to serve until the server answers. |
+| `initialState` | none | A server render's evaluation, from `ServerClient.initialState`. See [Server rendering](#server-rendering). |
 
 ### `ServerClient`
 
@@ -468,6 +596,7 @@ Both clients take these options:
 | `number(flag, context, fallback)` | A number flag's value. |
 | `json<T>(flag, context, fallback)` | A custom (JSON) flag's value, as a copy. |
 | `allFlags(context)` | Every flag's value for `context`. |
+| `initialState(context)` | `{ context, flags, path, revision }` for a page rendered on the server. See [Server rendering](#server-rendering). |
 | `subscribe(listener)` | Calls `listener` when the data changes; returns a function that unsubscribes. |
 | `revision(context?)` | The server's revision of the chamber (the context's chamber, with `pathTemplate`). |
 | `chamberPath(context?)` | The chamber a context is evaluated against. |
@@ -479,8 +608,8 @@ Both clients take these options:
 | `start()` | Evaluates for the current context and starts keeping values current. |
 | `stop()` | Stops refreshing and closes the stream. |
 | `identify(context)` | Switches to a new context and evaluates for it. |
-| `isReady()` | Whether the values are the server's evaluation for the current context. |
-| `source()` | Where the current values came from: `'bootstrap'`, `'cache'`, `'network'`, or `undefined`. |
+| `isReady()` | Whether the values are the server's evaluation for the current context (or a server render's). |
+| `source()` | Where the current values came from: `'render'`, `'bootstrap'`, `'cache'`, `'network'`, or `undefined`. |
 | `bool(flag, fallback)` | A boolean flag's value. |
 | `string(flag, fallback)` | A string flag's value. |
 | `number(flag, fallback)` | A number flag's value. |
@@ -488,6 +617,12 @@ Both clients take these options:
 | `allFlags()` | Every flag's value. The object is shared: treat it as read only. |
 | `subscribe(listener)` | Calls `listener` when a value or the source changes; returns a function that unsubscribes. |
 | `revision()` | The server's revision of the chamber the values came from. |
+
+### Functions
+
+| Function | Description |
+|---|---|
+| `serializeInitialState(state)` | `state` as JSON that is safe inside an HTML `<script>` element. |
 
 ## Learn more
 

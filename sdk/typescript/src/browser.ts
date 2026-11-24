@@ -1,18 +1,35 @@
 import { copyValue, normalizeContext, typedValue } from './evaluate.js';
 import { isRecord, Snapshot } from './snapshot.js';
-import { decodeFlags, isPromise, storageKey, touch, type StorageAdapter } from './storage.js';
+import { canonicalContext, decodeFlags, isPromise, storageKey, touch, type StorageAdapter } from './storage.js';
 import { asError, pollingInterval, RealmError, sinkFeed, Transport, type ClientOptions, type Following } from './transport.js';
-import type { EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
+import type { EvaluatedFlags, EvaluationContext, FlagType, InitialState } from './types.js';
 
 /** Options for a BrowserClient. */
 export interface BrowserClientOptions extends ClientOptions {
-  /** Who flags are evaluated for; change it later with identify. */
+  /**
+   * Who flags are evaluated for; change it later with identify. It defaults
+   * to the context of initialState, if set.
+   */
   context?: EvaluationContext;
+  /**
+   * Flags a ServerClient evaluated for a page rendered on the server (see
+   * ServerClient.initialState): give the same state to the client that
+   * renders the page there and to the one that hydrates it in the browser.
+   * Without a path option, the client evaluates the state's path.
+   * Its values are served, with source `render`, whenever the context is
+   * the one they were evaluated for (compared as the server receives
+   * contexts), and count as ready: they are the server's rules evaluated
+   * for that context, so they win over stored and bootstrap values. Once
+   * the server's own evaluation for that context arrives, they are only
+   * served as bootstrap values. They are never stored.
+   */
+  initialState?: InitialState;
   /**
    * Evaluated values for `context` to serve until the server's evaluation
    * arrives, for example from a server render or shipped with the app. They
-   * apply only to that context, never to one identify switches to, and are
-   * never stored. Values in storage for the context win over them.
+   * apply only to that context (compared as the server receives contexts),
+   * never to another one identify switches to, and are never stored. Values
+   * in storage for the context win over them.
    */
   bootstrap?: EvaluatedFlags;
   /**
@@ -26,16 +43,88 @@ export interface BrowserClientOptions extends ClientOptions {
 }
 
 /**
- * Where a client's current values came from: the bootstrap option, storage
- * (an earlier evaluation for the same context), or the server just now.
+ * Where a client's current values came from: the initialState option (a
+ * server render's evaluation), the bootstrap option, storage (an earlier
+ * evaluation for the same context), or the server just now.
  */
-export type FlagSource = 'bootstrap' | 'cache' | 'network';
+export type FlagSource = 'render' | 'bootstrap' | 'cache' | 'network';
 
 const defaultPollingInterval = 5 * 60_000;
 const noFlags: EvaluatedFlags = Object.freeze({}) as EvaluatedFlags;
 
 interface Evaluation {
   flags: EvaluatedFlags;
+}
+
+// Values given to a client before it starts: those of the bootstrap or
+// initialState option, and the context they are for, as the server
+// receives it (see matchKey).
+interface Given {
+  match: string;
+  flags: EvaluatedFlags;
+  revision?: number;
+}
+
+// What a client was given at construction, which never changes: a server
+// render and the hydration of its page read the same values from it.
+interface Construction {
+  // The context the client was constructed with (see matchKey).
+  match: string;
+  initial: Given | undefined;
+  bootstrap: Given | undefined;
+}
+
+const constructions = new WeakMap<BrowserClient, Construction>();
+
+/**
+ * The values a server render reads from client for context (the context it
+ * was constructed with, if undefined), and their source: the initialState
+ * values when they are for that context, else the bootstrap values when they
+ * are, else undefined. It depends only on the client's options, never on
+ * what it has received since, so a page renders the same on the server and
+ * while it hydrates in the browser, however late that is.
+ */
+export function renderedValues(
+  client: BrowserClient,
+  context: EvaluationContext | undefined,
+): { flags: EvaluatedFlags; source: FlagSource } | undefined {
+  const given = constructions.get(client);
+  if (!given) return undefined; // not a BrowserClient: a test double, say
+  const match = context === undefined ? given.match : matchKey(context);
+  if (given.initial?.match === match) return { flags: given.initial.flags, source: 'render' };
+  if (given.bootstrap?.match === match) return { flags: given.bootstrap.flags, source: 'bootstrap' };
+  return undefined;
+}
+
+/**
+ * The value of flag in flags when it has type want (a copy, with copy), and
+ * otherwise fallback. It never throws: a flag of a shape this SDK does not
+ * expect returns fallback too.
+ */
+export function readFlag<T>(flags: EvaluatedFlags, key: string, want: FlagType, fallback: T, copy = false): T {
+  try {
+    const flag = Object.hasOwn(flags, key) ? flags[key] : undefined;
+    if (!flag) return fallback;
+    const value = typedValue(flag.type, flag.value, want, fallback);
+    return copy && value !== fallback ? copyValue(value) : value;
+  } catch {
+    return fallback;
+  }
+}
+
+// matchKey returns context as the server receives it, in a canonical form:
+// contexts it returns the same key for are evaluated alike.
+function matchKey(context: EvaluationContext | undefined): string {
+  return canonicalContext(normalizeContext(context));
+}
+
+// given returns the values of a bootstrap or initialState option, if it has
+// any, for the context match.
+function given(match: string, flags: unknown, revision?: unknown): Given | undefined {
+  if (!isRecord(flags)) return undefined;
+  const values: Given = { match, flags: flags as EvaluatedFlags };
+  if (typeof revision === 'number' && Number.isSafeInteger(revision)) values.revision = revision;
+  return values;
 }
 
 /**
@@ -53,8 +142,13 @@ export class BrowserClient {
   #storageKey: string;
   // The prefix of every storage key: the evaluate URL (server and chamber).
   readonly #storagePrefix: string;
-  // The bootstrap values, and the context (as JSON) they are for.
-  readonly #bootstrap: { contextKey: string; flags: EvaluatedFlags } | undefined;
+  // The context as the server receives it (see matchKey).
+  #match: string;
+  // The bootstrap and initialState values.
+  readonly #given: Construction;
+  // Whether the initialState values are still the newest known for their
+  // context: no evaluation has arrived for it since.
+  #initialFresh = true;
   // Where the snapshot's values came from; undefined while it is empty and
   // getters return fallbacks. They are always the current context's.
   #source: FlagSource | undefined;
@@ -68,14 +162,22 @@ export class BrowserClient {
 
   constructor(options: BrowserClientOptions) {
     this.#options = options;
-    this.#transport = new Transport(options);
+    const initialState = isRecord(options.initialState) ? options.initialState : undefined;
+    const initialContext = isRecord(initialState?.context) ? (initialState.context as EvaluationContext) : {};
+    // Evaluate the chamber the state was evaluated from, unless told another.
+    const statePath = typeof initialState?.path === 'string' ? initialState.path : undefined;
+    this.#transport = new Transport(options.path === undefined && statePath ? { ...options, path: statePath } : options);
     this.#storagePrefix = this.#transport.url('evaluate');
-    this.#context = options.context ?? {};
+    this.#context = options.context ?? initialContext;
     this.#contextKey = JSON.stringify(this.#context);
+    this.#match = matchKey(this.#context);
     this.#storageKey = this.#keyFor(this.#context);
-    this.#bootstrap = isRecord(options.bootstrap)
-      ? { contextKey: this.#contextKey, flags: options.bootstrap }
-      : undefined;
+    this.#given = {
+      match: this.#match,
+      initial: given(matchKey(initialContext), initialState?.flags, initialState?.revision),
+      bootstrap: given(this.#match, options.bootstrap),
+    };
+    constructions.set(this, this.#given);
     this.#restore();
   }
 
@@ -95,10 +197,12 @@ export class BrowserClient {
 
   /**
    * Switches to a new context and re-evaluates every flag for it. Until the
-   * new evaluation arrives, isReady is false and getters return values stored
-   * for the new context, if there are any, or else their fallbacks: values
-   * evaluated for another context (another user on a shared device, say) are
-   * never served for this one. The client keeps retrying if the evaluation
+   * new evaluation arrives, getters return the initialState values if they
+   * are for the new context and no evaluation for it has arrived since (and
+   * isReady is true), or else values stored for it, if there are any, or
+   * else their fallbacks, with isReady false: values evaluated for another
+   * context (another user on a shared device, say) are never served for
+   * this one. The client keeps retrying if the evaluation
    * fails. On a stopped client it only sets the context.
    */
   async identify(context: EvaluationContext): Promise<void> {
@@ -107,6 +211,7 @@ export class BrowserClient {
     this.#context = context;
     if (contextKey !== this.#contextKey) {
       this.#contextKey = contextKey;
+      this.#match = matchKey(context);
       this.#storageKey = this.#keyFor(context);
       this.#restore();
     }
@@ -120,11 +225,13 @@ export class BrowserClient {
   }
 
   /**
-   * Whether the values are the server's evaluation for the current context.
-   * Bootstrap and stored values do not count, even for the same context.
+   * Whether the values are the server's evaluation for the current context:
+   * its own, or a server render's (the initialState option, until the
+   * server's own evaluation arrives). Bootstrap and stored values do not
+   * count, even for the same context.
    */
   isReady(): boolean {
-    return this.#source === 'network';
+    return this.#source === 'network' || this.#source === 'render';
   }
 
   /**
@@ -139,8 +246,8 @@ export class BrowserClient {
    * The server's storage revision of the chamber the current values were
    * evaluated from, for example to record which configuration a page ran
    * under. It is the highest revision among the chamber and the parents it
-   * inherits from. It is undefined while the values are not the server's
-   * (see source), and when the server does not report revisions (only
+   * inherits from. It is undefined while the values are not the server's or
+   * a server render's (see source), and when the server does not report revisions (only
    * servers on transactional storage, such as postgres, etcd, or boltdb, do).
    * A write that leaves this context's values unchanged is not sent, so the
    * revision can be older than the chamber's while describing the same
@@ -169,17 +276,17 @@ export class BrowserClient {
 
   /** The value of a boolean flag, or fallback. */
   bool(flag: string, fallback: boolean): boolean {
-    return this.#typed(flag, 'boolean', fallback);
+    return readFlag(this.allFlags(), flag, 'boolean', fallback);
   }
 
   /** The value of a string flag, or fallback. */
   string(flag: string, fallback: string): string {
-    return this.#typed(flag, 'string', fallback);
+    return readFlag(this.allFlags(), flag, 'string', fallback);
   }
 
   /** The value of a number flag, or fallback. */
   number(flag: string, fallback: number): number {
-    return this.#typed(flag, 'number', fallback);
+    return readFlag(this.allFlags(), flag, 'number', fallback);
   }
 
   /**
@@ -187,7 +294,7 @@ export class BrowserClient {
    * changing it does not change what later reads return.
    */
   json<T>(flag: string, fallback: T): T {
-    return this.#typed(flag, 'custom', fallback, true);
+    return readFlag(this.allFlags(), flag, 'custom', fallback, true);
   }
 
   /**
@@ -198,21 +305,6 @@ export class BrowserClient {
   allFlags(): EvaluatedFlags {
     const flags = this.#evaluation.value.flags;
     return isRecord(flags) ? flags : noFlags;
-  }
-
-  // typed returns the value of flag when it has type want (a copy, with
-  // copy), and otherwise fallback. It never throws: a flag of a shape this
-  // SDK does not expect returns fallback too.
-  #typed<T>(key: string, want: FlagType, fallback: T, copy = false): T {
-    try {
-      const flags = this.allFlags();
-      const flag = Object.hasOwn(flags, key) ? flags[key] : undefined;
-      if (!flag) return fallback;
-      const value = typedValue(flag.type, flag.value, want, fallback);
-      return copy && value !== fallback ? copyValue(value) : value;
-    } catch {
-      return fallback;
-    }
   }
 
   // keyFor returns the storage key of context's values, or '' without
@@ -237,13 +329,21 @@ export class BrowserClient {
   }
 
   // restore replaces the values with the best ones available for the current
-  // context before the server answers: stored values, else bootstrap values,
-  // else none. Storage that answers asynchronously applies its values later,
-  // if the context is unchanged and the server has not answered by then.
+  // context before the server answers: a server render's values not yet
+  // superseded, else stored values, else the server render's or bootstrap
+  // values, else none. Storage that answers asynchronously applies its
+  // values later, if the context is unchanged and neither the server nor a
+  // server render has answered by then.
   #restore(): void {
     const contextKey = this.#contextKey;
     const storage = this.#options.storage;
+    const forContext = (values: Given | undefined) => (values?.match === this.#match ? values : undefined);
+    const initial = forContext(this.#given.initial);
     this.#stored = undefined;
+    if (initial && this.#initialFresh) {
+      this.#show('render', () => this.#evaluation.set({ flags: initial.flags }, initial.revision));
+      return;
+    }
     if (storage) {
       let stored: ReturnType<StorageAdapter['getItem']>;
       try {
@@ -254,14 +354,14 @@ export class BrowserClient {
       if (isPromise(stored)) {
         stored
           // by now the server's values, or other stored ones, may be shown
-          .then((raw) => this.#source !== 'network' && this.#source !== 'cache' && this.#applyStored(contextKey, raw))
+          .then((raw) => (this.#source === 'bootstrap' || this.#source === undefined) && this.#applyStored(contextKey, raw))
           .catch((e: unknown) => this.#reportStorage(e));
       } else if (this.#applyStored(contextKey, stored)) {
         return;
       }
     }
-    const bootstrap = this.#bootstrap;
-    if (bootstrap?.contextKey === contextKey) {
+    const bootstrap = initial ?? forContext(this.#given.bootstrap);
+    if (bootstrap) {
       this.#show('bootstrap', () => this.#evaluation.set({ flags: bootstrap.flags }));
     } else {
       this.#show(undefined, () => this.#evaluation.set({ flags: {} }));
@@ -323,6 +423,8 @@ export class BrowserClient {
     // update, and stores them.
     const receive = (update: () => boolean) => {
       this.#show('network', update);
+      // A server render's values for this context are older now.
+      if (this.#given.initial?.match === this.#match) this.#initialFresh = false;
       this.#persist();
     };
     const following = this.#transport.follow(

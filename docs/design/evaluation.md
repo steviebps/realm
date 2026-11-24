@@ -124,7 +124,25 @@ latest *evaluated* values for each context, keyed by server, chamber, and a
 hash of the context, and reads back only the entry for the current context,
 so users sharing a device never see each other's values. Its `bootstrap`
 option supplies values for the initial context. `source()` reports
-`bootstrap`, `cache`, or `network`; `isReady()` is true only for `network`.
+`bootstrap`, `cache`, or `network`; `isReady()` is true only for `network`
+(and `render`, below).
+
+Server rendering is isomorphic. `ServerClient.initialState(context)` evaluates
+a context locally exactly as this endpoint would (normalized, without the
+client's process-wide attributes, also when resolving a path template) and
+returns `{context, flags, path, revision}` (no `flags` before the client has
+a chamber for the context; a `BrowserClient` without a `path` evaluates
+`path`),
+plain JSON the page carries to the browser (`serializeInitialState` escapes
+it for a `<script>` element). A `BrowserClient` built with that
+`initialState` serves it with source `render`, which counts as ready and wins
+over stored values (older) until its own evaluation for the context arrives.
+The React hooks read through `useSyncExternalStore`, whose server snapshot
+(used for server rendering and hydration) is the values the client was
+*constructed* with for the provider's context: `initialState`, else
+`bootstrap`, else fallbacks. It never depends on what has arrived since, so
+the server and the hydrating browser render the same markup, however late a
+`Suspense` boundary hydrates.
 
 Both clients stream by default and reconnect with capped exponential backoff
 (1 s to 30 s), keeping the last known values meanwhile. `streaming: false`
