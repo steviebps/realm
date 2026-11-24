@@ -101,20 +101,41 @@ describe('ServerClient.initialState', () => {
       version: '2.0.0',
     });
     // process-wide attributes are not the browser's, so they are not applied
-    expect(withDefaults.initialState({ key: 'vip' })).toEqual({ context: { key: 'vip' }, flags: {} });
+    // and without a chamber yet, there are no flags to render
+    expect(withDefaults.initialState({ key: 'vip' })).toEqual({ context: { key: 'vip' } });
 
     const context = { key: 42, attributes: { build: 7, paid: true, tags: ['a'] } } as unknown as EvaluationContext;
     expect(server.initialState(context)).toEqual({
       context: { key: '42', attributes: { build: '7', paid: 'true' } },
       flags: { beta: { type: 'boolean', value: false } },
+      path: '/prod/web/',
     });
     expect(server.initialState({ key: 'vip' }).flags).toEqual({ beta: { type: 'boolean', value: true } });
-    expect(server.initialState()).toEqual({ context: {}, flags: { beta: { type: 'boolean', value: false } } });
+    expect(server.initialState()).toEqual({ context: {}, flags: { beta: { type: 'boolean', value: false } }, path: '/prod/web/' });
   });
 
   it('carries the chamber revision', async () => {
     const { server } = await setup(chamber, '41');
     expect(server.initialState({ key: 'vip' }).revision).toBe(41);
+  });
+});
+
+describe('an InitialState without flags', () => {
+  it('is not ready, and lets stored values show', async () => {
+    const realm = await fakeRealm();
+    cleanup.push(realm.close);
+    const unstarted = new ServerClient({ address: realm.address, path: '/prod/web/' });
+    const state = unstarted.initialState({ key: 'u1' });
+    expect(state).toEqual({ context: { key: 'u1' } });
+
+    const storage = memoryStorage();
+    seedStale(storage, realm.address, { key: 'u1' });
+    const client = new BrowserClient({ address: realm.address, path: '/prod/web/', initialState: state, storage });
+    expect(client.contextKey()).toBe(JSON.stringify({ key: 'u1' }));
+    expect(client.source()).toBe('cache');
+    expect(client.isReady()).toBe(false);
+    const empty = new BrowserClient({ address: realm.address, initialState: state });
+    expect(renderToString(app(empty))).toBe('<p>loading none beta=false</p>');
   });
 });
 
@@ -149,6 +170,20 @@ describe('BrowserClient initialState', () => {
     expect(client.source()).toBe('network');
     expect(client.bool('beta', false)).toBe(true);
     expect(client.revision()).toBe(7);
+  });
+
+  it('evaluates the state\'s path unless given one', async () => {
+    const { realm, server } = await setup();
+    const state = server.initialState({ key: 'vip' });
+    for (const [path, url] of [
+      [undefined, '/v1/evaluate/prod/web/'],
+      ['/other/', '/v1/evaluate/other/'],
+    ] as const) {
+      const client = new BrowserClient({ address: realm.address, path, initialState: state, streaming: false });
+      cleanup.push(() => client.stop());
+      await client.start().catch(() => {});
+      expect(realm.requests.at(-1)?.url).toBe(url);
+    }
   });
 
   it('matches contexts as the server receives them', async () => {
@@ -321,6 +356,35 @@ describe('server rendering', () => {
     expect(view.errors).toEqual([]);
     // after hydration, the newer values show
     await vi.waitFor(() => expect(view.text()).toBe('ready network beta=true'));
+  });
+
+  it('reports why starting failed while serving the initial state', async () => {
+    const { realm, server } = await setup();
+    const flags = new BrowserClient({
+      address: realm.address,
+      initialState: server.initialState({ key: 'vip' }),
+      onError: () => {},
+    });
+    realm.setStatus(401);
+    function Status() {
+      const { ready, source, error } = useRealmStatus();
+      return <p>{`${ready} ${source} ${error ? 'error' : 'ok'} beta=${useBoolFlag('beta', false)}`}</p>;
+    }
+    const container = document.createElement('div');
+    const root = createRoot(container);
+    await act(async () => root.render(app(flags, undefined, <Status />)));
+    cleanup.push(() => act(() => root.unmount()));
+    await vi.waitFor(() => expect(container.textContent).toBe('true render error beta=true'));
+  });
+
+  it('renders a client the module did not construct without crashing', () => {
+    const stub = {
+      subscribe: () => () => {},
+      source: () => undefined,
+      allFlags: () => ({}),
+      contextKey: () => '{}',
+    } as unknown as BrowserClient;
+    expect(renderToString(app(stub))).toBe('<p>loading none beta=false</p>');
   });
 
   it('serves the initial state without hydration too', async () => {

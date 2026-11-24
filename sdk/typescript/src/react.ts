@@ -126,7 +126,8 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
   // context they were read for.
   const current = applied !== undefined && applied.client === client && applied.contextKey === contextKey;
   const ready = source === 'render' || (current && source === 'network');
-  const error = current && !ready ? applied.error : undefined;
+  // Render values are ready, but a start that failed still says why.
+  const error = current && source !== 'network' ? applied.error : undefined;
   const value = useMemo(
     () => ({ client, contextKey, rendered, status: { ready, source, error } }),
     [client, contextKey, rendered, ready, source, error],

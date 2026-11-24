@@ -156,10 +156,12 @@ describe('initialState with a path template', () => {
     expect(c.initialState({})).toEqual({
       context: {},
       flags: { where: { type: 'string', value: '/prod/tenants/' }, beta: { type: 'boolean', value: false } },
+      path: '/prod/tenants/',
       revision: 3,
     });
     const t1 = c.initialState(ctx('t1'));
-    expect(t1.flags.beta).toEqual({ type: 'boolean', value: true });
+    expect(t1.flags?.beta).toEqual({ type: 'boolean', value: true });
+    expect(t1.path).toBe('/prod/tenants/t1/');
     expect(t1.revision).toBe(4);
   });
 });

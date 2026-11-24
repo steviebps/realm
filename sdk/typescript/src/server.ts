@@ -223,21 +223,36 @@ export class ServerClient {
    * the BrowserClient then asks for, so the values do not change when its
    * evaluation arrives: the process-wide attributes and version are not
    * applied (set them in the context instead), and number and boolean
-   * attributes are sent as strings. Give the BrowserClient the path of the
-   * chamber this client evaluates (see chamberPath).
+   * attributes are sent as strings. The state carries the path of the
+   * chamber evaluated (with pathTemplate, resolved the same way), which a
+   * BrowserClient without a path option evaluates too.
+   *
+   * Until the client has a chamber for context (before its first load, or
+   * with pathTemplate, when context resolves to none), the state has no
+   * flags: a page renders fallbacks, not ready, rather than an empty
+   * evaluation presented as the server's.
    */
   initialState(context?: EvaluationContext): InitialState {
     const normalized = normalizeContext(context);
+    const state: InitialState = { context: normalized };
     const source = this.#source;
-    const target =
-      source.kind === 'path' ? { chamber: source.chamber.value, revision: source.chamber.revision } : this.#view(normalized, {});
-    const state: InitialState = { context: normalized, flags: {} };
-    try {
-      state.flags = this.#evaluate(target?.chamber, normalized, {});
-    } catch {
-      // a chamber of a shape this SDK does not expect evaluates to no flags
+    let path: string | undefined;
+    let target: { chamber: Chamber; revision: number | undefined } | undefined;
+    if (source.kind === 'path') {
+      path = source.path;
+      if (this.isReady()) target = { chamber: source.chamber.value, revision: source.chamber.revision };
+    } else {
+      path = this.#resolve(normalized, {});
+      target = path === undefined ? undefined : source.subtree.get(path);
     }
-    if (target?.revision !== undefined) state.revision = target.revision;
+    if (!target) return state;
+    try {
+      state.flags = this.#evaluate(target.chamber, normalized, {});
+    } catch {
+      return state; // a chamber of a shape this SDK does not expect
+    }
+    state.path = path;
+    if (target.revision !== undefined) state.revision = target.revision;
     return state;
   }
 

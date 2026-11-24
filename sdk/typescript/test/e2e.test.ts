@@ -69,8 +69,8 @@ describe.skipIf(!address)('against a real server', () => {
           browser.stop();
         }
       }
-      expect(server.initialState({ key: 'u1', attributes: { tier: '3' } }).flags.plan?.value).toBe('pro');
-      expect(server.initialState({ key: 'u2' }).flags.plan?.value).toBe('free');
+      expect(server.initialState({ key: 'u1', attributes: { tier: '3' } }).flags?.plan?.value).toBe('pro');
+      expect(server.initialState({ key: 'u2' }).flags?.plan?.value).toBe('free');
     } finally {
       server.stop();
     }

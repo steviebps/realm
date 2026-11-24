@@ -145,8 +145,17 @@ export type EvaluatedFlags = Record<string, EvaluatedFlag>;
 export interface InitialState {
   /** Who the flags were evaluated for, as the server receives contexts. */
   context: EvaluationContext;
-  /** Every flag's value for context, in the shape allFlags returns. */
-  flags: EvaluatedFlags;
+  /**
+   * Every flag's value for context, in the shape allFlags returns; absent
+   * when the ServerClient had no chamber for context (before its first load,
+   * say), so the page renders fallbacks and is not ready.
+   */
+  flags?: EvaluatedFlags;
+  /**
+   * The path of the chamber evaluated, which a BrowserClient without a path
+   * option evaluates too.
+   */
+  path?: string;
   /** The server's storage revision of the chamber evaluated, if it reported one. */
   revision?: number;
 }

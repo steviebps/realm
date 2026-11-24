@@ -129,7 +129,10 @@ option supplies values for the initial context. `source()` reports
 
 Server rendering is isomorphic. `ServerClient.initialState(context)` evaluates
 a context locally exactly as this endpoint would (normalized, without the
-client's process-wide attributes) and returns `{context, flags, revision}`,
+client's process-wide attributes, also when resolving a path template) and
+returns `{context, flags, path, revision}` (no `flags` before the client has
+a chamber for the context; a `BrowserClient` without a `path` evaluates
+`path`),
 plain JSON the page carries to the browser (`serializeInitialState` escapes
 it for a `<script>` element). A `BrowserClient` built with that
 `initialState` serves it with source `render`, which counts as ready and wins

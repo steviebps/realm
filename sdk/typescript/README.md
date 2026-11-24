@@ -465,8 +465,18 @@ show through.
 `initialState(context)` evaluates the context as the browser's client will
 ask the server to, so the values don't change when that evaluation arrives.
 So the `ServerClient`'s process-wide `attributes` and `version` are not
-applied: put attributes the browser needs in the context. Give the browser's
-client the chamber the `ServerClient` evaluates (`realm.chamberPath(context)`).
+applied: put attributes the browser needs in the context. The state carries
+the `path` of the chamber it was evaluated from (with `pathTemplate`, resolved
+the same way), which the browser's client evaluates unless you give it a
+`path`. Until the `ServerClient` has a chamber for the context (before its
+first load, say), the state has no flags, and the page renders fallbacks with
+`ready` `false`.
+
+If `start()` fails in the browser (a wrong key, say), `ready` stays `true`
+for the rendered values, and `useRealmStatus().error` says why. A page served
+from an HTTP cache carries its state from when it was rendered, which wins
+over stored values until the browser's evaluation arrives; don't cache pages
+rendered for a user.
 
 Write the state into HTML with `serializeInitialState` (or your framework's
 own serialization), not plain `JSON.stringify`: it escapes `<`, `>`, and `&`,
@@ -586,7 +596,7 @@ Both clients take these options:
 | `number(flag, context, fallback)` | A number flag's value. |
 | `json<T>(flag, context, fallback)` | A custom (JSON) flag's value, as a copy. |
 | `allFlags(context)` | Every flag's value for `context`. |
-| `initialState(context)` | `{ context, flags, revision }` for a page rendered on the server. See [Server rendering](#server-rendering). |
+| `initialState(context)` | `{ context, flags, path, revision }` for a page rendered on the server. See [Server rendering](#server-rendering). |
 | `subscribe(listener)` | Calls `listener` when the data changes; returns a function that unsubscribes. |
 | `revision(context?)` | The server's revision of the chamber (the context's chamber, with `pathTemplate`). |
 | `chamberPath(context?)` | The chamber a context is evaluated against. |

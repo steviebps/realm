@@ -15,6 +15,7 @@ export interface BrowserClientOptions extends ClientOptions {
    * Flags a ServerClient evaluated for a page rendered on the server (see
    * ServerClient.initialState): give the same state to the client that
    * renders the page there and to the one that hydrates it in the browser.
+   * Without a path option, the client evaluates the state's path.
    * Its values are served, with source `render`, whenever the context is
    * the one they were evaluated for (compared as the server receives
    * contexts), and count as ready: they are the server's rules evaluated
@@ -87,7 +88,8 @@ export function renderedValues(
   client: BrowserClient,
   context: EvaluationContext | undefined,
 ): { flags: EvaluatedFlags; source: FlagSource } | undefined {
-  const given = constructions.get(client)!;
+  const given = constructions.get(client);
+  if (!given) return undefined; // not a BrowserClient: a test double, say
   const match = context === undefined ? given.match : matchKey(context);
   if (given.initial?.match === match) return { flags: given.initial.flags, source: 'render' };
   if (given.bootstrap?.match === match) return { flags: given.bootstrap.flags, source: 'bootstrap' };
@@ -160,10 +162,12 @@ export class BrowserClient {
 
   constructor(options: BrowserClientOptions) {
     this.#options = options;
-    this.#transport = new Transport(options);
-    this.#storagePrefix = this.#transport.url('evaluate');
     const initialState = isRecord(options.initialState) ? options.initialState : undefined;
     const initialContext = isRecord(initialState?.context) ? (initialState.context as EvaluationContext) : {};
+    // Evaluate the chamber the state was evaluated from, unless told another.
+    const statePath = typeof initialState?.path === 'string' ? initialState.path : undefined;
+    this.#transport = new Transport(options.path === undefined && statePath ? { ...options, path: statePath } : options);
+    this.#storagePrefix = this.#transport.url('evaluate');
     this.#context = options.context ?? initialContext;
     this.#contextKey = JSON.stringify(this.#context);
     this.#match = matchKey(this.#context);
@@ -193,10 +197,12 @@ export class BrowserClient {
 
   /**
    * Switches to a new context and re-evaluates every flag for it. Until the
-   * new evaluation arrives, isReady is false and getters return values stored
-   * for the new context, if there are any, or else their fallbacks: values
-   * evaluated for another context (another user on a shared device, say) are
-   * never served for this one. The client keeps retrying if the evaluation
+   * new evaluation arrives, getters return the initialState values if they
+   * are for the new context and no evaluation for it has arrived since (and
+   * isReady is true), or else values stored for it, if there are any, or
+   * else their fallbacks, with isReady false: values evaluated for another
+   * context (another user on a shared device, say) are never served for
+   * this one. The client keeps retrying if the evaluation
    * fails. On a stopped client it only sets the context.
    */
   async identify(context: EvaluationContext): Promise<void> {
