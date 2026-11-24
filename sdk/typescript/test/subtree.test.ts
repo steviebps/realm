@@ -138,6 +138,32 @@ function client(fetch: typeof globalThis.fetch, options: { streaming?: boolean; 
   return c;
 }
 
+describe('initialState with a path template', () => {
+  it('resolves the chamber without process-wide attributes, as the browser evaluates', async () => {
+    const realm = fakeRealm(() => ({
+      chambers: [view('/prod/tenants/', 3), view('/prod/tenants/t1/', 4, true)],
+    }));
+    const c = new ServerClient({
+      address: 'http://realm.test',
+      pathTemplate: template,
+      attributes: { tenantId: 't1' },
+      streaming: false,
+      fetch: realm.fetch,
+    });
+    cleanup.push(() => c.stop());
+    await c.start();
+    expect(c.bool('beta', {}, false)).toBe(true);
+    expect(c.initialState({})).toEqual({
+      context: {},
+      flags: { where: { type: 'string', value: '/prod/tenants/' }, beta: { type: 'boolean', value: false } },
+      revision: 3,
+    });
+    const t1 = c.initialState(ctx('t1'));
+    expect(t1.flags.beta).toEqual({ type: 'boolean', value: true });
+    expect(t1.revision).toBe(4);
+  });
+});
+
 describe('subtree conformance', () => {
   describe.each(conformance.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     it('resolves', async () => {

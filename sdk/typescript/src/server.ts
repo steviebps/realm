@@ -3,6 +3,7 @@ import {
   copyValue,
   evaluateChamber,
   flagValue,
+  normalizeContext,
   stringAttributes,
   typedValue,
   VERSION_ATTRIBUTE,
@@ -19,7 +20,7 @@ import {
   type Feed,
   type Following,
 } from './transport.js';
-import type { Chamber, EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
+import type { Chamber, EvaluatedFlags, EvaluationContext, FlagType, InitialState } from './types.js';
 
 /** Options for a ServerClient. */
 export interface ServerClientOptions extends ClientOptions {
@@ -205,10 +206,38 @@ export class ServerClient {
    * values are copies, as json returns them.
    */
   allFlags(context?: EvaluationContext): EvaluatedFlags {
+    return this.#evaluate(context ?? {}, this.#defaults);
+  }
+
+  /**
+   * Every flag's value for context, for a page rendered on the server: pass
+   * it to the BrowserClient (its initialState option) that renders the page,
+   * and send it with the page to the one that hydrates it, so the first
+   * render already has the right values in both places.
+   *
+   * It evaluates context as the server's evaluation endpoint does, which
+   * the BrowserClient then asks for, so the values do not change when its
+   * evaluation arrives: the process-wide attributes and version are not
+   * applied (set them in the context instead), and number and boolean
+   * attributes are sent as strings. Give the BrowserClient the path of the
+   * chamber this client evaluates (see chamberPath).
+   */
+  initialState(context?: EvaluationContext): InitialState {
+    const normalized = normalizeContext(context);
+    const state: InitialState = { context: normalized, flags: this.#evaluate(normalized, {}) };
+    const source = this.#source;
+    const revision = source.kind === 'path' ? source.chamber.revision : this.#view(normalized, {})?.revision;
+    if (revision !== undefined) state.revision = revision;
+    return state;
+  }
+
+  // evaluate returns every flag's value for context, with defaults filling in
+  // for the attributes it does not set. Custom values are copies.
+  #evaluate(context: EvaluationContext, defaults: Record<string, string>): EvaluatedFlags {
     try {
-      const chamber = this.#chamber(context);
+      const chamber = this.#chamber(context, defaults);
       if (!chamber) return {};
-      const flags = evaluateChamber(chamber, context ?? {}, this.#defaults);
+      const flags = evaluateChamber(chamber, context, defaults);
       for (const flag of Object.values(flags)) flag.value = copyValue(flag.value);
       return flags;
     } catch {
@@ -233,24 +262,24 @@ export class ServerClient {
 
   // chamber returns the chamber to evaluate context against, or undefined
   // when there is none.
-  #chamber(context: EvaluationContext | undefined): Chamber | undefined {
+  #chamber(context: EvaluationContext | undefined, defaults = this.#defaults): Chamber | undefined {
     const source = this.#source;
-    return source.kind === 'path' ? source.chamber.value : this.#view(context)?.chamber;
+    return source.kind === 'path' ? source.chamber.value : this.#view(context, defaults)?.chamber;
   }
 
   // view returns the view of the subtree that context resolves to, if any.
-  #view(context: EvaluationContext | undefined): View | undefined {
+  #view(context: EvaluationContext | undefined, defaults = this.#defaults): View | undefined {
     if (this.#source.kind !== 'template') return undefined;
-    const path = this.#resolve(context);
+    const path = this.#resolve(context, defaults);
     return path === undefined ? undefined : this.#source.subtree.get(path);
   }
 
   // resolve returns the path of the subtree's view that context resolves
-  // to, if any.
-  #resolve(context: EvaluationContext | undefined): string | undefined {
+  // to, if any, with defaults filling in for the attributes it does not set.
+  #resolve(context: EvaluationContext | undefined, defaults = this.#defaults): string | undefined {
     if (this.#source.kind !== 'template') return undefined;
     const subtree = this.#source.subtree;
-    return resolvePath(this.#source.template, (path) => subtree.get(path) !== undefined, context ?? {}, this.#defaults);
+    return resolvePath(this.#source.template, (path) => subtree.get(path) !== undefined, context ?? {}, defaults);
   }
 }
 
@@ -260,4 +289,23 @@ export class ServerClient {
 function asChamber(data: unknown): Chamber {
   if (!isRecord(data) || !isRecord(data.rules)) throw new RealmError('the server did not return a chamber');
   return data as unknown as Chamber;
+}
+
+// Characters escaped by serializeInitialState: those that could end or
+// comment out a script element, and the line separators older JavaScript
+// parsers reject in string literals.
+const unsafeInScript = /[<>&\u2028\u2029]/g;
+
+/**
+ * The JSON text of state, safe to place inside an HTML `<script>` element:
+ * `<`, `>`, `&`, U+2028, and U+2029 are written as `\u` escapes, so a
+ * context attribute such as `</script>` cannot end the element. It parses
+ * back with JSON.parse, or as a JavaScript expression. For example:
+ *
+ * ```html
+ * <script id="realm-state" type="application/json">${serializeInitialState(state)}</script>
+ * ```
+ */
+export function serializeInitialState(state: InitialState): string {
+  return JSON.stringify(state).replace(unsafeInScript, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }

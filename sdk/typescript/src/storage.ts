@@ -117,7 +117,7 @@ function decodeRecent(raw: string | null | undefined): string[] {
 
 // canonicalContext is context as JSON with its attributes sorted, so the same
 // context written in another order shares a cache entry.
-function canonicalContext(context: EvaluationContext): string {
+export function canonicalContext(context: EvaluationContext): string {
   const attributes = Object.entries(context.attributes ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify([context.key ?? null, attributes]);
 }
