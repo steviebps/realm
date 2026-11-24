@@ -364,6 +364,13 @@ func parseTargeting(data json.RawMessage, ruleType string) ([]*TargetingRule, er
 		if len(r.Value) == 0 {
 			return nil, fmt.Errorf("targeting rule %s: value cannot be empty/nil", name)
 		}
+		// encoding/json decodes null into a string, number, or bool as its
+		// zero value without an error, so assertType alone would serve null
+		// as "", 0, or false. Refuse it, as Rule refuses a null default. (A
+		// custom value may be null.)
+		if ruleType != "custom" && isNull(r.Value) {
+			return nil, fmt.Errorf("targeting rule %s: value cannot be null with type specified as: %q", name, ruleType)
+		}
 		// a JSON null decodes to a nil *Clause without running Clause.UnmarshalJSON
 		if slices.Contains(r.Clauses, nil) {
 			return nil, fmt.Errorf("targeting rule %s: clauses must not be null", name)
