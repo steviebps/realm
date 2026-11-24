@@ -13,7 +13,7 @@ import {
 } from '../src/index.js';
 import { RealmProvider, useAllFlags, useBoolFlag, useJsonFlag, useRealmStatus, useStringFlag } from '../src/react.js';
 import { storageKey } from '../src/storage.js';
-import { fakeRealm } from './fake-realm.js';
+import { fakeRealm, memoryStorage } from './fake-realm.js';
 
 // The fake server turns every flag on for the key `vip`; this chamber's
 // rules say the same, so a ServerClient and the fake's evaluation agree.
@@ -40,25 +40,26 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-async function setup() {
+// setup serves rules (at revision, if given) from a fake server, and starts
+// a ServerClient on them.
+async function setup(rules: unknown = chamber, revision?: string) {
   const realm = await fakeRealm();
   cleanup.push(realm.close);
-  realm.publish(chamber);
+  realm.publish(rules);
+  realm.setRevision(revision);
   const server = new ServerClient({ address: realm.address, path: '/prod/web/', streaming: false });
   cleanup.push(() => server.stop());
   await server.start();
   return { realm, server };
 }
 
-// memoryStorage is a synchronous StorageAdapter, like localStorage.
-function memoryStorage(): StorageAdapter & { items: Map<string, string> } {
-  const items = new Map<string, string>();
-  return {
-    items,
-    getItem: (key: string) => items.get(key) ?? null,
-    setItem: (key: string, value: string) => void items.set(key, value),
-    removeItem: (key: string) => void items.delete(key),
-  };
+// seedStale stores an evaluation for context with beta off, as if from
+// before a change, where a client of realm's /prod/web/ reads it.
+function seedStale(storage: ReturnType<typeof memoryStorage>, address: string, context: EvaluationContext) {
+  storage.items.set(
+    storageKey(new URL('/v1/evaluate/prod/web/', address).toString(), context),
+    JSON.stringify({ flags: { beta: { type: 'boolean', value: false } } }),
+  );
 }
 
 function Beta() {
@@ -112,11 +113,7 @@ describe('ServerClient.initialState', () => {
   });
 
   it('carries the chamber revision', async () => {
-    const { realm } = await setup();
-    realm.setRevision('41');
-    const server = new ServerClient({ address: realm.address, path: '/prod/web/', streaming: false });
-    cleanup.push(() => server.stop());
-    await server.start();
+    const { server } = await setup(chamber, '41');
     expect(server.initialState({ key: 'vip' }).revision).toBe(41);
   });
 });
@@ -177,10 +174,7 @@ describe('BrowserClient initialState', () => {
     const storage = memoryStorage();
     const vip = { key: 'vip' };
     // storage holds an older evaluation, from before beta was on for vip
-    storage.items.set(
-      storageKey(new URL('/v1/evaluate/prod/web/', realm.address).toString(), vip),
-      JSON.stringify({ flags: { beta: { type: 'boolean', value: false } } }),
-    );
+    seedStale(storage, realm.address, vip);
     const state = server.initialState(vip);
     const opts = { address: realm.address, path: '/prod/web/', storage, streaming: false } as const;
     const client = new BrowserClient({ ...opts, initialState: state });
@@ -274,11 +268,7 @@ describe('server rendering', () => {
   });
 
   it('hydrates without a mismatch, then follows the server', async () => {
-    const { realm } = await setup();
-    realm.publish(betaOn);
-    const server = new ServerClient({ address: realm.address, path: '/prod/web/', streaming: false });
-    cleanup.push(() => server.stop());
-    await server.start();
+    const { realm, server } = await setup(betaOn);
     const context = { key: 'u1', attributes: { tenantId: 't1' } };
     const state = server.initialState(context);
     // the state crosses to the browser as text
@@ -286,10 +276,7 @@ describe('server rendering', () => {
     // the browser has a stale stored value for the context, which must not
     // show through
     const storage = memoryStorage();
-    storage.items.set(
-      storageKey(new URL('/v1/evaluate/prod/web/', realm.address).toString(), context),
-      JSON.stringify({ flags: { beta: { type: 'boolean', value: false } } }),
-    );
+    seedStale(storage, realm.address, context);
     const make = (initialState: InitialState, s?: StorageAdapter) =>
       new BrowserClient({ address: realm.address, path: '/prod/web/', initialState, storage: s });
     const browser = make(sent, storage);

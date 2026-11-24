@@ -106,3 +106,15 @@ export async function seedStorage(address: string, storage: StorageAdapter, cont
     client.stop();
   }
 }
+
+// memoryStorage is a synchronous StorageAdapter, like localStorage, whose
+// items tests can read and seed.
+export function memoryStorage() {
+  const items = new Map<string, string>();
+  return {
+    items,
+    getItem: (key: string) => items.get(key) ?? null,
+    setItem: (key: string, value: string) => void items.set(key, value),
+    removeItem: (key: string) => void items.delete(key),
+  };
+}

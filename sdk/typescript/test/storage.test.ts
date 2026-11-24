@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrowserClient, localStorageAdapter, type EvaluationContext, type StorageAdapter } from '../src/index.js';
 import { decodeFlags, maxStoredContexts, recentKey, storageKey } from '../src/storage.js';
-import { fakeRealm, seedStorage } from './fake-realm.js';
+import { fakeRealm, memoryStorage, seedStorage } from './fake-realm.js';
 
 let cleanup: (() => unknown)[] = [];
 afterEach(async () => {
@@ -13,17 +13,6 @@ async function setup() {
   const realm = await fakeRealm();
   cleanup.push(realm.close);
   return realm;
-}
-
-// memoryStorage is a synchronous StorageAdapter, like localStorage.
-function memoryStorage() {
-  const items = new Map<string, string>();
-  return {
-    items,
-    getItem: (key: string) => items.get(key) ?? null,
-    setItem: (key: string, value: string) => void items.set(key, value),
-    removeItem: (key: string) => void items.delete(key),
-  };
 }
 
 // entries returns the values items holds for contexts, without the list of

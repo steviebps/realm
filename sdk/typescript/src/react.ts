@@ -112,10 +112,9 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
     };
   }, [client, contextKey]);
 
-  const rendered = useMemo(
-    () => renderedValues(client, contextKey === undefined ? undefined : (JSON.parse(contextKey) as EvaluationContext)),
-    [client, contextKey],
-  );
+  // By value, like contextKey.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const rendered = useMemo(() => renderedValues(client, context), [client, contextKey]);
   const subscribe = useCallback((onChange: () => void) => client.subscribe(onChange), [client]);
   const source = useSyncExternalStore(
     subscribe,

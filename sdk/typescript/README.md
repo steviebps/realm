@@ -454,38 +454,26 @@ from the same values, then keeps them current.
 context the state was made for (attribute order doesn't matter, and numbers
 match their strings), or hooks render fallbacks for it.
 
-What happens, step by step:
-
-- **On the server**, hooks return the state's values, and `useRealmStatus()`
-  reports `{ ready: true, source: 'render' }`, so a component that waits for
-  `ready` renders its real content, not a spinner.
-- **While the page hydrates**, hooks return exactly what the server rendered,
-  even for content that hydrates late (inside `Suspense`) after newer values
-  arrived, so React never sees a mismatch.
-- **After hydration**, the provider starts the client, which asks the server
-  to evaluate the same context and keeps the values current. Unless a flag
-  changed in between, nothing re-renders.
-- **Stored values never show through.** The state's values win over values
-  in `storage` for the context, which are older, until the server's own
-  evaluation arrives; after that, the state counts only as `bootstrap`
-  values (for example, when `identify` switches back to its context).
+On the server and while the page hydrates (even content inside `Suspense`
+that hydrates late), hooks return exactly the state's values, with
+`useRealmStatus()` reporting `{ ready: true, source: 'render' }`, so
+components that wait for `ready` render real content and React never sees a
+mismatch. After hydration the client evaluates the same context on the
+server and keeps it current; values in `storage`, which are older, never
+show through.
 
 `initialState(context)` evaluates the context as the browser's client will
-ask the server to, so the values don't change when that evaluation arrives:
+ask the server to, so the values don't change when that evaluation arrives.
+So the `ServerClient`'s process-wide `attributes` and `version` are not
+applied: put attributes the browser needs in the context. Give the browser's
+client the chamber the `ServerClient` evaluates (`realm.chamberPath(context)`).
 
-- The `ServerClient`'s process-wide `attributes` and `version` are not
-  applied, since the browser's evaluation doesn't have them. Put attributes
-  the browser needs in the context.
-- Give the browser's client the chamber the `ServerClient` evaluates: its
-  `path`, or with `pathTemplate`, `realm.chamberPath(context)`.
+Write the state into HTML with `serializeInitialState` (or your framework's
+own serialization), not plain `JSON.stringify`: it escapes `<`, `>`, and `&`,
+so a context attribute can't close the `<script>` element.
 
-`serializeInitialState(state)` escapes `<`, `>`, and `&`, so a context
-attribute can't close the `<script>` element; use it (or your framework's
-own serialization) rather than plain `JSON.stringify` when you write the
-state into HTML.
-
-With a framework, pass the state as a prop from server code and make the
-client once per page in a client component, for example in Next.js:
+With a framework such as Next.js, pass the state as a prop from server code
+and make the client once per page in a client component:
 
 ```tsx
 'use client';

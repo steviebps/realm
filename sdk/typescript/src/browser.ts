@@ -26,8 +26,9 @@ export interface BrowserClientOptions extends ClientOptions {
   /**
    * Evaluated values for `context` to serve until the server's evaluation
    * arrives, for example from a server render or shipped with the app. They
-   * apply only to that context, never to one identify switches to, and are
-   * never stored. Values in storage for the context win over them.
+   * apply only to that context (compared as the server receives contexts),
+   * never to another one identify switches to, and are never stored. Values
+   * in storage for the context win over them.
    */
   bootstrap?: EvaluatedFlags;
   /**
@@ -54,20 +55,19 @@ interface Evaluation {
   flags: EvaluatedFlags;
 }
 
-// Values given to a client before it starts, and the context they are for:
-// as JSON (contextKey, for bootstrap) or as the server receives contexts
-// (match, for initialState).
+// Values given to a client before it starts: those of the bootstrap or
+// initialState option, and the context they are for, as the server
+// receives it (see matchKey).
 interface Given {
-  contextKey: string;
   match: string;
   flags: EvaluatedFlags;
-  revision: number | undefined;
+  revision?: number;
 }
 
 // What a client was given at construction, which never changes: a server
 // render and the hydration of its page read the same values from it.
 interface Construction {
-  contextKey: string;
+  // The context the client was constructed with (see matchKey).
   match: string;
   initial: Given | undefined;
   bootstrap: Given | undefined;
@@ -87,12 +87,10 @@ export function renderedValues(
   client: BrowserClient,
   context: EvaluationContext | undefined,
 ): { flags: EvaluatedFlags; source: FlagSource } | undefined {
-  const given = constructions.get(client);
-  if (!given) return undefined;
-  const contextKey = context === undefined ? given.contextKey : JSON.stringify(context);
+  const given = constructions.get(client)!;
   const match = context === undefined ? given.match : matchKey(context);
   if (given.initial?.match === match) return { flags: given.initial.flags, source: 'render' };
-  if (given.bootstrap?.contextKey === contextKey) return { flags: given.bootstrap.flags, source: 'bootstrap' };
+  if (given.bootstrap?.match === match) return { flags: given.bootstrap.flags, source: 'bootstrap' };
   return undefined;
 }
 
@@ -119,15 +117,12 @@ function matchKey(context: EvaluationContext | undefined): string {
 }
 
 // given returns the values of a bootstrap or initialState option, if it has
-// any, for context.
-function given(context: EvaluationContext, flags: unknown, revision?: unknown): Given | undefined {
+// any, for the context match.
+function given(match: string, flags: unknown, revision?: unknown): Given | undefined {
   if (!isRecord(flags)) return undefined;
-  return {
-    contextKey: JSON.stringify(context),
-    match: matchKey(context),
-    flags: flags as EvaluatedFlags,
-    revision: typeof revision === 'number' && Number.isSafeInteger(revision) ? revision : undefined,
-  };
+  const values: Given = { match, flags: flags as EvaluatedFlags };
+  if (typeof revision === 'number' && Number.isSafeInteger(revision)) values.revision = revision;
+  return values;
 }
 
 /**
@@ -145,13 +140,13 @@ export class BrowserClient {
   #storageKey: string;
   // The prefix of every storage key: the evaluate URL (server and chamber).
   readonly #storagePrefix: string;
-  // The context as the server receives it, to compare with initialState's.
+  // The context as the server receives it (see matchKey).
   #match: string;
-  // The initialState values, and whether they are still the newest known
-  // for their context: no evaluation has arrived for it since.
-  readonly #initial: (Given & { fresh: boolean }) | undefined;
-  // The bootstrap values, and the context (as JSON) they are for.
-  readonly #bootstrap: Given | undefined;
+  // The bootstrap and initialState values.
+  readonly #given: Construction;
+  // Whether the initialState values are still the newest known for their
+  // context: no evaluation has arrived for it since.
+  #initialFresh = true;
   // Where the snapshot's values came from; undefined while it is empty and
   // getters return fallbacks. They are always the current context's.
   #source: FlagSource | undefined;
@@ -173,10 +168,12 @@ export class BrowserClient {
     this.#contextKey = JSON.stringify(this.#context);
     this.#match = matchKey(this.#context);
     this.#storageKey = this.#keyFor(this.#context);
-    const initial = given(initialContext, initialState?.flags, initialState?.revision);
-    this.#initial = initial && { ...initial, fresh: true };
-    this.#bootstrap = given(this.#context, options.bootstrap);
-    constructions.set(this, { contextKey: this.#contextKey, match: this.#match, initial, bootstrap: this.#bootstrap });
+    this.#given = {
+      match: this.#match,
+      initial: given(matchKey(initialContext), initialState?.flags, initialState?.revision),
+      bootstrap: given(this.#match, options.bootstrap),
+    };
+    constructions.set(this, this.#given);
     this.#restore();
   }
 
@@ -273,17 +270,17 @@ export class BrowserClient {
 
   /** The value of a boolean flag, or fallback. */
   bool(flag: string, fallback: boolean): boolean {
-    return this.#typed(flag, 'boolean', fallback);
+    return readFlag(this.allFlags(), flag, 'boolean', fallback);
   }
 
   /** The value of a string flag, or fallback. */
   string(flag: string, fallback: string): string {
-    return this.#typed(flag, 'string', fallback);
+    return readFlag(this.allFlags(), flag, 'string', fallback);
   }
 
   /** The value of a number flag, or fallback. */
   number(flag: string, fallback: number): number {
-    return this.#typed(flag, 'number', fallback);
+    return readFlag(this.allFlags(), flag, 'number', fallback);
   }
 
   /**
@@ -291,7 +288,7 @@ export class BrowserClient {
    * changing it does not change what later reads return.
    */
   json<T>(flag: string, fallback: T): T {
-    return this.#typed(flag, 'custom', fallback, true);
+    return readFlag(this.allFlags(), flag, 'custom', fallback, true);
   }
 
   /**
@@ -302,12 +299,6 @@ export class BrowserClient {
   allFlags(): EvaluatedFlags {
     const flags = this.#evaluation.value.flags;
     return isRecord(flags) ? flags : noFlags;
-  }
-
-  // typed returns the value of flag when it has type want (a copy, with
-  // copy), and otherwise fallback.
-  #typed<T>(key: string, want: FlagType, fallback: T, copy = false): T {
-    return readFlag(this.allFlags(), key, want, fallback, copy);
   }
 
   // keyFor returns the storage key of context's values, or '' without
@@ -340,9 +331,10 @@ export class BrowserClient {
   #restore(): void {
     const contextKey = this.#contextKey;
     const storage = this.#options.storage;
-    const initial = this.#initial?.match === this.#match ? this.#initial : undefined;
+    const forContext = (values: Given | undefined) => (values?.match === this.#match ? values : undefined);
+    const initial = forContext(this.#given.initial);
     this.#stored = undefined;
-    if (initial?.fresh) {
+    if (initial && this.#initialFresh) {
       this.#show('render', () => this.#evaluation.set({ flags: initial.flags }, initial.revision));
       return;
     }
@@ -362,7 +354,7 @@ export class BrowserClient {
         return;
       }
     }
-    const bootstrap = initial ?? (this.#bootstrap?.contextKey === contextKey ? this.#bootstrap : undefined);
+    const bootstrap = initial ?? forContext(this.#given.bootstrap);
     if (bootstrap) {
       this.#show('bootstrap', () => this.#evaluation.set({ flags: bootstrap.flags }));
     } else {
@@ -426,7 +418,7 @@ export class BrowserClient {
     const receive = (update: () => boolean) => {
       this.#show('network', update);
       // A server render's values for this context are older now.
-      if (this.#initial?.match === this.#match) this.#initial.fresh = false;
+      if (this.#given.initial?.match === this.#match) this.#initialFresh = false;
       this.#persist();
     };
     const following = this.#transport.follow(

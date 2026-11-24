@@ -206,7 +206,11 @@ export class ServerClient {
    * values are copies, as json returns them.
    */
   allFlags(context?: EvaluationContext): EvaluatedFlags {
-    return this.#evaluate(context ?? {}, this.#defaults);
+    try {
+      return this.#evaluate(this.#chamber(context), context ?? {}, this.#defaults);
+    } catch {
+      return {};
+    }
   }
 
   /**
@@ -224,25 +228,27 @@ export class ServerClient {
    */
   initialState(context?: EvaluationContext): InitialState {
     const normalized = normalizeContext(context);
-    const state: InitialState = { context: normalized, flags: this.#evaluate(normalized, {}) };
     const source = this.#source;
-    const revision = source.kind === 'path' ? source.chamber.revision : this.#view(normalized, {})?.revision;
-    if (revision !== undefined) state.revision = revision;
+    const target =
+      source.kind === 'path' ? { chamber: source.chamber.value, revision: source.chamber.revision } : this.#view(normalized, {});
+    const state: InitialState = { context: normalized, flags: {} };
+    try {
+      state.flags = this.#evaluate(target?.chamber, normalized, {});
+    } catch {
+      // a chamber of a shape this SDK does not expect evaluates to no flags
+    }
+    if (target?.revision !== undefined) state.revision = target.revision;
     return state;
   }
 
-  // evaluate returns every flag's value for context, with defaults filling in
-  // for the attributes it does not set. Custom values are copies.
-  #evaluate(context: EvaluationContext, defaults: Record<string, string>): EvaluatedFlags {
-    try {
-      const chamber = this.#chamber(context, defaults);
-      if (!chamber) return {};
-      const flags = evaluateChamber(chamber, context, defaults);
-      for (const flag of Object.values(flags)) flag.value = copyValue(flag.value);
-      return flags;
-    } catch {
-      return {};
-    }
+  // evaluate returns every flag's value in chamber for context, with defaults
+  // filling in for the attributes it does not set. Custom values are copies.
+  // It throws for a chamber of a shape this SDK does not expect.
+  #evaluate(chamber: Chamber | undefined, context: EvaluationContext, defaults: Record<string, string>): EvaluatedFlags {
+    if (!chamber) return {};
+    const flags = evaluateChamber(chamber, context, defaults);
+    for (const flag of Object.values(flags)) flag.value = copyValue(flag.value);
+    return flags;
   }
 
   // typed returns the value of flag for context when it has type want (a
@@ -262,9 +268,9 @@ export class ServerClient {
 
   // chamber returns the chamber to evaluate context against, or undefined
   // when there is none.
-  #chamber(context: EvaluationContext | undefined, defaults = this.#defaults): Chamber | undefined {
+  #chamber(context: EvaluationContext | undefined): Chamber | undefined {
     const source = this.#source;
-    return source.kind === 'path' ? source.chamber.value : this.#view(context, defaults)?.chamber;
+    return source.kind === 'path' ? source.chamber.value : this.#view(context)?.chamber;
   }
 
   // view returns the view of the subtree that context resolves to, if any.
