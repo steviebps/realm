@@ -108,6 +108,10 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"valid targeting", `{"type":"boolean","value":false,"targeting":[{"id":"a","clauses":[{"attribute":"locationId","op":"in","values":["x"]}],"value":true,"rollout":{"percentage":50,"bucketBy":"locationId"}}]}`, ""},
 		{"rule value wrong type", `{"type":"boolean","value":false,"targeting":[{"value":"yes"}]}`, "incompatible"},
 		{"rule value missing", `{"type":"boolean","value":false,"targeting":[{"clauses":[]}]}`, "cannot be empty"},
+		{"null boolean rule value", `{"type":"boolean","value":true,"targeting":[{"value":null}]}`, "targeting rule #1: value cannot be null"},
+		{"null string rule value", `{"type":"string","value":"a","targeting":[{"id":"x","value":"b"},{"id":"y","value":null}]}`, "targeting rule y: value cannot be null"},
+		{"null number rule value", `{"type":"number","value":1,"targeting":[{"value":null}]}`, "value cannot be null"},
+		{"null custom rule value", `{"type":"custom","value":{},"targeting":[{"value":null}]}`, ""},
 		{"duplicate ids", `{"type":"string","value":"a","targeting":[{"id":"x","value":"b"},{"id":"x","value":"c"}]}`, "not unique"},
 		{"rollout out of range", `{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":101}}]}`, "range"},
 		{"bad clause", `{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"","op":"in","values":["x"]}]}]}`, "attribute cannot be empty"},
@@ -124,6 +128,7 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"valid paused targeting", `{"type":"boolean","value":false,"pausedTargeting":[{"id":"a","clauses":[{"attribute":"locationId","op":"in","values":["x"]}],"value":true,"rollout":{"percentage":50}}]}`, ""},
 		{"paused rule value wrong type", `{"type":"boolean","value":false,"pausedTargeting":[{"value":"yes"}]}`, "pausedTargeting: targeting rule #1: "},
 		{"paused rule value missing", `{"type":"boolean","value":false,"pausedTargeting":[{"clauses":[]}]}`, "pausedTargeting: targeting rule #1: value cannot be empty"},
+		{"paused null rule value", `{"type":"boolean","value":true,"pausedTargeting":[{"value":null}]}`, "pausedTargeting: targeting rule #1: value cannot be null"},
 		{"paused duplicate ids", `{"type":"string","value":"a","pausedTargeting":[{"id":"x","value":"b"},{"id":"x","value":"c"}]}`, "not unique"},
 		{"paused empty schedule", `{"type":"boolean","value":false,"pausedTargeting":[{"value":true,"schedule":{}}]}`, "start or an end"},
 		// reads are lenient: a flag with rules in both decodes (ParseChamber refuses it)
