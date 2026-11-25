@@ -28,6 +28,11 @@ type subtreeConformance struct {
 	InvalidTemplates []string `json:"invalidTemplates"`
 }
 
+// subtreeOf returns rlm's subtree snapshot (see WithPathTemplate).
+func subtreeOf(rlm *Realm) *subtreeSnapshot {
+	return rlm.snap.(*subtreeSnapshot)
+}
+
 // templateRealm returns a Realm for template that never refreshes, holding a
 // view (with the flag "msg" set to its path) of each of paths.
 func templateRealm(t testing.TB, template string, paths []string, options ...RealmOption) *Realm {
@@ -41,15 +46,16 @@ func templateRealm(t testing.TB, template string, paths []string, options ...Rea
 		t.Fatal(err)
 	}
 	if paths != nil {
-		rlm.views = make(map[string]*ChamberEntry, len(paths))
+		views := make(map[string]*ChamberEntry, len(paths))
 		for i, p := range paths {
 			c := &Chamber{Rules: map[string]*Flag{
 				"msg":  {Rule: &Rule{Type: "string", Value: p}},
 				"on":   {Rule: &Rule{Type: "boolean", Value: true}},
 				"rate": {Rule: &Rule{Type: "number", Value: float64(i)}},
 			}}
-			rlm.views[p] = rlm.newView(p, c, uint64(100+i))
+			views[p] = rlm.newView(p, c, uint64(100+i))
 		}
+		subtreeOf(rlm).views = views
 	}
 	return rlm
 }
@@ -195,7 +201,7 @@ func TestSubtreeContexts(t *testing.T) {
 		pinned := rlm.NewContextWithEvaluation(bg, loc)
 		unpinned := context.WithValue(bg, EvaluationContextKey, loc)
 		rlm.mu.Lock()
-		delete(rlm.views, "/prod/tenants/t-1/loc-1/")
+		delete(subtreeOf(rlm).views, "/prod/tenants/t-1/loc-1/")
 		rlm.mu.Unlock()
 		if got := rlm.ChamberPath(pinned); got != "/prod/tenants/t-1/loc-1/" {
 			t.Errorf("pinned: ChamberPath = %q", got)
@@ -219,7 +225,7 @@ func TestSubtreeContexts(t *testing.T) {
 		}
 		// the context pinned nothing, so it resolves once views arrive
 		empty.mu.Lock()
-		empty.views = map[string]*ChamberEntry{"/prod/tenants/t-1/": empty.newView("/prod/tenants/t-1/", &Chamber{Rules: map[string]*Flag{}}, 0)}
+		subtreeOf(empty).views = map[string]*ChamberEntry{"/prod/tenants/t-1/": empty.newView("/prod/tenants/t-1/", &Chamber{Rules: map[string]*Flag{}}, 0)}
 		empty.mu.Unlock()
 		if got := empty.ChamberPath(ctx); got != "/prod/tenants/t-1/" {
 			t.Errorf("after a load: ChamberPath = %q", got)
@@ -240,7 +246,7 @@ func TestSingleChamberPath(t *testing.T) {
 	if got := rlm.ChamberPath(context.Background()); got != "" {
 		t.Errorf("before a load: ChamberPath = %q, want none", got)
 	}
-	rlm.setChamber(&Chamber{Rules: map[string]*Flag{}}, 0)
+	rlm.snap.(*chamberSnapshot).set(context.Background(), &Chamber{Rules: map[string]*Flag{}}, 0)
 	if got := rlm.ChamberPath(context.Background()); got != "/a/" {
 		t.Errorf("ChamberPath = %q, want the configured path", got)
 	}
@@ -358,7 +364,7 @@ func BenchmarkRealmSubtreeResolve(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			if rlm.template.resolve(rlm.views, ec) == nil {
+			if snap := subtreeOf(rlm); snap.template.resolve(snap.views, ec) == nil {
 				b.Error("no view")
 			}
 		}

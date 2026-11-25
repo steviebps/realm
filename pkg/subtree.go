@@ -274,52 +274,9 @@ func (rlm *Realm) newView(path string, c *Chamber, rev uint64) *ChamberEntry {
 	return &ChamberEntry{rules: c.Rules, attributes: rlm.attributes, version: rlm.semver, revision: rev, path: path}
 }
 
-// setSubtreeIf replaces the subtree snapshot with views, fetched while the
-// snapshot was at version, unless the snapshot has changed since. A view that
-// could not be built keeps the one the snapshot holds for its path, if any.
-// It reports whether it replaced the snapshot.
-func (rlm *Realm) setSubtreeIf(ctx context.Context, views []subtreeView, version uint64) bool {
-	m := make(map[string]*ChamberEntry, len(views))
-	var unbuilt []subtreeView
-	for _, v := range views {
-		if v.chamber == nil {
-			unbuilt = append(unbuilt, v)
-			continue
-		}
-		m[v.path] = rlm.newView(v.path, v.chamber, v.revision)
-	}
-	rlm.mu.Lock()
-	if rlm.version != version {
-		rlm.mu.Unlock()
-		return false
-	}
-	for _, v := range unbuilt {
-		if _, ok := m[v.path]; ok {
-			continue
-		}
-		if old, ok := rlm.views[v.path]; ok {
-			m[v.path] = old
-		}
-	}
-	rlm.views = m
-	rlm.version++
-	rlm.refreshed = time.Now()
-	rlm.mu.Unlock()
-
-	rlm.noteUnsupported(ctx, views...)
-	if len(unbuilt) == 0 {
-		if n, reported := rlm.badViews.ok(); reported {
-			rlm.logger.InfoCtx(ctx).Int("failures", n).Msg("every chamber view of the subtree could be built again")
-		}
-	} else if log, n := rlm.badViews.fail(time.Now()); log {
-		rlm.logger.WarnCtx(ctx).Str("path", unbuilt[0].path).Str("error", unbuilt[0].err).Int("views", len(unbuilt)).Int("failures", n).
-			Msg("the realm server could not build some chamber views of the subtree; keeping the last ones received for them")
-	}
-	return true
-}
-
 // noteUnsupported logs, once each, the flags of views that this SDK cannot
-// fully evaluate (see Realm.replace).
+// fully evaluate: a flag of an unknown type returns the caller's default, and
+// a rule with an unknown operator never matches.
 func (rlm *Realm) noteUnsupported(ctx context.Context, views ...subtreeView) {
 	var found map[string]string
 	for _, v := range views {
@@ -371,11 +328,11 @@ type streamHandler interface {
 	event(ctx context.Context, name, id string, data []byte) (bool, error)
 }
 
-// chamberStream is the stream of the chamber at the Realm's path.
-type chamberStream struct{ rlm *Realm }
+// chamberStream is the stream of a chamber snapshot's chamber.
+type chamberStream struct{ snap *chamberSnapshot }
 
 func (s chamberStream) open(ctx context.Context) (*http.Response, error) {
-	return s.rlm.client.Watch(ctx, s.rlm.path)
+	return s.snap.rlm.client.Watch(ctx, s.snap.path)
 }
 
 func (s chamberStream) answered(ctx context.Context, res *http.Response, version uint64) error {
@@ -386,7 +343,7 @@ func (s chamberStream) answered(ctx context.Context, res *http.Response, version
 	if err != nil {
 		return fmt.Errorf("chamber stream: the server answered with neither an event stream nor a chamber: %w", err)
 	}
-	s.rlm.setChamberIf(c, rev, version)
+	s.snap.setIf(ctx, c, rev, version)
 	return errNotStreaming
 }
 
@@ -396,7 +353,7 @@ func (s chamberStream) event(ctx context.Context, name, id string, data []byte) 
 	if name != "" && name != "chamber" {
 		return false, nil
 	}
-	return s.rlm.applyEvent(ctx, data, parseRevision(id)), nil
+	return s.snap.applyEvent(ctx, data, parseRevision(id)), nil
 }
 
 // subtreeStream is the stream of the subtree at the Realm's template root.
@@ -404,7 +361,8 @@ func (s chamberStream) event(ctx context.Context, name, id string, data []byte) 
 // is sending, which then replaces the Realm's; after that, it applies each
 // change as it arrives.
 type subtreeStream struct {
-	rlm *Realm
+	snap *subtreeSnapshot
+	rlm  *Realm
 	// synced is set once the first synced event has arrived.
 	synced bool
 	// staged holds the views received before it.
@@ -414,20 +372,20 @@ type subtreeStream struct {
 	sent map[string]struct{}
 }
 
-func newSubtreeStream(rlm *Realm) *subtreeStream {
-	return &subtreeStream{rlm: rlm, staged: make(map[string]*ChamberEntry), sent: make(map[string]struct{})}
+func newSubtreeStream(snap *subtreeSnapshot) *subtreeStream {
+	return &subtreeStream{snap: snap, rlm: snap.rlm, staged: make(map[string]*ChamberEntry), sent: make(map[string]struct{})}
 }
 
 func (s *subtreeStream) open(ctx context.Context) (*http.Response, error) {
-	return s.rlm.client.WatchSubtree(ctx, s.rlm.template.root)
+	return s.rlm.client.WatchSubtree(ctx, s.snap.template.root)
 }
 
 func (s *subtreeStream) answered(ctx context.Context, res *http.Response, version uint64) error {
-	views, err := readSubtreeResponse(res, s.rlm.template.root)
+	views, err := readSubtreeResponse(res, s.snap.template.root)
 	if err != nil {
 		return fmt.Errorf("subtree stream: the server answered with neither an event stream nor a subtree: %w", err)
 	}
-	s.rlm.setSubtreeIf(ctx, views, version)
+	s.snap.setIf(ctx, views, version)
 	return errNotStreaming
 }
 
@@ -473,10 +431,10 @@ func (s *subtreeStream) chamber(ctx context.Context, id string, data []byte) err
 		return nil
 	}
 	s.rlm.mu.Lock()
-	if s.rlm.views == nil {
-		s.rlm.views = make(map[string]*ChamberEntry)
+	if s.snap.views == nil {
+		s.snap.views = make(map[string]*ChamberEntry)
 	}
-	s.rlm.views[v.path] = view
+	s.snap.views[v.path] = view
 	s.rlm.changed()
 	s.rlm.mu.Unlock()
 	return nil
@@ -499,8 +457,8 @@ func (s *subtreeStream) deleted(ctx context.Context, data []byte) error {
 		return nil
 	}
 	s.rlm.mu.Lock()
-	if _, ok := s.rlm.views[path]; ok {
-		delete(s.rlm.views, path)
+	if _, ok := s.snap.views[path]; ok {
+		delete(s.snap.views, path)
 		s.rlm.changed()
 	}
 	s.rlm.mu.Unlock()
@@ -524,14 +482,14 @@ func (s *subtreeStream) sync(data []byte) {
 	sent := s.sent
 	s.sent = make(map[string]struct{}, len(sent))
 
-	rlm := s.rlm
+	rlm, snap := s.rlm, s.snap
 	rlm.mu.Lock()
 	defer rlm.mu.Unlock()
 	if !s.synced {
 		s.synced = true
 		staged := s.staged
 		s.staged = nil
-		for path, view := range rlm.views {
+		for path, view := range snap.views {
 			if _, ok := staged[path]; ok {
 				continue
 			}
@@ -540,27 +498,21 @@ func (s *subtreeStream) sync(data []byte) {
 				staged[path] = view
 			}
 		}
-		rlm.views = staged
+		snap.views = staged
 		rlm.changed()
 		return
 	}
 	if !complete {
 		return
 	}
-	n := len(rlm.views)
-	maps.DeleteFunc(rlm.views, func(path string, _ *ChamberEntry) bool {
+	n := len(snap.views)
+	maps.DeleteFunc(snap.views, func(path string, _ *ChamberEntry) bool {
 		_, ok := sent[path]
 		return !ok
 	})
-	if len(rlm.views) != n {
+	if len(snap.views) != n {
 		rlm.changed()
 	}
-}
-
-// changed records a change to the subtree snapshot. rlm.mu must be held.
-func (rlm *Realm) changed() {
-	rlm.version++
-	rlm.refreshed = time.Now()
 }
 
 // badEvent logs, rate-limited, a streamed view that was skipped.

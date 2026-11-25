@@ -153,7 +153,7 @@ model.
 |---|---|
 | `main.go` | Entry point → `cmd.Execute()` |
 | `cmd/` | Cobra CLI: `root.go`, `server.go`, `config.go`, `client*.go` |
-| `pkg/` | Core domain + SDK (package `realm`); refresh in `refresh.go`, path templates in `template.go` (parse, resolve), subtree reads and streams in `subtree.go` |
+| `pkg/` | Core domain + SDK (package `realm`); the snapshot flag reads evaluate against in `snapshot.go` (`chamberSnapshot` for `WithPath`, `subtreeSnapshot` for `WithPathTemplate`: the only place the two modes differ), refresh in `refresh.go`, path templates in `template.go` (parse, resolve), subtree reads and streams in `subtree.go` |
 | `pkg/storage/` | `Storage` interface + backends (`file`, `boltdb`, `bigcache`, `gcs`, `s3`, `postgres`, `etcd`) and wrappers (`cacheable`, `inheritable`, which reuses unchanged chambers' parses and merged views via `inheritable_cache.go`); backends self-register in `StorageOptions`; optional `Transactional` / `Watchable` / `Locker` capabilities and `Update` in `txn.go`, and `Scanner` (one range read of a prefix: `postgres`, `etcd`, `boltdb`) in `scan.go`; `file_{unix,windows,other}.go` hold the file backend's per-platform locking; `subtree.go`: `ListTree` (the paths below a root, capped; one `ScanKeys` on a `Scanner`), `ReadTree` (each view, reading each chamber once, with one `Scan` when it can), `WalkTree`, `ScanLayers`, `ReadLayers` (`ScanLayers` or a read each), `BuildView` |
 | `client/http.go` | `HttpClient` used by both CLI and SDK (sends `Token` as a bearer API key) |
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
