@@ -256,6 +256,9 @@ type View struct {
 // A chamber that cannot be parsed sets the view's Err; a failed read, or a
 // path storage refuses (see ValidatePath), is returned as an error.
 func BuildView(ctx context.Context, read LayerReader, p string, inheritable bool) (View, error) {
+	if err := ValidatePath(p); err != nil {
+		return View{}, err
+	}
 	lin, err := BuildLineage(ctx, read, p, inheritable)
 	if err != nil {
 		return View{}, err

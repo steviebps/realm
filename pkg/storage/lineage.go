@@ -49,40 +49,23 @@ type Layered interface {
 	Layers(ctx context.Context, logicalPath string) (*Lineage, error)
 }
 
-// BuildLineage reads the lineage of the path p through read: the
-// chamber at p, then, when inheritable, each ancestor its inherited view
-// consults. Ancestors are read farthest first, so a failed read reports the
-// farthest one that fails; the lineage holds them nearest first. Every
-// lineage, and so every inherited view, Ancestry, and Resolution, is built
-// here.
+// BuildLineage reads the lineage of the canonical path p (see
+// cleanChamberPath) through read: the chamber at p, then, when inheritable,
+// each ancestor its inherited view consults. Ancestors are read farthest
+// first, so a failed read reports the farthest one that fails; the lineage
+// holds them nearest first. Every lineage, and so every inherited view,
+// Ancestry, and Resolution, is built here.
 //
 // The chamber at p need not exist (see Lineage.Stored): a lineage without it
 // is what a chamber written there would inherit. An ancestor that cannot be
-// parsed is recorded with its error, wrapped to name it; a failed read, or a
-// path storage refuses (see ValidatePath), is returned as an error.
+// parsed is recorded with its error, wrapped to name it; an error from read
+// is returned as is.
 func BuildLineage(ctx context.Context, read LayerReader, p string, inheritable bool) (*Lineage, error) {
-	return buildLineage(ctx, read, p, inheritable, false)
-}
-
-// buildLineage is BuildLineage; with needStored, it returns a NotFoundError
-// as soon as it finds no chamber at p, without reading the ancestors.
-func buildLineage(ctx context.Context, read LayerReader, p string, inheritable, needStored bool) (*Lineage, error) {
-	if err := ValidatePath(p); err != nil {
-		return nil, err
-	}
 	own, err := read(ctx, p)
 	if err != nil {
 		return nil, err
 	}
-	// p is read as given, as a plain Get would read it, and named
-	// canonically
-	key := p
-	p = canonicalChamberPath(p)
-	own.Path = p
 	lin := &Lineage{Inheritable: inheritable, Layers: []Layer{own}}
-	if needStored && !lin.Stored() {
-		return nil, &NotFoundError{Key: key}
-	}
 	if !inheritable {
 		return lin, nil
 	}
@@ -103,6 +86,28 @@ func buildLineage(ctx context.Context, read LayerReader, p string, inheritable, 
 		return nil, err
 	}
 	return lin, nil
+}
+
+// storedLineage builds the lineage of the chamber stored at key, a path as
+// given, reading the chamber itself with get at key, as a plain Get would,
+// and its ancestors with read. It fails with get's error, a NotFoundError
+// when there is no chamber at key, before reading any ancestor.
+func storedLineage(ctx context.Context, key string, get func(context.Context, string) (*StorageEntry, error), parse func(string, *StorageEntry) Layer, read LayerReader, inheritable bool) (*Lineage, error) {
+	p, err := cleanChamberPath(key)
+	if err != nil {
+		return nil, err
+	}
+	withOwn := func(ctx context.Context, q string) (Layer, error) {
+		if q != p {
+			return read(ctx, q)
+		}
+		entry, err := get(ctx, key)
+		if err != nil {
+			return Layer{}, err
+		}
+		return parse(p, entry), nil
+	}
+	return BuildLineage(ctx, withOwn, p, inheritable)
 }
 
 // Stored reports whether a chamber is stored at the lineage's path, whether
@@ -304,8 +309,7 @@ func ReadLineage(ctx context.Context, s Storage, logicalPath string) (*Lineage, 
 	if layered, ok := s.(Layered); ok {
 		return layered.Layers(ctx, logicalPath)
 	}
-	read := func(ctx context.Context, p string) (Layer, error) { return ReadLayer(ctx, s, p) }
-	return buildLineage(ctx, read, logicalPath, false, true)
+	return storedLineage(ctx, logicalPath, s.Get, ParseLayer, nil, false)
 }
 
 // ChamberError reports a stored chamber that cannot be parsed. Its message
@@ -330,6 +334,16 @@ func ParseLayer(p string, entry *StorageEntry) Layer {
 		return Layer{Path: p, Err: &ChamberError{Path: p, Err: err}, Version: entry.Version}
 	}
 	return Layer{Path: p, Chamber: c, Version: entry.Version}
+}
+
+// cleanChamberPath returns the canonical form of logicalPath, cleaned and
+// with a trailing slash, once it is valid (see ValidatePath). It validates
+// first: cleaning would resolve "..".
+func cleanChamberPath(logicalPath string) (string, error) {
+	if err := ValidatePath(logicalPath); err != nil {
+		return "", err
+	}
+	return canonicalChamberPath(logicalPath), nil
 }
 
 // canonicalChamberPath returns logicalPath cleaned, with a trailing slash.

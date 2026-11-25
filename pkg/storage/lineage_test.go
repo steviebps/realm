@@ -683,8 +683,11 @@ func TestAncestry(t *testing.T) {
 	if got, err := ancestry(src, false, "/t/a/"); err != nil || len(got.Seals) != 0 || len(got.Constraints) != 0 {
 		t.Errorf("without inheritance: %+v, %v; want nothing sealed or constrained", got, err)
 	}
-	if _, err := ancestry(src, true, "/t/../x/"); err == nil {
-		t.Error("a path with .. was accepted")
+	if _, err := inh.(Layered).Layers(ctx, "/t/../x/"); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("a path with ..: %v, want ErrInvalidPath", err)
+	}
+	if _, err := ReadLineage(ctx, src, "/t/../x/"); !errors.Is(err, ErrInvalidPath) {
+		t.Errorf("a path with .. without inheritance: %v, want ErrInvalidPath", err)
 	}
 	src.failing = map[string]error{"/t/": errors.New("boom")}
 	if _, err := ancestry(src, true, "/t/a/"); err == nil {
