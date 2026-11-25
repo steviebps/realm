@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import type { ReactNode } from 'react';
-import { readFlag, renderedValues, type BrowserClient, type FlagSource } from './browser.js';
+import { contextKeyOf, readFlag, type BrowserClient, type FlagSource } from './browser.js';
 import { copyValue } from './evaluate.js';
 import type { EvaluatedFlags, EvaluationContext, FlagType } from './types.js';
 
@@ -52,8 +52,8 @@ interface RealmContextValue {
   client: BrowserClient;
   // The provider's context as JSON, or undefined to follow the client's own.
   contextKey: string | undefined;
-  // The values a server render reads (see renderedValues).
-  rendered: ReturnType<typeof renderedValues>;
+  // The values a server render reads (see BrowserClient.renderedValues).
+  rendered: ReturnType<BrowserClient['renderedValues']>;
   status: RealmStatus;
 }
 
@@ -66,6 +66,18 @@ function forContext(client: BrowserClient, contextKey: string | undefined): bool
 
 const RealmContext = createContext<RealmContextValue | undefined>(undefined);
 
+// How the mounted providers use a client: how many use it, and whether they
+// started it (it was stopped when the first of them mounted). Providers stop
+// a client only when they started it and the last of them unmounts, so a
+// client the application started itself keeps running, and providers that
+// share a client do not stop it for each other.
+interface ProviderUse {
+  count: number;
+  started: boolean;
+}
+
+const providerUses = new WeakMap<BrowserClient, ProviderUse>();
+
 // What the provider's effect last applied to the client: its context, and
 // how starting for it failed, if it did.
 interface Applied {
@@ -76,9 +88,13 @@ interface Applied {
 
 /**
  * Makes client available to the hooks in children. It starts the client when
- * it mounts and stops it when it unmounts; the last known values stay
- * available after that. When a start fails, the client keeps retrying, and
- * ready turns true once an evaluation arrives.
+ * it mounts, and stops it when it unmounts if providers started it and no
+ * other provider still uses it: a client the application started itself
+ * keeps running. The last known values stay available after it stops. When a
+ * start fails, the client keeps retrying, and ready turns true once an
+ * evaluation arrives. A context that differs only in the order of its
+ * attributes, or numbers written for strings (see contextKeyOf), is the same
+ * context, and is not evaluated again.
  *
  * In server rendering, which never starts the client, and while the page
  * hydrates, hooks return the values the client was constructed with for the
@@ -89,17 +105,24 @@ interface Applied {
  */
 export function RealmProvider({ client, context, children }: RealmProviderProps) {
   const [applied, setApplied] = useState<Applied | undefined>(undefined);
-  // Compare contexts by value, so an inline object does not re-evaluate on every render.
-  const contextKey = context === undefined ? undefined : JSON.stringify(context);
+  // Compare contexts as the server receives them (see contextKeyOf), so an
+  // inline object, or one with its attributes in another order, does not
+  // evaluate again.
+  const contextKey = context === undefined ? undefined : contextKeyOf(context);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const keyed = useMemo(() => context, [contextKey]);
 
   useEffect(() => {
     let active = true;
-    if (contextKey !== undefined) {
-      // identify only sets the context of a stopped client; start then
-      // evaluates for it, even if the client was started elsewhere.
-      client.stop();
-      void client.identify(JSON.parse(contextKey) as EvaluationContext);
+    let use = providerUses.get(client);
+    if (!use || use.count === 0) {
+      use = { count: 0, started: typeof client.isStarted === 'function' ? !client.isStarted() : true };
+      providerUses.set(client, use);
     }
+    use.count++;
+    // identify re-evaluates a started client for a new context, and only
+    // sets it on a stopped one, which start then evaluates for
+    if (keyed !== undefined) void client.identify(keyed);
     setApplied({ client, contextKey, error: undefined });
     client.start().catch((e: unknown) => {
       if (!active) return;
@@ -108,13 +131,18 @@ export function RealmProvider({ client, context, children }: RealmProviderProps)
     });
     return () => {
       active = false;
-      client.stop();
+      use.count--;
+      if (use.count === 0 && use.started) client.stop();
     };
-  }, [client, contextKey]);
+  }, [client, contextKey, keyed]);
 
   // By value, like contextKey.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const rendered = useMemo(() => renderedValues(client, context), [client, contextKey]);
+  // A client this module did not construct (another copy of the SDK, a
+  // test double) may lack it, and renders its fallbacks.
+  const rendered = useMemo(
+    () => (typeof client.renderedValues === 'function' ? client.renderedValues(keyed) : undefined),
+    [client, keyed],
+  );
   const subscribe = useCallback((onChange: () => void) => client.subscribe(onChange), [client]);
   const source = useSyncExternalStore(
     subscribe,

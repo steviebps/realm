@@ -1,6 +1,6 @@
 import type { ServerResponse } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BrowserClient, RealmError, ServerClient, type EvaluationContext } from '../src/index.js';
+import { BrowserClient, contextKeyOf, RealmError, ServerClient, type EvaluationContext } from '../src/index.js';
 import { fakeRealm, type FakeRequest } from './fake-realm.js';
 
 const betaOn = { rules: { beta: { type: 'boolean', value: true } } };
@@ -793,6 +793,28 @@ describe('refreshing', () => {
   });
 });
 
+describe('BrowserClient identify', () => {
+  it('keeps the values of the same context written another way', async () => {
+    const realm = await setup();
+    const client = new BrowserClient({
+      address: realm.address,
+      path: '/prod/web/',
+      streaming: false,
+      context: { key: 'u1', attributes: { plan: 'pro', region: 'eu' } },
+    });
+    cleanup.push(() => client.stop());
+    await client.start();
+    const requests = realm.requests.length;
+    await client.identify({ attributes: { region: 'eu', plan: 'pro' }, key: 'u1' });
+    expect(client.isReady()).toBe(true);
+    expect(realm.requests.length).toBe(requests);
+    expect(client.contextKey()).toBe(contextKeyOf({ key: 'u1', attributes: { plan: 'pro', region: 'eu' } }));
+
+    await client.identify({ key: 'u2' });
+    expect(realm.requests.length).toBeGreaterThan(requests);
+  });
+});
+
 describe('contexts from JavaScript', () => {
   // as a JavaScript caller might pass it, with values that are not strings
   const context = (key: unknown, attributes: Record<string, unknown>) => ({ key, attributes }) as unknown as EvaluationContext;
@@ -834,7 +856,7 @@ describe('contexts from JavaScript', () => {
     await client.start();
     expect(JSON.parse(realm.requests[0]!.body)).toEqual({ key: '42', attributes: { build: '123', paid: 'true', plan: 'pro' } });
     // still the context as given, to compare with
-    expect(client.contextKey()).toBe(JSON.stringify(ctx));
+    expect(client.contextKey()).toBe(contextKeyOf(ctx));
   });
 });
 

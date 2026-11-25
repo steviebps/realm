@@ -1,4 +1,4 @@
-export { BrowserClient, type BrowserClientOptions, type FlagSource } from './browser.js';
+export { BrowserClient, contextKeyOf, type BrowserClientOptions, type FlagSource } from './browser.js';
 export { indexedDbAdapter, localStorageAdapter, type IndexedDbAdapterOptions, type StorageAdapter } from './storage.js';
 export { serializeInitialState, ServerClient, type ServerClientOptions } from './server.js';
 export { RealmError, type ClientOptions } from './transport.js';
