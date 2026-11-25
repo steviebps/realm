@@ -1,4 +1,4 @@
-import { Schedule } from '../models/response';
+import type { Schedule } from '../models/response';
 
 const pad = (n: number) => String(Math.abs(n)).padStart(2, '0');
 

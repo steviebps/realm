@@ -8,6 +8,8 @@ type Props = {
   error?: string;
   /** Set when the chamber changed underneath and the diff was recomputed. */
   rebased?: boolean;
+  /** Flags the change rewrites that someone else changed meanwhile: saving replaces what they did. */
+  overwrites?: string[];
   onCancel: () => void;
   onConfirm: () => void;
 };
@@ -15,7 +17,7 @@ type Props = {
 const kindColor = { added: 'success', removed: 'failure', changed: 'warning' } as const;
 
 /** Shows exactly what a save will change and asks for confirmation. */
-export const ConfirmChange = ({ title, changes, saving, error, rebased, onCancel, onConfirm }: Props) => (
+export const ConfirmChange = ({ title, changes, saving, error, rebased, overwrites, onCancel, onConfirm }: Props) => (
   <Modal show size="3xl" onClose={saving ? () => undefined : onCancel}>
     <ModalHeader>{title}</ModalHeader>
     <ModalBody>
@@ -24,6 +26,20 @@ export const ConfirmChange = ({ title, changes, saving, error, rebased, onCancel
           <Alert color="warning">
             Someone else changed this chamber while you were editing. Your change has been re-applied to the latest
             version — please review it again.
+            {overwrites && overwrites.length > 0 && (
+              <>
+                {' '}
+                They also changed {overwrites.length === 1 ? 'a flag' : 'flags'} you are changing, and saving replaces
+                what they did to {overwrites.length === 1 ? 'it' : 'them'}:{' '}
+                {overwrites.map((name, i) => (
+                  <span key={name}>
+                    {i > 0 && ', '}
+                    <span className="font-mono">{name}</span>
+                  </span>
+                ))}
+                .
+              </>
+            )}
           </Alert>
         )}
         {error && <Alert color="failure">{error}</Alert>}

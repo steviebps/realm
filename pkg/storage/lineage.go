@@ -28,6 +28,11 @@ type Layer struct {
 	// StorageEntry.Version); 0 when there is none at Path or the storage
 	// does not track revisions.
 	Version uint64
+	// Raw is the chamber exactly as stored, set only on the chamber's own
+	// layer of a lineage read with ReadLineage or Layered.Layers, so that
+	// callers can tell the stored chamber that writes are checked against
+	// (its ETag, say) from the same read as its lineage.
+	Raw []byte
 }
 
 // Lineage is what the inherited view of a path is built from: the chamber
@@ -105,7 +110,9 @@ func storedLineage(ctx context.Context, key string, get func(context.Context, st
 		if err != nil {
 			return Layer{}, err
 		}
-		return parse(p, entry), nil
+		layer := parse(p, entry)
+		layer.Raw = entry.Value
+		return layer, nil
 	}
 	return BuildLineage(ctx, withOwn, p, inheritable)
 }

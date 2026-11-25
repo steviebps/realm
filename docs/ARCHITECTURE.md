@@ -91,7 +91,11 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   (`storage.Layered`): the chamber, each parent chamber it consults, which
   of them serves each flag, which flags a parent seals (`sealedBy`), and the
   definitions those seals hide (`hidden`); the UI uses it to show where each
-  flag comes from and which flags override a parent's.
+  flag comes from and which flags override a parent's, and edits the
+  chamber's own layer from it. The UI's editing logic (proposing a change,
+  saving it against the ETag, re-applying it after a conflict and naming the
+  flags it would overwrite, what each row allows) is the pure
+  `http/realm-ui/src/utils/chamberSession.ts`, which `ChamberView` drives.
 - **Subtree reads** — `GET ?subtree=true` (`http/subtree.go`) returns the
   inherited view of the path and of every chamber below it, root first and
   parents before children, so a service can serve many tenants or locations
@@ -151,8 +155,10 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   stored, so definitions a seal hides are skipped. Within the write's
   `Update` the server checks that the constraints it changes are those it
   scanned for, and answers 409 otherwise. See [design/constraints.md](design/constraints.md).
-- **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as
-  stored at its path (the inherited view carries none); writes honor `If-Match` / `If-None-Match: *` and return `412` on
+- **Safe editing** — `GET ?inherit=false` and `GET ?inherit=layers` return an
+  `ETag` of the chamber as stored at its path (the inherited view carries
+  none); the layers view's comes from the same read as its layers, so the UI
+  loads a chamber, its lineage, and the ETag it saves against at once; writes honor `If-Match` / `If-None-Match: *` and return `412` on
   mismatch, checked under a per-path lock (`http/meta.go`). Every write is
   appended to history with the authenticated caller as the actor (or, when
   auth is off, the self-reported `X-Realm-Actor` header).

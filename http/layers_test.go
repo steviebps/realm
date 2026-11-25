@@ -216,8 +216,9 @@ func TestLayersEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") == "" || !strings.Contains(string(out.Data), "checkout.newFlow") || strings.Contains(string(out.Data), "prod.audit") {
 		t.Errorf("own GET: %d etag %q %s", resp.StatusCode, resp.Header.Get("ETag"), out.Data)
 	}
-	if resp, _ := do(t, http.MethodGet, base+"/prod/us-east/canary/?inherit=layers", "", nil); resp.Header.Get("ETag") != "" {
-		t.Error("the layers view carries an ETag")
+	ownETag := resp.Header.Get("ETag")
+	if resp, _ := do(t, http.MethodGet, base+"/prod/us-east/canary/?inherit=layers", "", nil); resp.Header.Get("ETag") != ownETag {
+		t.Errorf("the layers view carries ETag %q, want the stored chamber's %q", resp.Header.Get("ETag"), ownETag)
 	}
 }
 
@@ -347,5 +348,46 @@ func TestLayersRespectKeyScope(t *testing.T) {
 	res.Body.Close()
 	if strings.Contains(string(b), "rate.limit") || strings.Contains(string(b), "prod.audit") || strings.Contains(string(b), "ui.theme") {
 		t.Errorf("refusal leaks flags: %s", b)
+	}
+}
+
+// TestLayersCarryTheETag checks that the layers view carries the ETag of the
+// chamber as stored, the one ?inherit=false returns and writes check, so an
+// editor can load and save from one read.
+func TestLayersCarryTheETag(t *testing.T) {
+	srv := newInheritableTestServer(t)
+	base := srv.URL + "/v1/chambers"
+	if status, _ := call(t, nil, http.MethodPost, base+"/", `{"rules":{"a":{"type":"boolean","value":true}}}`, ""); status != http.StatusCreated {
+		t.Fatalf("seeding / = %d", status)
+	}
+	if status, _ := call(t, nil, http.MethodPost, base+"/t/", `{"rules":{"b":{"type":"number","value":1}}}`, ""); status != http.StatusCreated {
+		t.Fatalf("seeding /t/ = %d", status)
+	}
+	etagOfGet := func(query string) string {
+		t.Helper()
+		res, err := http.Get(base + "/t/" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d", query, res.StatusCode)
+		}
+		return res.Header.Get("ETag")
+	}
+	layers, own := etagOfGet("?inherit=layers"), etagOfGet("?inherit=false")
+	if layers == "" || layers != own {
+		t.Fatalf("layers ETag %q, own %q; want the same, set", layers, own)
+	}
+	// a write checked against it lands
+	req, _ := http.NewRequest(http.MethodPost, base+"/t/", strings.NewReader(`{"rules":{"b":{"type":"number","value":2}}}`))
+	req.Header.Set("If-Match", layers)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Errorf("a write with the layers ETag = %d, want 201", res.StatusCode)
 	}
 }
