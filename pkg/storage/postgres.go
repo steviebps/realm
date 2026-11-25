@@ -559,11 +559,6 @@ type watcher struct {
 	lastPrune time.Time
 }
 
-// run implements feedSession.
-func (w *watcher) run(ctx context.Context, _ *feedWatch) error {
-	return w.listen(ctx)
-}
-
 var (
 	feedReconnects, _ = otel.Meter("github.com/steviebps/realm").Int64Counter(
 		"realm.postgres.feed.reconnects",
@@ -575,10 +570,10 @@ var (
 		metric.WithUnit("s"))
 )
 
-// listen holds one LISTEN connection, catching up whenever a notification
+// run holds one LISTEN connection, catching up whenever a notification
 // arrives or the poll interval passes, until the connection fails or a round
-// trip on it takes longer than feedTimeout.
-func (w *watcher) listen(ctx context.Context) error {
+// trip on it takes longer than feedTimeout. It implements feedSession.
+func (w *watcher) run(ctx context.Context) error {
 	actx, cancel := context.WithTimeout(ctx, feedTimeout)
 	pooled, err := w.p.pool.Acquire(actx)
 	cancel()

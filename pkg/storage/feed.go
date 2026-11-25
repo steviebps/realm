@@ -55,10 +55,11 @@ type feedConfig struct {
 
 // feedSession is one Watch's reading of a backend's changes.
 type feedSession interface {
-	// run reads changes, sending them with w.send and calling w.caughtUp
-	// whenever it has every change the backend committed, until it fails or
-	// ctx is done. The feed runs it again, with backoff, after it fails.
-	run(ctx context.Context, w *feedWatch) error
+	// run reads changes, sending them with its Watch's send and calling its
+	// caughtUp whenever it has every change the backend committed, until it
+	// fails or ctx is done. The feed runs it again, with backoff, after it
+	// fails.
+	run(ctx context.Context) error
 }
 
 // feedWatch is one running Watch.
@@ -144,7 +145,7 @@ func (f *changeFeed) run(ctx context.Context, w *feedWatch) {
 	delay := *f.cfg.retry
 	for ctx.Err() == nil {
 		began := time.Now()
-		err := w.session.run(ctx, w)
+		err := w.session.run(ctx)
 		if ctx.Err() != nil {
 			return
 		}

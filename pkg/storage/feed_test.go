@@ -14,14 +14,22 @@ type fakeSession struct {
 	mu     sync.Mutex
 	starts []time.Time
 	step   func(ctx context.Context, n int, w *feedWatch) error
+	// w is its Watch, set by start.
+	w *feedWatch
 }
 
-func (s *fakeSession) run(ctx context.Context, w *feedWatch) error {
+// start is the start function to give changeFeed.watch.
+func (s *fakeSession) start(_ context.Context, w *feedWatch) feedSession {
+	s.w = w
+	return s
+}
+
+func (s *fakeSession) run(ctx context.Context) error {
 	s.mu.Lock()
 	n := len(s.starts)
 	s.starts = append(s.starts, time.Now())
 	s.mu.Unlock()
-	return s.step(ctx, n, w)
+	return s.step(ctx, n, s.w)
 }
 
 func (s *fakeSession) runs() []time.Time {
@@ -54,7 +62,7 @@ func TestChangeFeedRestartsWithBackoff(t *testing.T) {
 		return errors.New("connection lost")
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
-	out := f.watch(ctx, func(context.Context, *feedWatch) feedSession { return sess })
+	out := f.watch(ctx, sess.start)
 
 	for want := range uint64(6) {
 		select {
@@ -98,7 +106,7 @@ func TestChangeFeedBackoffStartsOverAfterAHeldSession(t *testing.T) {
 		}
 		return errors.New("ended")
 	}}
-	_ = f.watch(context.Background(), func(context.Context, *feedWatch) feedSession { return sess })
+	_ = f.watch(context.Background(), sess.start)
 	eventually(t, 5*time.Second, "five runs", func() bool { return len(sess.runs()) >= 5 })
 	starts := sess.runs()
 	// after the held run (2, which ended at starts[3] minus the wait), the
@@ -127,7 +135,7 @@ func TestChangeFeedHealth(t *testing.T) {
 			}
 		}
 	}}
-	_ = f.watch(context.Background(), func(context.Context, *feedWatch) feedSession { return sess })
+	_ = f.watch(context.Background(), sess.start)
 	if err := f.health(); err != nil {
 		t.Fatalf("Health of a new Watch = %v", err)
 	}
@@ -147,7 +155,7 @@ func TestChangeFeedClose(t *testing.T) {
 		close(ended)
 		return ctx.Err()
 	}}
-	out := f.watch(context.Background(), func(context.Context, *feedWatch) feedSession { return sess })
+	out := f.watch(context.Background(), sess.start)
 	eventually(t, 2*time.Second, "the session running", func() bool { return len(sess.runs()) == 1 })
 
 	releases := 0

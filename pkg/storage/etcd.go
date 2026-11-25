@@ -489,16 +489,11 @@ type etcdWatcher struct {
 	// lost is set when changes may have been missed.
 	lost bool
 	// confirmed is the revision up to which etcd has confirmed delivering
-	// every change; probe reads it while watch updates it.
+	// every change; probe reads it while run updates it.
 	confirmed atomic.Uint64
 	// rewound is set by probe when the cluster's revision went below
 	// confirmed.
 	rewound atomic.Bool
-}
-
-// run implements feedSession.
-func (w *etcdWatcher) run(ctx context.Context, _ *feedWatch) error {
-	return w.watch(ctx)
 }
 
 var (
@@ -523,9 +518,9 @@ func (w *etcdWatcher) head(ctx context.Context) (uint64, error) {
 	return uint64(resp.Header.Revision), nil
 }
 
-// watch runs one etcd watch from the revision after w.last, reporting its
-// changes, until etcd ends it or ctx is done.
-func (w *etcdWatcher) watch(ctx context.Context) error {
+// run runs one etcd watch from the revision after w.last, reporting its
+// changes, until etcd ends it or ctx is done. It implements feedSession.
+func (w *etcdWatcher) run(ctx context.Context) error {
 	if w.lost {
 		head, err := w.head(ctx)
 		if err != nil {

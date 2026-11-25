@@ -154,11 +154,11 @@ func TestEtcdWatchAfterCompaction(t *testing.T) {
 
 	wctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if err := w.watch(wctx); !errors.Is(err, rpctypes.ErrCompacted) || !w.lost {
+	if err := w.run(wctx); !errors.Is(err, rpctypes.ErrCompacted) || !w.lost {
 		t.Fatalf("watch = %v (lost %v), want ErrCompacted with changes lost", err, w.lost)
 	}
 	done := make(chan error, 1)
-	go func() { done <- w.watch(wctx) }()
+	go func() { done <- w.run(wctx) }()
 	if c := <-out; c.Key != "/" || c.Rev < head {
 		t.Errorf("change = %+v, want a change to / at revision %d or later", c, head)
 	}
