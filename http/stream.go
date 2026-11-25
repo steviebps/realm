@@ -160,7 +160,9 @@ type eventStream struct {
 // the stream reads what it first sends is signaled rather than lost; prepare
 // comes before the response starts, so that it can still refuse with a
 // status. openStream returns nil when the stream did not open, having
-// responded; otherwise the caller closes the stream when it ends.
+// responded; otherwise the caller closes the stream when it ends. A step
+// that fails or panics has what came before it undone, so a panic the
+// request lifecycle recovers from does not keep a broker subscription.
 func openStream(ctx context.Context, w http.ResponseWriter, subscribe func() (<-chan struct{}, func(), bool), prepare func(http.ResponseWriter) (http.ResponseWriter, func(), bool)) *eventStream {
 	if _, ok := w.(http.Flusher); !ok {
 		handleError(ctx, w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{"streaming is not supported"}))
@@ -173,21 +175,26 @@ func openStream(ctx context.Context, w http.ResponseWriter, subscribe func() (<-
 		return nil
 	}
 	st := &eventStream{signals: signals, release: []func(){unsubscribe}}
+	opened := false
+	defer func() {
+		if !opened {
+			st.close()
+		}
+	}()
 	if prepare != nil {
 		pw, end, ok := prepare(w)
 		if !ok {
-			st.close()
 			return nil
 		}
 		w = pw
 		st.release = append(st.release, end)
 	}
 	if st.conn = startStream(w); st.conn == nil {
-		st.close()
 		return nil
 	}
 	st.retry = newStreamBackoff()
 	st.release = append(st.release, st.conn.close, st.retry.stop)
+	opened = true
 	return st
 }
 
