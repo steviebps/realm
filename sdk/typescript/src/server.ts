@@ -8,18 +8,9 @@ import {
   typedValue,
   VERSION_ATTRIBUTE,
 } from './evaluate.js';
-import { isRecord, Snapshot } from './snapshot.js';
-import { Subtree, type View } from './subtree.js';
-import { parseTemplate, resolvePath, type PathTemplate } from './template.js';
-import {
-  pollingInterval,
-  RealmError,
-  sinkFeed,
-  Transport,
-  type ClientOptions,
-  type Feed,
-  type Following,
-} from './transport.js';
+import { ChamberSource, SubtreeSource, type Source } from './source.js';
+import { parseTemplate } from './template.js';
+import { pollingInterval, Transport, type ClientOptions, type Following } from './transport.js';
 import type { Chamber, EvaluatedFlags, EvaluationContext, FlagType, InitialState } from './types.js';
 
 /** Options for a ServerClient. */
@@ -62,10 +53,8 @@ export class ServerClient {
   readonly #options: ServerClientOptions;
   readonly #defaults: Record<string, string>;
   // What the client follows: one chamber at a path, or with a template, the
-  // subtree below its root.
-  readonly #source:
-    | { kind: 'path'; path: string; chamber: Snapshot<Chamber> }
-    | { kind: 'template'; template: PathTemplate; subtree: Subtree };
+  // subtree below its root. Nothing else depends on which (see Source).
+  readonly #source: Source;
   // The background refresh, while started.
   #running: { controller: AbortController; following: Following } | undefined;
 
@@ -73,15 +62,11 @@ export class ServerClient {
     this.#options = options;
     if (options.pathTemplate !== undefined) {
       if (options.path !== undefined) throw new TypeError('the path and pathTemplate options cannot be combined');
-      const template = parseTemplate(options.pathTemplate);
-      this.#source = { kind: 'template', template, subtree: new Subtree() };
-      this.#transport = new Transport({ ...options, path: template.root });
+      this.#source = new SubtreeSource(parseTemplate(options.pathTemplate));
     } else {
-      const segments = (options.path ?? '/').split('/').filter((s) => s !== '');
-      const path = segments.length === 0 ? '/' : `/${segments.join('/')}/`;
-      this.#source = { kind: 'path', path, chamber: new Snapshot<Chamber>({ rules: {} }, asChamber) };
-      this.#transport = new Transport(options);
+      this.#source = new ChamberSource(options.path);
     }
+    this.#transport = new Transport({ ...options, path: this.#source.readPath });
     // as strings, as contexts are read
     this.#defaults = { ...stringAttributes(options.attributes) };
     const version = attributeValue(options.version);
@@ -100,12 +85,10 @@ export class ServerClient {
   async start(): Promise<void> {
     if (this.#running) return this.#running.following.current();
     const controller = new AbortController();
-    const source = this.#source;
-    const feed: Feed = source.kind === 'path' ? sinkFeed('chamber', source.chamber) : source.subtree;
     const following = this.#transport.follow(
       'chambers',
       { method: 'GET' },
-      feed,
+      this.#source.feed,
       this.#options.streaming ?? true,
       pollingInterval(this.#options.pollingInterval, defaultPollingInterval),
       controller.signal,
@@ -129,8 +112,7 @@ export class ServerClient {
    * true after stop, as the last known values stay in use.
    */
   isReady(): boolean {
-    const source = this.#source;
-    return source.kind === 'path' ? source.chamber.raw !== '' : source.subtree.loaded;
+    return this.#source.loaded();
   }
 
   /**
@@ -151,8 +133,7 @@ export class ServerClient {
    * it alongside the flags it describes.
    */
   revision(context?: EvaluationContext): number | undefined {
-    const source = this.#source;
-    return source.kind === 'path' ? source.chamber.revision : this.#view(context)?.revision;
+    return this.#target(context)?.revision;
   }
 
   /**
@@ -164,9 +145,7 @@ export class ServerClient {
    * is the path option, once the chamber has arrived.
    */
   chamberPath(context?: EvaluationContext): string | undefined {
-    const source = this.#source;
-    if (source.kind === 'path') return this.isReady() ? source.path : undefined;
-    return this.#resolve(context);
+    return this.#target(context)?.path;
   }
 
   /**
@@ -174,8 +153,7 @@ export class ServerClient {
    * the subtree) changes. Returns a function that unsubscribes.
    */
   subscribe(listener: () => void): () => void {
-    const source = this.#source;
-    return source.kind === 'path' ? source.chamber.subscribe(listener) : source.subtree.subscribe(listener);
+    return this.#source.subscribe(listener);
   }
 
   /** The value of a boolean flag for context, or fallback. */
@@ -207,7 +185,7 @@ export class ServerClient {
    */
   allFlags(context?: EvaluationContext): EvaluatedFlags {
     try {
-      return this.#evaluate(this.#chamber(context), context ?? {}, this.#defaults);
+      return this.#evaluate(this.#target(context)?.chamber, context ?? {}, this.#defaults);
     } catch {
       return {};
     }
@@ -235,23 +213,15 @@ export class ServerClient {
   initialState(context?: EvaluationContext): InitialState {
     const normalized = normalizeContext(context);
     const state: InitialState = { context: normalized };
-    const source = this.#source;
-    let path: string | undefined;
-    let target: { chamber: Chamber; revision: number | undefined } | undefined;
-    if (source.kind === 'path') {
-      path = source.path;
-      if (this.isReady()) target = { chamber: source.chamber.value, revision: source.chamber.revision };
-    } else {
-      path = this.#resolve(normalized, {});
-      target = path === undefined ? undefined : source.subtree.get(path);
-    }
+    // as the evaluation endpoint does: no process-wide attributes
+    const target = this.#source.pick(normalized, {});
     if (!target) return state;
     try {
       state.flags = this.#evaluate(target.chamber, normalized, {});
     } catch {
       return state; // a chamber of a shape this SDK does not expect
     }
-    state.path = path;
+    state.path = target.path;
     if (target.revision !== undefined) state.revision = target.revision;
     return state;
   }
@@ -271,7 +241,7 @@ export class ServerClient {
   // shape this SDK does not expect returns fallback too.
   #typed<T>(key: string, context: EvaluationContext | undefined, want: FlagType, fallback: T, copy = false): T {
     try {
-      const rules = this.#chamber(context)?.rules;
+      const rules = this.#target(context)?.chamber.rules;
       const flag = rules && Object.hasOwn(rules, key) ? rules[key] : undefined;
       if (!flag) return fallback;
       const value = typedValue(flag.type, flagValue(key, flag, context ?? {}, this.#defaults), want, fallback);
@@ -281,35 +251,11 @@ export class ServerClient {
     }
   }
 
-  // chamber returns the chamber to evaluate context against, or undefined
-  // when there is none.
-  #chamber(context: EvaluationContext | undefined): Chamber | undefined {
-    const source = this.#source;
-    return source.kind === 'path' ? source.chamber.value : this.#view(context)?.chamber;
+  // target returns the chamber context is evaluated against, with the
+  // process-wide attributes filling in for those it does not set.
+  #target(context: EvaluationContext | undefined) {
+    return this.#source.pick(context ?? {}, this.#defaults);
   }
-
-  // view returns the view of the subtree that context resolves to, if any.
-  #view(context: EvaluationContext | undefined, defaults = this.#defaults): View | undefined {
-    if (this.#source.kind !== 'template') return undefined;
-    const path = this.#resolve(context, defaults);
-    return path === undefined ? undefined : this.#source.subtree.get(path);
-  }
-
-  // resolve returns the path of the subtree's view that context resolves
-  // to, if any, with defaults filling in for the attributes it does not set.
-  #resolve(context: EvaluationContext | undefined, defaults = this.#defaults): string | undefined {
-    if (this.#source.kind !== 'template') return undefined;
-    const subtree = this.#source.subtree;
-    return resolvePath(this.#source.template, (path) => subtree.get(path) !== undefined, context ?? {}, defaults);
-  }
-}
-
-// asChamber returns data as a chamber, or throws when it is not one: a
-// gateway or maintenance page in front of the server may answer with other
-// JSON.
-function asChamber(data: unknown): Chamber {
-  if (!isRecord(data) || !isRecord(data.rules)) throw new RealmError('the server did not return a chamber');
-  return data as unknown as Chamber;
 }
 
 // Characters escaped by serializeInitialState: those that could end or
