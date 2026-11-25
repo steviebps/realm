@@ -114,6 +114,16 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   never a 404: its entry is the view built from its ancestors. Reading needs
   `CanRead` on the root only. The wire format is in
   [design/subtree.md](design/subtree.md).
+- **Reads** — chamber reads, evaluations, and their streams go through one
+  module, `chamberReader` (`http/read.go`). Reading a chamber needs `CanRead`
+  on its path only: its inherited view includes flags from parents the caller
+  may not read, as a key scoped to one chamber must receive what it inherits
+  (`?inherit=layers`, which shows the parents themselves, needs `CanRead` on
+  each). Why a chamber cannot be parsed (a 500, or a subtree entry's `error`)
+  is told only to callers who may read that chamber (`mayKnowWhy`); others
+  get the bare status, or "a chamber it inherits from cannot be parsed".
+  Ordinary requests read storage directly; streams share reads
+  (`sharedViews`).
 - **Writes** — every PUT, PATCH, and DELETE goes through one module,
   `chamberWriter.Write` (`http/write.go`), which takes the path, operation,
   body, preconditions, and actor as values; the handler only turns a request
@@ -199,11 +209,11 @@ change, plus periodic heartbeat comments. On the server, an in-process **broker*
 (`http/broker.go`) is notified of each write (`Put`/`Patch`/`Delete`) and
 wakes watchers whose path is at or below the changed path (prefix match), so an
 inherited parent change refreshes child watchers. The watch request bypasses the
-per-request timeout; the endpoint reuses the same storage `Get` as a normal read,
-so inheritance and validation are identical. A write wakes every stream below
-it at once, so the streams of a path share one read (`sharedReads`, a
-`singleflight` keyed by path and the broker's generation, so a stream woken by
-a change never gets a read begun before it). A read that fails (storage
+per-request timeout; it sends the view a normal read returns, encoded the same
+way. A write wakes every stream below it at once, so chamber, evaluation, and
+subtree streams all share their reads through the same cache (`sharedViews`,
+keyed by the broker's generation, so a stream woken by a change never gets a
+read begun before it; see Subtree watches). A read that fails (storage
 unreachable) does not end the stream: it retries with backoff while the client
 keeps its values. Each server caps its open streams
 (`HandlerConfig.MaxStreams`, 503 beyond it), gives each event 30 seconds to be
@@ -293,7 +303,7 @@ broker's current generation, each stored chamber is read at most once
 asks. A snapshot on a `Scanner` backend first fills the cache with one `Scan`
 of the root (`storage.ScanLayers`), shared by the streams of that root, so a
 stream's first load (and every resync and reconnect) is a range read rather
-than a read per chamber. Like `sharedReads`, a stream only shares what was read after the latest
+than a read per chamber. A stream only shares what was read after the latest
 change announced before it asked, so it never receives a view read before the
 change that woke it. Shared reads are detached from the stream that started
 them and bounded by the request timeout; failures are not shared (the next

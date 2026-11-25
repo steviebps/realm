@@ -103,25 +103,11 @@ func serveLayers(w http.ResponseWriter, r *http.Request, strg storage.Storage, p
 	}
 
 	lin, err := storage.ReadLineage(ctx, strg, path)
-	var nf *storage.NotFoundError
-	switch {
-	case errors.As(err, &nf):
-		fail(http.StatusNotFound, nf)
-		return
-	case errors.Is(err, storage.ErrInvalidPath):
-		fail(http.StatusBadRequest, err)
-		return
-	case err != nil:
-		// the cause is logged, not sent: it can name storage internals
-		span.RecordError(err)
-		logger.ErrorCtx(ctx).Err(err).Str("path", path).Msg("could not read the chamber's parents")
-		fail(http.StatusInternalServerError, errors.New("could not read the chamber's parent chambers"))
+	if err != nil {
+		failRead(ctx, w, p, err)
 		return
 	}
 
-	// The layers show each parent's own flags, including ones overridden
-	// below it, so they need read access to every parent they list. The
-	// list depends only on the path, never on what is stored.
 	for _, l := range lin.Layers[1:] {
 		if !p.CanRead(l.Path) {
 			forbidden(w, r, fmt.Sprintf("not allowed to read the parent chambers of %s", path))

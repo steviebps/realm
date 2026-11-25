@@ -29,7 +29,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
-	"golang.org/x/sync/singleflight"
 )
 
 const DefaultHandlerTimeout = 10 * time.Second
@@ -130,10 +129,10 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 		}()
 	}
 
-	streamReads := &sharedReads{strg: hc.Storage, brk: brk, timeout: hc.RequestTimeout}
-	trees := &subtrees{strg: hc.Storage, views: newSharedViews(hc.Storage, brk, hc.RequestTimeout), brk: brk, limit: hc.MaxSubtreeChambers, compress: !hc.DisableSubtreeCompression}
-	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, newChamberWriter(hc.Storage, notify), brk, streamReads, trees))
-	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk, streamReads))
+	reader := newChamberReader(hc.Storage, brk, hc.RequestTimeout)
+	trees := &subtrees{strg: hc.Storage, views: reader.views, brk: brk, limit: hc.MaxSubtreeChambers, compress: !hc.DisableSubtreeCompression}
+	mux.Handle("/v1/chambers/", handleChambers(reader, newChamberWriter(hc.Storage, notify), brk, trees))
+	mux.Handle("/v1/evaluate/", handleEvaluate(reader, brk))
 	mux.Handle("/v1/history/", handleHistory(meta))
 	mux.Handle("/v1/catalog", handleCatalog(meta))
 	mux.Handle("/v1/catalog/", handleCatalog(meta))
@@ -300,7 +299,8 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 	_ = utils.WriteInterfaceWith(w, resp, true)
 }
 
-func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, streamReads *sharedReads, trees *subtrees) http.Handler {
+func handleChambers(reader *chamberReader, writer *chamberWriter, brk *broker, trees *subtrees) http.Handler {
+	strg := reader.strg
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -416,7 +416,7 @@ func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, st
 				return
 			}
 			if isWatchRequest(r) {
-				streamChamber(w, r, streamReads, brk, req.Path)
+				streamChamber(w, r, reader, brk, req.Path)
 				return
 			}
 
@@ -425,31 +425,9 @@ func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, st
 			// editors). The default, inherited view carries no ETag because it
 			// is not the representation that writes are checked against.
 			own := r.URL.Query().Get("inherit") == "false"
-			source := strg
-			if own {
-				source = storage.Raw(strg)
-			}
-			entry, err := source.Get(ctx, req.Path)
+			entry, err := reader.Chamber(ctx, req.Path, own)
 			if err != nil {
-				var nfError *storage.NotFoundError
-				var invalid *storage.ChamberError
-				switch {
-				case errors.As(err, &nfError):
-					fail(http.StatusNotFound, nfError)
-				case errors.Is(err, storage.ErrInvalidPath):
-					fail(http.StatusBadRequest, err)
-				case errors.As(err, &invalid):
-					// a stored chamber (this one or a parent) is broken: say
-					// which and why, as the layers view does
-					span.SetStatus(codes.Error, err.Error())
-					noteFailure(ctx, http.StatusInternalServerError, err)
-					errorCounter.Add(ctx, 1, metric.WithAttributes(attribute.Int("http.status_code", http.StatusInternalServerError)))
-					handleWithStatus(w, http.StatusInternalServerError, createResponseWithErrors(nil, []string{err.Error()}))
-				default:
-					// an outage is not a missing chamber (which editors would
-					// offer to create), and its cause is logged, not sent
-					fail(http.StatusInternalServerError, err)
-				}
+				failRead(ctx, w, p, err)
 				return
 			}
 
@@ -480,15 +458,7 @@ func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, st
 		case ListOperation:
 			names, err := strg.List(ctx, req.Path)
 			if err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					fail(http.StatusNotFound, errors.New(http.StatusText(http.StatusNotFound)))
-					return
-				}
-				if errors.Is(err, storage.ErrInvalidPath) {
-					fail(http.StatusBadRequest, err)
-					return
-				}
-				fail(http.StatusInternalServerError, err)
+				failRead(ctx, w, p, err)
 				return
 			}
 			if req.Path == "/" {
@@ -536,13 +506,9 @@ func setRevision(w http.ResponseWriter, rev uint64) {
 // streamChamber holds an SSE connection open and pushes the chamber at path
 // whenever it changes. Clients evaluate the chamber themselves, so its
 // schedules need no pushes of their own.
-func streamChamber(w http.ResponseWriter, r *http.Request, reads *sharedReads, brk *broker, path string) {
+func streamChamber(w http.ResponseWriter, r *http.Request, reader *chamberReader, brk *broker, path string) {
 	streamEvents(w, r, brk, path, "chamber", false, func(ctx context.Context) (streamPayload, error) {
-		entry, err := reads.Get(ctx, path)
-		if err != nil {
-			return streamPayload{}, err
-		}
-		return streamPayload{data: entry.Value, revision: entry.Version}, nil
+		return reader.Watched(ctx, path)
 	})
 }
 
@@ -846,48 +812,6 @@ func streamRetryDelay(failures int) time.Duration {
 		d = time.Second << (failures - 1)
 	}
 	return d/2 + rand.N(d/2+1)
-}
-
-// sharedReads reads chambers for watch streams. A write wakes every stream at
-// or below it at once; rather than each reading (and, with inheritance,
-// merging) the chamber itself, the streams of a path share one read.
-type sharedReads struct {
-	strg storage.Storage
-	brk  *broker
-	// timeout bounds each shared read.
-	timeout time.Duration
-	group   singleflight.Group
-}
-
-// Get returns the entry at path. Callers share a read only when it started
-// after the latest change the broker announced before they called, so a
-// stream woken by a change never receives a read begun before that change.
-// Ordinary requests read storage directly: a change made through another
-// replica of a Watchable backend is announced only after it is read back
-// from the change feed, so a shared read could miss a client's own write.
-func (s *sharedReads) Get(ctx context.Context, path string) (*storage.StorageEntry, error) {
-	key := path + "\x00" + strconv.FormatUint(s.brk.Generation(), 10)
-	ch := s.group.DoChan(key, func() (any, error) {
-		// Detached from the caller: the stream that started the read may
-		// end before the others sharing it.
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.timeout)
-		defer cancel()
-		entry, err := s.strg.Get(rctx, path)
-		var nf *storage.NotFoundError
-		if err != nil && !errors.As(err, &nf) {
-			logging.Ctx(ctx).WarnCtx(ctx).Str("path", path).Str("error", err.Error()).Msg("watch streams could not read the chamber; they will retry")
-		}
-		return entry, err
-	})
-	select {
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case res := <-ch:
-		if res.Err != nil {
-			return nil, res.Err
-		}
-		return res.Val.(*storage.StorageEntry), nil
-	}
 }
 
 // handleHealth reports that the server is up and serving requests.

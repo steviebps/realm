@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/steviebps/realm/auth"
 	"github.com/steviebps/realm/helper/logging"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
@@ -104,6 +105,7 @@ func (s *subtrees) serve(w http.ResponseWriter, r *http.Request, root string, fa
 	if !ok {
 		return
 	}
+	principal := auth.FromContext(ctx)
 
 	w, end := compressible(w, r, s.compress)
 	defer end()
@@ -123,8 +125,8 @@ func (s *subtrees) serve(w http.ResponseWriter, r *http.Request, root string, fa
 		}
 		entry := subtreeEntry{Path: v.Path, Revision: v.Revision}
 		if v.Err != nil {
-			entry.Error = v.Err.Error()
-			logger.WarnCtx(ctx).Str("path", v.Path).Str("error", entry.Error).Msg("the inherited view cannot be built")
+			entry.Error = visibleError(principal, v.Err)
+			logger.WarnCtx(ctx).Str("path", v.Path).Str("error", v.Err.Error()).Msg("the inherited view cannot be built")
 		} else {
 			entry.Rules = v.Chamber.Rules
 		}
@@ -190,7 +192,7 @@ func (s *subtrees) stream(w http.ResponseWriter, r *http.Request, root string, f
 	}
 	defer conn.close()
 
-	st := &subtreeStream{subtrees: s, conn: conn, sub: sub, root: root, pending: map[string]struct{}{}}
+	st := &subtreeStream{subtrees: s, principal: auth.FromContext(ctx), conn: conn, sub: sub, root: root, pending: map[string]struct{}{}}
 	retry := newStreamBackoff()
 	defer retry.stop()
 
@@ -239,9 +241,12 @@ type heldView struct {
 // subtreeStream is the state of one subtree watch.
 type subtreeStream struct {
 	*subtrees
-	conn *streamConn
-	sub  *treeSubscription
-	root string
+	// principal is who the stream is for: it is told why a view cannot be
+	// built only when it may read the chamber at fault (see mayKnowWhy).
+	principal *auth.Principal
+	conn      *streamConn
+	sub       *treeSubscription
+	root      string
 	// held maps each path the client holds a view of (the root, and every
 	// path below it that holds a chamber) to what was last sent for it.
 	held map[string]heldView
@@ -300,10 +305,11 @@ func (s *subtreeStream) snapshot(ctx context.Context, paths []string) error {
 		if p != s.root && !v.Stored {
 			continue // a path that only leads to chambers below it
 		}
-		if !s.conn.buffer(eventText("chamber", v.id, v.data)) {
+		data, sum := v.event(s.principal)
+		if !s.conn.buffer(eventText("chamber", v.id, data)) {
 			return errStreamGone
 		}
-		held[p] = heldView{sum: v.sum}
+		held[p] = heldView{sum: sum}
 	}
 	var gone []string
 	for p := range s.held {
@@ -368,6 +374,7 @@ func (s *subtreeStream) update(ctx context.Context) error {
 			return err
 		}
 		h, held := s.held[p]
+		data, sum := v.event(s.principal)
 		switch {
 		case p != s.root && !v.Stored:
 			if !held {
@@ -379,15 +386,15 @@ func (s *subtreeStream) update(ctx context.Context) error {
 				return errStreamGone
 			}
 			sent = true
-		case held && h.sum == v.sum:
+		case held && h.sum == sum:
 			// unchanged, or failing as it did
 		default:
 			// a view that cannot be built is sent with its error: the
 			// client keeps the last view it received
-			if !s.conn.buffer(eventText("chamber", v.id, v.data)) {
+			if !s.conn.buffer(eventText("chamber", v.id, data)) {
 				return errStreamGone
 			}
-			s.held[p] = heldView{sum: v.sum}
+			s.held[p] = heldView{sum: sum}
 			sent = true
 		}
 	}
@@ -444,6 +451,19 @@ type builtView struct {
 	id uint64
 	// sum is data's hash, which streams compare with what they last sent.
 	sum [sha256.Size]byte
+	// hidden and hiddenSum are data and sum for principals that may not be
+	// told why the view cannot be built (see visibleError); nil when they
+	// may all be.
+	hidden    []byte
+	hiddenSum [sha256.Size]byte
+}
+
+// event returns the chamber event p is sent for the view, and its hash.
+func (b builtView) event(p *auth.Principal) ([]byte, [sha256.Size]byte) {
+	if b.hidden != nil && !mayKnowWhy(p, b.Err) {
+		return b.hidden, b.hiddenSum
+	}
+	return b.data, b.sum
 }
 
 // sharedViewsTTL is how long the views and chambers read for the latest
@@ -456,9 +476,14 @@ var sharedViewsTTL = 30 * time.Second
 // itself, the streams on a replica share the reads, so each stored chamber is
 // read at most once per change, and the views built from them.
 //
-// Like sharedReads, a stream shares only what was read after the latest
-// change the broker announced before it asked, so a stream woken by a change
-// never receives a view read before that change.
+// Chamber and evaluation streams share them too (see chamberReader).
+//
+// A stream shares only what was read after the latest change the broker
+// announced before it asked, so a stream woken by a change never receives a
+// view read before that change. Ordinary requests read storage directly: a
+// change made through another replica of a Watchable backend is announced
+// only after it is read back from the change feed, so a shared read could
+// miss a client's own write.
 type sharedViews struct {
 	// raw holds chambers as written (see storage.Raw).
 	raw         storage.Storage
@@ -482,9 +507,10 @@ func newSharedViews(strg storage.Storage, brk *broker, timeout time.Duration) *s
 
 // viewGeneration holds what was read since one change.
 type viewGeneration struct {
-	gen    uint64
-	layers map[string]*sharedCall[storage.Layer]
-	views  map[string]*sharedCall[builtView]
+	gen      uint64
+	layers   map[string]*sharedCall[storage.Layer]
+	views    map[string]*sharedCall[builtView]
+	chambers map[string]*sharedCall[encodedChamber]
 	// scans holds, by root, the scans that filled layers (see prefill).
 	scans map[string]*sharedCall[struct{}]
 }
@@ -504,7 +530,7 @@ func (s *sharedViews) generation() *viewGeneration {
 	if s.cur != nil && s.cur.gen >= gen {
 		return s.cur
 	}
-	s.cur = &viewGeneration{gen: gen, layers: map[string]*sharedCall[storage.Layer]{}, views: map[string]*sharedCall[builtView]{}, scans: map[string]*sharedCall[struct{}]{}}
+	s.cur = &viewGeneration{gen: gen, layers: map[string]*sharedCall[storage.Layer]{}, views: map[string]*sharedCall[builtView]{}, chambers: map[string]*sharedCall[encodedChamber]{}, scans: map[string]*sharedCall[struct{}]{}}
 	if s.expiry == nil {
 		s.expiry = time.AfterFunc(sharedViewsTTL, func() {
 			s.mu.Lock()
@@ -614,7 +640,35 @@ func (s *sharedViews) view(ctx context.Context, p string) (builtView, error) {
 			return builtView{}, err
 		}
 		b.sum = sha256.Sum256(b.data)
+		if v.Err != nil {
+			// it names a chamber that cannot be parsed, which some may
+			// not read
+			event.Error = hiddenChamberError
+			if b.hidden, err = json.Marshal(event); err != nil {
+				return builtView{}, err
+			}
+			b.hiddenSum = sha256.Sum256(b.hidden)
+		}
 		return b, nil
+	})
+}
+
+// encoded returns the view of p, encoded as Chamber returns it, built from
+// shared reads. It returns a NotFoundError when no chamber is stored at p,
+// and why the view cannot be built when it cannot.
+func (s *sharedViews) encoded(ctx context.Context, p string) (encodedChamber, error) {
+	return shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[encodedChamber] { return g.chambers }, p, func(ctx context.Context, _ *viewGeneration) (encodedChamber, error) {
+		v, err := s.view(ctx, p)
+		switch {
+		case err != nil:
+			return encodedChamber{}, err
+		case !v.Stored:
+			return encodedChamber{}, &storage.NotFoundError{Key: p}
+		case v.Err != nil:
+			return encodedChamber{}, v.Err
+		}
+		data, err := encodeChamber(v.Chamber)
+		return encodedChamber{data: data, revision: v.Revision}, err
 	})
 }
 

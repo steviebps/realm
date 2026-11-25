@@ -337,45 +337,45 @@ func (g *gatedStorage) Get(ctx context.Context, key string) (*storage.StorageEnt
 // woken by a change does not share a read that started before it.
 func TestSharedReadsNeverServeAReadBegunBeforeAChange(t *testing.T) {
 	ctx := context.Background()
-	raw, err := storage.NewBigCacheStorage(map[string]string{})
-	if err != nil {
-		t.Fatal(err)
+	raw := newBigCache(t)
+	chamber := func(v string) []byte {
+		return []byte(`{"rules":{"v":{"type":"string","value":"` + v + `"}}}`)
 	}
-	if err := raw.Put(ctx, storage.StorageEntry{Key: "/a/", Value: []byte("old")}); err != nil {
+	if err := raw.Put(ctx, storage.StorageEntry{Key: "/a/", Value: chamber("old")}); err != nil {
 		t.Fatal(err)
 	}
 	gated := &gatedStorage{Storage: raw, release: make(chan struct{})}
 	brk := newBroker(0)
-	reads := &sharedReads{strg: gated, brk: brk, timeout: 5 * time.Second}
+	reader := newChamberReader(gated, brk, 5*time.Second)
 
 	before := make(chan string, 1)
 	go func() {
-		e, err := reads.Get(ctx, "/a/")
+		c, err := reader.Watched(ctx, "/a/")
 		if err != nil {
 			before <- err.Error()
 			return
 		}
-		before <- string(e.Value)
+		before <- string(c.data)
 	}()
 	for gated.calls.Load() == 0 { // let the first read begin and block
 		time.Sleep(time.Millisecond)
 	}
 
-	if err := raw.Put(ctx, storage.StorageEntry{Key: "/a/", Value: []byte("new")}); err != nil {
+	if err := raw.Put(ctx, storage.StorageEntry{Key: "/a/", Value: chamber("new")}); err != nil {
 		t.Fatal(err)
 	}
 	brk.Notify("/a/")
 
-	e, err := reads.Get(ctx, "/a/")
+	c, err := reader.Watched(ctx, "/a/")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(e.Value) != "new" {
-		t.Errorf("a read after the change returned %q", e.Value)
+	if !strings.Contains(string(c.data), `"new"`) {
+		t.Errorf("a read after the change returned %s", c.data)
 	}
 	close(gated.release)
-	if got := <-before; got != "old" {
-		t.Errorf("the read begun before the change returned %q", got)
+	if got := <-before; !strings.Contains(got, `"old"`) {
+		t.Errorf("the read begun before the change returned %s", got)
 	}
 }
 

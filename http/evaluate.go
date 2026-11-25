@@ -1,7 +1,6 @@
 package http
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/auth"
@@ -43,8 +40,7 @@ type evaluateResponse struct {
 //	POST /v1/evaluate/<path>             → {"flags": {"<name>": {"type", "value"}}}
 //	POST /v1/evaluate/<path>?watch=true  → the same as server-sent events, re-sent when the values change
 //	                                       (after a write, or when a targeting rule's schedule starts or ends)
-func handleEvaluate(strg storage.Storage, brk *broker, streamReads *sharedReads) http.Handler {
-	chambers := &parsedChambers{}
+func handleEvaluate(reader *chamberReader, brk *broker) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -101,7 +97,7 @@ func handleEvaluate(strg storage.Storage, brk *broker, streamReads *sharedReads)
 			// evaluate keys are published in web pages, so anyone can open
 			// these streams
 			streamEvents(w, r, brk, path, "flags", true, func(ctx context.Context) (streamPayload, error) {
-				ev, err := chambers.evaluate(ctx, streamReads, path, ec)
+				ev, err := reader.Evaluate(ctx, path, ec, true)
 				if err != nil {
 					return streamPayload{}, err
 				}
@@ -111,90 +107,14 @@ func handleEvaluate(strg storage.Storage, brk *broker, streamReads *sharedReads)
 			return
 		}
 
-		ev, err := chambers.evaluate(ctx, strg, path, ec)
+		ev, err := reader.Evaluate(ctx, path, ec, false)
 		if err != nil {
-			var nf *storage.NotFoundError
-			if errors.As(err, &nf) {
-				fail(http.StatusNotFound, nf)
-				return
-			}
-			if errors.Is(err, storage.ErrInvalidPath) {
-				fail(http.StatusBadRequest, err)
-				return
-			}
-			fail(http.StatusInternalServerError, err)
+			failRead(ctx, w, p, err)
 			return
 		}
 		setRevision(w, ev.revision)
 		handleOkJSON(ctx, w, evaluateResponse{Flags: ev.flags})
 	})
-}
-
-// parsedChambers evaluates chambers, keeping the last parsed version of each
-// path so the evaluation streams on a path share one parse per change rather
-// than each re-parsing the chamber on every write.
-type parsedChambers struct {
-	mu   sync.Mutex
-	last map[string]parsedChamber
-}
-
-type parsedChamber struct {
-	raw     []byte
-	chamber *realm.Chamber
-}
-
-// maxParsedChambers bounds how many paths parsedChambers remembers; past it,
-// it forgets them all and starts over.
-const maxParsedChambers = 1024
-
-// entryGetter reads storage entries: the storage itself, or sharedReads.
-type entryGetter interface {
-	Get(ctx context.Context, key string) (*storage.StorageEntry, error)
-}
-
-// evaluation is every flag of a chamber resolved for one context.
-type evaluation struct {
-	flags map[string]realm.EvaluatedFlag
-	// revision is the storage revision of the chamber evaluated (0 when the
-	// storage does not track revisions).
-	revision uint64
-	// changesAt is the next time a schedule could change the values, or the
-	// zero time when none can.
-	changesAt time.Time
-}
-
-// evaluate resolves every flag of the chamber at path (as inherited, read
-// from src) for ec.
-func (p *parsedChambers) evaluate(ctx context.Context, src entryGetter, path string, ec realm.EvaluationContext) (evaluation, error) {
-	entry, err := src.Get(ctx, path)
-	if err != nil {
-		return evaluation{}, err
-	}
-	c, err := p.parse(path, entry.Value)
-	if err != nil {
-		return evaluation{}, err
-	}
-	flags, changesAt := c.Evaluate(ec)
-	return evaluation{flags: flags, revision: entry.Version, changesAt: changesAt}, nil
-}
-
-// parse returns the chamber stored as raw, reusing the last parse of path when
-// raw is unchanged. Parsed chambers are only read, so they are safe to share.
-func (p *parsedChambers) parse(path string, raw []byte) (*realm.Chamber, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if last, ok := p.last[path]; ok && bytes.Equal(last.raw, raw) {
-		return last.chamber, nil
-	}
-	var c realm.Chamber
-	if err := json.Unmarshal(raw, &c); err != nil {
-		return nil, fmt.Errorf("could not read chamber %s: %w", path, err)
-	}
-	if p.last == nil || len(p.last) >= maxParsedChambers {
-		p.last = make(map[string]parsedChamber)
-	}
-	p.last[path] = parsedChamber{raw: bytes.Clone(raw), chamber: &c}
-	return &c, nil
 }
 
 // withCORS lets pages on any origin call the routes under prefix with a
