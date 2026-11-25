@@ -598,6 +598,29 @@ describe('refreshing', () => {
     expect(messages.at(-1)).toBe('down for maintenance');
   }, 15_000);
 
+  it('reports each failure once when the stream and its fallback polling fail in different ways', async () => {
+    shortestWaits();
+    const realm = await setup();
+    // a sign-in page in front of the server: requests get no JSON, and the stream no event stream
+    realm.intercept((_req, res) => answer(res, 200, '<html>sign in</html>', { 'Content-Type': 'text/html' }));
+    const onError = vi.fn();
+    const client = new ServerClient({ address: realm.address, pollingInterval: 20, onError });
+    cleanup.push(() => client.stop());
+    await expect(client.start()).rejects.toThrow('the server did not return JSON');
+
+    // the stream fails until the polling joins it, then once more; the polling fails in between
+    const watches = () => realm.requests.filter(isWatch).length;
+    const polls = () => realm.requests.filter((r) => !isWatch(r)).length;
+    await vi.waitFor(() => expect(watches()).toBeGreaterThanOrEqual(4), { timeout: 15_000 });
+    const before = polls();
+    await vi.waitFor(() => expect(polls()).toBeGreaterThanOrEqual(before + 2), { timeout: 5000 });
+    // neither loop's failure is reported again after the other's
+    expect(onError.mock.calls.map(([e]) => (e as Error).message)).toEqual([
+      'the server did not return JSON',
+      'the server did not return an event stream',
+    ]);
+  }, 30_000);
+
   it("does not count the fallback polling's successes as the stream's recovery", async () => {
     shortestWaits();
     const realm = await setup();

@@ -29,8 +29,8 @@ export interface ClientOptions {
   /**
    * Called when a refresh fails, the first load included (start rejects
    * with it too); the last known values stay in use. A failure that repeats
-   * the previous one is not reported again, whether the stream or its
-   * fallback polling hit it, until the main refresh (the stream, or polling
+   * the stream's or its fallback polling's previous one is not reported
+   * again, whichever hit it, until the main refresh (the stream, or polling
    * when streaming is off) works again. Defaults to console.warn, which also
    * notes that recovery with console.info.
    */
@@ -41,9 +41,9 @@ export interface ClientOptions {
 
 /**
  * What a Transport follows on a route, and where the data goes: one event's
- * data (see eventFeed), or a follower of several events, such as a Subtree. Its methods throw when the data is not what the route
- * serves, which the Transport treats as a failed refresh that keeps the last
- * data.
+ * data (see eventFeed), or a follower of several events, such as a Subtree.
+ * Its methods throw when the data is not what the route serves, which the
+ * Transport treats as a failed refresh that keeps the last data.
  */
 export interface Feed {
   /**
@@ -155,10 +155,14 @@ interface FollowState {
   failure: Error | undefined;
 }
 
+// The loops of a follow that refresh it: its requests (the first load, and
+// polling) and its event stream.
+type Loop = 'requests' | 'stream';
+
 // A follow's record of how its refreshes went; see Transport.#monitor.
 interface Monitor {
-  // A refresh failed.
-  failed(error: Error): void;
+  // A refresh by loop failed.
+  failed(error: Error, loop: Loop): void;
   // The main refresh (the stream, or polling when it is the only one)
   // brought the data up to date: refreshing works again.
   succeeded(): void;
@@ -227,29 +231,33 @@ export class Transport {
 
   // monitor returns a follow's monitor, which records in state how its
   // refreshes went; the stream and its fallback polling share it. It reports
-  // a failure to onError unless it repeats the previous one (the same status
-  // and message), so that a refused key or an outage is reported once rather
-  // than on every retry, by every loop; once the main refresh works again,
-  // that is noted, and failures are reported again after it.
+  // a failure to onError unless it repeats the previous failure of either
+  // loop (the same status and message), so that a refused key or an outage
+  // is reported once rather than on every retry, by every loop, and two
+  // loops that fail in different ways (a sign-in page in front of the
+  // server is neither JSON nor an event stream) do not take turns reporting
+  // theirs; once the main refresh works again, that is noted, and failures
+  // are reported again after it.
   #monitor(state: FollowState): Monitor {
-    let last: string | undefined;
+    // Each loop's latest failure, until the main refresh works again.
+    const last: Record<Loop, string | undefined> = { requests: undefined, stream: undefined };
     const current = () => {
       state.loaded = true;
       state.failure = undefined;
     };
     return {
-      failed: (error) => {
+      failed: (error, loop) => {
         state.failure = error;
         const key = `${error.name} ${error instanceof RealmError ? error.status : ''} ${error.message}`;
-        if (key === last) return;
-        last = key;
-        this.report(error);
+        const repeated = key === last.requests || key === last.stream;
+        last[loop] = key;
+        if (!repeated) this.report(error);
       },
       refreshed: current,
       succeeded: () => {
         current();
-        if (last === undefined) return;
-        last = undefined;
+        if (last.requests === undefined && last.stream === undefined) return;
+        last.requests = last.stream = undefined;
         try {
           this.#onRecover();
         } catch {
@@ -343,7 +351,7 @@ export class Transport {
       failure = asError(e);
       // reported as any refresh's failure is (started rejects with it too),
       // so that the recovery is noted once a refresh works
-      if (!signal.aborted) monitor.failed(failure);
+      if (!signal.aborted) monitor.failed(failure, 'requests');
     }
     state.settled = true;
     if (signal.aborted) return;
@@ -421,7 +429,10 @@ export class Transport {
             } catch (e) {
               // The stream stays open, and the last data in use.
               const notJSON = e instanceof SyntaxError;
-              monitor.failed(notJSON ? new RealmError('the server sent an event that is not JSON') : asError(e));
+              monitor.failed(
+                notJSON ? new RealmError('the server sent an event that is not JSON') : asError(e),
+                'stream',
+              );
               return;
             }
             monitor.succeeded();
@@ -436,7 +447,7 @@ export class Transport {
       } catch (e) {
         if (signal.aborted) return;
         error = asError(e);
-        monitor.failed(error);
+        monitor.failed(error, 'stream');
       } finally {
         d.dispose();
       }
@@ -481,7 +492,7 @@ export class Transport {
       } catch (e) {
         if (signal.aborted) return;
         error = asError(e);
-        monitor.failed(error);
+        monitor.failed(error, 'requests');
         retrying = main || !state.loaded;
         continue;
       }
