@@ -370,6 +370,9 @@ type subtreeStream struct {
 	// sent holds the paths the server sent since the last synced event, so
 	// the next one can drop the paths it did not.
 	sent map[string]struct{}
+	// unread reports an event since the last synced event whose path could
+	// not be read: then the stream is not known to have sent every path.
+	unread bool
 }
 
 func newSubtreeStream(snap *subtreeSnapshot) *subtreeStream {
@@ -408,11 +411,13 @@ func (s *subtreeStream) event(ctx context.Context, name, id string, data []byte)
 func (s *subtreeStream) chamber(ctx context.Context, id string, data []byte) error {
 	var e subtreeEntry
 	if err := json.Unmarshal(data, &e); err != nil {
+		s.unread = true
 		s.rlm.badEvent(ctx, "", err)
 		return nil
 	}
 	v, err := e.decode()
 	if err != nil {
+		s.unread = true
 		return fmt.Errorf("subtree stream: %w", err)
 	}
 	if id != "" {
@@ -444,10 +449,12 @@ func (s *subtreeStream) chamber(ctx context.Context, id string, data []byte) err
 func (s *subtreeStream) deleted(ctx context.Context, data []byte) error {
 	var e subtreeEntry
 	if err := json.Unmarshal(data, &e); err != nil {
+		s.unread = true
 		s.rlm.badEvent(ctx, "", err)
 		return nil
 	}
 	if e.Path == "" {
+		s.unread = true
 		return fmt.Errorf(`subtree stream: %w: a deleted event has no "path"`, errNotSubtree)
 	}
 	path := canonicalViewPath(e.Path)
@@ -469,18 +476,22 @@ func (s *subtreeStream) deleted(ctx context.Context, data []byte) error {
 // first replaces the Realm's snapshot with the staged one, and every one
 // drops the paths the server did not send since the last.
 //
-// A view the server could not build is not sent, but counts in the event's
-// "chambers". When fewer paths were sent than that, the client cannot tell
-// a deleted chamber from one that could not be built, so it keeps the views
-// of the paths not sent: dropping a view it cannot rebuild would serve its
-// parent's instead.
+// It drops them only when the stream is known to have sent every path: no
+// event's path went unread, and it sent at least the event's "chambers"
+// (which counts views the server could not build too). Otherwise it cannot
+// tell a deleted chamber from one it missed, so it keeps the views of the
+// paths not sent: dropping a view it cannot rebuild would serve its
+// parent's instead. The TypeScript SDK follows the same rule
+// (sdk/conformance/stream.json).
 func (s *subtreeStream) sync(data []byte) {
 	var body struct {
 		Chambers *int `json:"chambers"`
 	}
-	complete := json.Unmarshal(data, &body) != nil || body.Chambers == nil || len(s.sent) >= *body.Chambers
+	counted := json.Unmarshal(data, &body) == nil && body.Chambers != nil
+	complete := !s.unread && (!counted || len(s.sent) >= *body.Chambers)
 	sent := s.sent
 	s.sent = make(map[string]struct{}, len(sent))
+	s.unread = false
 
 	rlm, snap := s.rlm, s.snap
 	rlm.mu.Lock()

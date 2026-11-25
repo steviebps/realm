@@ -102,7 +102,11 @@ data: {"chambers":512}
 - **Reconnects.** A stream may end at any time (streams have a maximum
   lifetime). The client reconnects, and after the new stream's `synced`,
   drops every path that stream did not send. That is how it learns of
-  deletions made while it was disconnected. Resuming from `Last-Event-ID` is
+  deletions made while it was disconnected. A client drops them only when
+  the stream is known to have sent every path: it read every event's path,
+  and received at least as many paths as `synced`'s `chambers`; otherwise
+  it keeps the views it cannot account for. Both SDKs run the cases in
+  `sdk/conformance/stream.json`. Resuming from `Last-Event-ID` is
   not supported yet.
 - Heartbeats (`: ping`), the stream cap (`503` with `Retry-After`), and
   stream lifetimes work as for single-chamber watches.
