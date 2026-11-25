@@ -27,10 +27,12 @@ export interface ClientOptions {
    */
   requestTimeout?: number;
   /**
-   * Called when a refresh fails; the last known values stay in use. A
-   * failure that repeats the previous one is not reported again until a
-   * refresh succeeds. Defaults to console.warn, which also notes the
-   * recovery with console.info.
+   * Called when a refresh fails, the first load included (start rejects
+   * with it too); the last known values stay in use. A failure that repeats
+   * the previous one is not reported again, whether the stream or its
+   * fallback polling hit it, until the main refresh (the stream, or polling
+   * when streaming is off) works again. Defaults to console.warn, which also
+   * notes that recovery with console.info.
    */
   onError?: (error: Error) => void;
   /** The fetch implementation; defaults to the global fetch. */
@@ -38,25 +40,8 @@ export interface ClientOptions {
 }
 
 /**
- * Where a Transport delivers the data it follows; a Snapshot is one. Both
- * methods throw when the data is not what the route serves (a gateway's or
- * maintenance page's `{}`, say), which the Transport treats as a failed
- * refresh that keeps the last data.
- */
-export interface Sink {
-  /**
-   * Receives already-parsed data, from a request, with the server's revision
-   * of it (see parseRevision), if the server reported one.
-   */
-  set(data: unknown, revision: number | undefined): void;
-  /** Receives JSON text, from an event stream, with its revision as set does. */
-  setRaw(raw: string, revision: number | undefined): void;
-}
-
-/**
- * What a Transport follows on a route, and where the data goes: a Sink that
- * takes one event's data (see sinkFeed), or a follower of several events,
- * such as a Subtree. Its methods throw when the data is not what the route
+ * What a Transport follows on a route, and where the data goes: one event's
+ * data (see eventFeed), or a follower of several events, such as a Subtree. Its methods throw when the data is not what the route
  * serves, which the Transport treats as a failed refresh that keeps the last
  * data.
  */
@@ -66,7 +51,10 @@ export interface Feed {
    * `subtree=true`; none when empty or undefined.
    */
   readonly query?: string;
-  /** Receives the data of a request, with its revision, as Sink.set does. */
+  /**
+   * Receives already-parsed data, from a request, with the server's revision
+   * of it (see parseRevision), if the server reported one.
+   */
   set(data: unknown, revision: number | undefined): void;
   /** Called when an event stream opens, before its first event. */
   open?(): void;
@@ -80,13 +68,21 @@ export interface Feed {
   event(name: string, raw: string, revision: number | undefined): boolean;
 }
 
-/** Returns a Feed that passes the data of the events named event to sink, ignoring others. */
-export function sinkFeed(event: string, sink: Sink): Feed {
+/**
+ * Returns a Feed that passes a request's data to set, and the JSON text of
+ * the events named event to setRaw, ignoring other events. Both throw when
+ * the data is not what the route serves.
+ */
+export function eventFeed(
+  event: string,
+  set: (data: unknown, revision: number | undefined) => void,
+  setRaw: (raw: string, revision: number | undefined) => void,
+): Feed {
   return {
-    set: (data, revision) => sink.set(data, revision),
+    set,
     event(name, raw, revision) {
       if (name !== event) return false;
-      sink.setRaw(raw, revision);
+      setRaw(raw, revision);
       return true;
     },
   };
@@ -159,10 +155,17 @@ interface FollowState {
   failure: Error | undefined;
 }
 
-// A refresh loop's record of how its refreshes went; see Transport.#monitor.
+// A follow's record of how its refreshes went; see Transport.#monitor.
 interface Monitor {
+  // A refresh failed.
   failed(error: Error): void;
+  // The main refresh (the stream, or polling when it is the only one)
+  // brought the data up to date: refreshing works again.
   succeeded(): void;
+  // The fallback polling of a failing stream brought the data up to date:
+  // the data is current, but the stream still fails, so its failures stay
+  // reported.
+  refreshed(): void;
 }
 
 /** Talks to one chamber of a realm server, or to the subtree below it. */
@@ -222,13 +225,18 @@ export class Transport {
     }
   }
 
-  // monitor returns a refresh loop's monitor, which records in state how its
-  // refreshes went. It reports a failure to onError unless it repeats the
-  // loop's previous one (the same status and message), so that a refused key
-  // is reported once rather than on every retry; a success after a reported
-  // failure is noted, and failures are reported again after it.
+  // monitor returns a follow's monitor, which records in state how its
+  // refreshes went; the stream and its fallback polling share it. It reports
+  // a failure to onError unless it repeats the previous one (the same status
+  // and message), so that a refused key or an outage is reported once rather
+  // than on every retry, by every loop; once the main refresh works again,
+  // that is noted, and failures are reported again after it.
   #monitor(state: FollowState): Monitor {
     let last: string | undefined;
+    const current = () => {
+      state.loaded = true;
+      state.failure = undefined;
+    };
     return {
       failed: (error) => {
         state.failure = error;
@@ -237,9 +245,9 @@ export class Transport {
         last = key;
         this.report(error);
       },
+      refreshed: current,
       succeeded: () => {
-        state.loaded = true;
-        state.failure = undefined;
+        current();
         if (last === undefined) return;
         last = undefined;
         try {
@@ -324,20 +332,26 @@ export class Transport {
       const { data, revision } = await this.request(route, init, signal, feed.query);
       if (!signal.aborted) feed.set(data, revision);
     };
+    // one monitor for the follow: the stream and its fallback polling report
+    // through it, so an outage is reported once
+    const monitor = this.#monitor(state);
     let failure: Error | undefined;
     try {
       await load(signal);
       state.loaded = true;
     } catch (e) {
-      failure = state.failure = asError(e);
+      failure = asError(e);
+      // reported as any refresh's failure is (started rejects with it too),
+      // so that the recovery is noted once a refresh works
+      if (!signal.aborted) monitor.failed(failure);
     }
     state.settled = true;
     if (signal.aborted) return;
     const background = streaming
-      ? this.#watch(route, init, feed, signal, state, failure, (polling) =>
-          this.#poll(load, interval, polling, state, undefined, false),
+      ? this.#watch(route, init, feed, signal, monitor, failure, (polling) =>
+          this.#poll(load, interval, polling, state, monitor, undefined, false),
         )
-      : this.#poll(load, interval, signal, state, failure, true);
+      : this.#poll(load, interval, signal, state, monitor, failure, true);
     // The loops report their own failures; this only keeps a bug in them
     // from becoming an unhandled rejection.
     background.catch((e: unknown) => this.report(asError(e)));
@@ -358,12 +372,11 @@ export class Transport {
     init: RequestInit,
     feed: Feed,
     signal: AbortSignal,
-    state: FollowState,
+    monitor: Monitor,
     failure: Error | undefined,
     poll: (signal: AbortSignal) => Promise<void>,
   ): Promise<void> {
     const backoff = new Backoff();
-    const monitor = this.#monitor(state);
     // The fallback polling, while it runs.
     let polling: AbortController | undefined;
     const stopPolling = () => {
@@ -442,21 +455,22 @@ export class Transport {
   }
 
   // poll calls load every interval milliseconds (give or take a tenth, at
-  // random) until signal aborts. Until the sink has data (failure is why the
-  // first load failed) and, when eager, after any failure, it retries
-  // sooner, with backoff. As a failing stream's fallback it is not eager:
-  // the stream retries on its own, so once the sink has data, polling keeps
-  // to the interval.
+  // random) until signal aborts. Until the feed has data (failure is why the
+  // first load failed) and, as the main refresh, after any failure, it
+  // retries sooner, with backoff. As a failing stream's fallback it is not
+  // the main refresh: the stream retries on its own, so once the feed has
+  // data, polling keeps to the interval, and its successes keep the data
+  // current without counting as the stream's recovery.
   async #poll(
     load: (signal: AbortSignal) => Promise<void>,
     interval: number,
     signal: AbortSignal,
     state: FollowState,
+    monitor: Monitor,
     failure: Error | undefined,
-    eager: boolean,
+    main: boolean,
   ): Promise<void> {
     const backoff = new Backoff();
-    const monitor = this.#monitor(state);
     let error = failure;
     let retrying = !state.loaded;
     while (!signal.aborted) {
@@ -468,14 +482,15 @@ export class Transport {
         if (signal.aborted) return;
         error = asError(e);
         monitor.failed(error);
-        retrying = eager || !state.loaded;
+        retrying = main || !state.loaded;
         continue;
       }
       if (signal.aborted) return;
       error = undefined;
       retrying = false;
       backoff.reset();
-      monitor.succeeded();
+      if (main) monitor.succeeded();
+      else monitor.refreshed();
     }
   }
 }

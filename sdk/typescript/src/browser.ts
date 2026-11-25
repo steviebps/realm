@@ -1,7 +1,7 @@
 import { copyValue, normalizeContext, typedValue } from './evaluate.js';
 import { isRecord, Snapshot } from './snapshot.js';
 import { canonicalContext, decodeFlags, isPromise, storageKey, touch, type StorageAdapter } from './storage.js';
-import { asError, pollingInterval, RealmError, sinkFeed, Transport, type ClientOptions, type Following } from './transport.js';
+import { asError, eventFeed, pollingInterval, RealmError, Transport, type ClientOptions, type Following } from './transport.js';
 import type { EvaluatedFlags, EvaluationContext, FlagType, InitialState } from './types.js';
 
 /** Options for a BrowserClient. */
@@ -432,10 +432,11 @@ export class BrowserClient {
       'evaluate',
       // The server accepts only strings, as the key and attribute values.
       { method: 'POST', body: JSON.stringify(normalizeContext(this.#context)) },
-      sinkFeed('flags', {
-        set: (data, revision) => receive(() => this.#evaluation.set(data, revision)),
-        setRaw: (raw, revision) => receive(() => this.#evaluation.setRaw(raw, revision)),
-      }),
+      eventFeed(
+        'flags',
+        (data, revision) => receive(() => this.#evaluation.set(data, revision)),
+        (raw, revision) => receive(() => this.#evaluation.setRaw(raw, revision)),
+      ),
       this.#options.streaming ?? true,
       pollingInterval(this.#options.pollingInterval, defaultPollingInterval),
       controller.signal,

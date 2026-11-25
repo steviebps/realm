@@ -570,7 +570,7 @@ Both clients take these options:
 | `streaming` | `true` | Receive changes over a server-sent event stream; `false` polls instead. |
 | `pollingInterval` | 15 min (server), 5 min (browser) | Milliseconds between polls when not streaming, or while the stream keeps failing. Each wait varies by up to a tenth either way. A value that isn't positive means the default. |
 | `requestTimeout` | 10 s | Milliseconds to wait for a response (or a stream's headers) before retrying; `0` waits forever. |
-| `onError` | `console.warn` | Called when a refresh fails. A failure that repeats the previous one is reported once, until a refresh succeeds. An `onError` that throws is logged with `console.error`. |
+| `onError` | `console.warn` | Called when a refresh fails, the first load included (`start` rejects with it too). A failure that repeats the previous one is reported once, whether the stream or its fallback polling hit it, until the main refresh (the stream, or polling when streaming is off) works again; the default then notes the recovery with `console.info`. An `onError` that throws is logged with `console.error`. |
 | `fetch` | global `fetch` | A custom `fetch` implementation. |
 
 `ServerClient` only:
