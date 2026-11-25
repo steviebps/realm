@@ -114,10 +114,18 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   never a 404: its entry is the view built from its ancestors. Reading needs
   `CanRead` on the root only. The wire format is in
   [design/subtree.md](design/subtree.md).
+- **Writes** — every PUT, PATCH, and DELETE goes through one module,
+  `chamberWriter.Write` (`http/write.go`), which takes the path, operation,
+  body, preconditions, and actor as values; the handler only turns a request
+  into those and the module's errors into statuses (`writeFailure`). It reads
+  the chamber's lineage once (`storage.BuildLineage`), refuses a write below
+  a chamber that cannot be parsed with 409 naming it (reads below it fail
+  too), checks seals and constraints, records history in the same `Update`,
+  and announces the change to the broker.
 - **Sealed flags** — a PUT or PATCH that adds a flag a parent seals, or
   changes the chamber's stored definition of one, is refused with 400 naming
-  the parent (`writeGuard.check` in `http/handler.go`, from
-  `storage.ReadAncestry`). A definition stored before the seal may stay
+  the parent (`writeGuard.check` in `http/write.go`, from
+  `Lineage.Ancestry`). A definition stored before the seal may stay
   as it is, so the chamber stays editable. The seals are read before the
   write rather than inside its `Update`: `Lineage.Merge` is what enforces
   them, so a seal that lands during a write still hides what it stores.
@@ -125,11 +133,12 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
   chamber too (`http/constraints.go`). A PUT or PATCH that adds or changes a
   flag is refused with 400 when its type or values break the constraints of
   any parent's definition (read with the seals, in one pass:
-  `storage.ReadAncestry`). A write that adds or changes constraints (judged by
+  `Lineage.Ancestry`). A write that adds or changes constraints (judged by
   JSON value, so reordering is no change) is checked against the chambers
   above first, then reads the chambers below (`checkBelow`: `ListTree`, then
   `ReadLayers`) and is refused, naming them, when any serves a definition
-  they refuse; definitions a seal hides are skipped. Within the write's
+  they refuse; each is judged by the lineage it would have with the write
+  stored, so definitions a seal hides are skipped. Within the write's
   `Update` the server checks that the constraints it changes are those it
   scanned for, and answers 409 otherwise. See [design/constraints.md](design/constraints.md).
 - **Safe editing** — `GET ?inherit=false` returns an `ETag` of the chamber as

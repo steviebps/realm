@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -93,32 +92,22 @@ func sameJSON(a, b json.RawMessage) bool {
 	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
 }
 
-// storedChamber decodes the chamber as stored, leniently; a missing chamber,
-// or one that cannot be parsed, keeps no flags.
-func storedChamber(stored *storage.StorageEntry) *realm.Chamber {
-	c := &realm.Chamber{Rules: map[string]*realm.Flag{}}
-	if stored != nil {
-		_ = json.Unmarshal(stored.Value, c)
-	}
-	return c
-}
-
 // checkBelow refuses next, the chamber a write would store at root, when a
 // chamber below root serves a definition of one of keys (from
 // constraintChanges) with another type, or with values next's constraints
-// for it refuse. Definitions a seal hides are not served, so they are not
-// checked; neither are chambers that cannot be parsed, which fail every read
-// until they are fixed. Seals above root are not consulted: guardWrite has
-// already refused a write that changes a flag one seals. strg holds
-// chambers as stored (see storage.Raw).
+// for it refuse. Each chamber below is judged by the view it would serve
+// with next stored: definitions a seal hides are not served, so they are not
+// checked, and neither are chambers whose view cannot be built (they, or one
+// they inherit from, cannot be parsed), which fail every read until fixed.
+// Seals above root are not consulted: the write has already been refused if
+// it changes a flag one seals. strg holds chambers as stored (see
+// storage.Raw).
 //
 // The chambers below are read before the write rather than with it, so a
 // definition written below concurrently may escape the check, as it may
 // escape a seal; it is checked against these constraints when it next
 // changes.
 func checkBelow(ctx context.Context, strg storage.Storage, root string, next *realm.Chamber, keys []string) error {
-	// a flag next seals hides every definition below
-	keys = slices.DeleteFunc(slices.Clone(keys), func(key string) bool { return next.Rules[key].Sealed })
 	if len(keys) == 0 {
 		return nil
 	}
@@ -138,39 +127,69 @@ func checkBelow(ctx context.Context, strg storage.Storage, root string, next *re
 	}
 	span.SetAttributes(attribute.Int("realm.server.chambers", len(paths)-1))
 
-	var reasons []string
+	schemas := make(map[string]*realm.Schema, len(keys))
 	for _, key := range keys {
-		f := next.Rules[key]
-		s, err := f.ParseConstraints()
+		s, err := next.Rules[key].ParseConstraints()
 		if err != nil {
 			// ParseChamber has checked them
 			return err
 		}
-		var offenders []string
-		total := 0
-		for _, p := range paths[1:] {
-			def := definitionAt(layers, p, key)
-			if def == nil || sealedBetween(layers, root, p, key) {
+		schemas[key] = s
+	}
+
+	// the chambers as they would be with next stored at root
+	read := func(_ context.Context, p string) (storage.Layer, error) {
+		if p == root {
+			return storage.Layer{Path: root, Chamber: next}, nil
+		}
+		if l, ok := layers[p]; ok {
+			return l, nil
+		}
+		return storage.Layer{Path: p}, nil
+	}
+	offenders := map[string][]string{}
+	totals := map[string]int{}
+	for _, p := range paths[1:] {
+		own := layers[p].Chamber
+		if own == nil {
+			continue
+		}
+		lin, err := storage.BuildLineage(ctx, read, p, true)
+		if err != nil {
+			return err
+		}
+		res, err := lin.Resolve()
+		if err != nil {
+			continue // its view cannot be built, so it serves nothing
+		}
+		for _, key := range keys {
+			def := own.Rules[key]
+			if def == nil || slices.Contains(res.Hidden[key], p) {
 				continue
 			}
+			f := next.Rules[key]
 			var why string
 			if def.Type != f.Type {
 				why = fmt.Sprintf("a %s flag", def.Type)
-			} else if err := def.CheckValues(s); err != nil {
+			} else if err := def.CheckValues(schemas[key]); err != nil {
 				why = err.Error()
 			} else {
 				continue
 			}
-			total++
-			if len(offenders) < maxOffenders {
-				offenders = append(offenders, fmt.Sprintf("%s (%s)", p, why))
+			totals[key]++
+			if len(offenders[key]) < maxOffenders {
+				offenders[key] = append(offenders[key], fmt.Sprintf("%s (%s)", p, why))
 			}
 		}
-		if total == 0 {
+	}
+
+	var reasons []string
+	for _, key := range keys {
+		if totals[key] == 0 {
 			continue
 		}
-		list := strings.Join(offenders, ", ")
-		if more := total - len(offenders); more > 0 {
+		list := strings.Join(offenders[key], ", ")
+		if more := totals[key] - len(offenders[key]); more > 0 {
 			list += fmt.Sprintf(", and %d more", more)
 		}
 		reasons = append(reasons, fmt.Sprintf("flag %q: chambers below define it outside its new constraints: %s", key, list))
@@ -179,34 +198,4 @@ func checkBelow(ctx context.Context, strg storage.Storage, root string, next *re
 		return &constraintError{reasons: reasons}
 	}
 	return nil
-}
-
-// definitionAt returns the definition of key in the chamber at p, or nil.
-func definitionAt(layers map[string]storage.Layer, p, key string) *realm.Flag {
-	l := layers[p]
-	if l.Chamber == nil || l.Err != nil {
-		return nil
-	}
-	return l.Chamber.Rules[key]
-}
-
-// sealedBetween reports whether a chamber strictly between root and its
-// descendant p seals key, hiding p's definition of it.
-func sealedBetween(layers map[string]storage.Layer, root, p, key string) bool {
-	for a := parentPath(p); len(a) > len(root); a = parentPath(a) {
-		if f := definitionAt(layers, a, key); f != nil && f.Sealed {
-			return true
-		}
-	}
-	return false
-}
-
-// parentPath returns the canonical path of the chamber above the canonical
-// path p.
-func parentPath(p string) string {
-	dir := path.Dir(strings.TrimSuffix(p, "/"))
-	if dir == "/" {
-		return dir
-	}
-	return dir + "/"
 }

@@ -137,8 +137,14 @@ flag "orders.holdHours": chambers below define it outside its new constraints:
 /prod/tenants/acme/ (default value: 48 is greater than the maximum, 36)
 ```
 
-Definitions a seal hides are skipped: they are not served. So are chambers
-that cannot be parsed, which fail every read until fixed.
+Each chamber below is judged by the view it would serve with the write
+stored (its lineage, with the new chamber in place of the old). Definitions a
+seal hides are skipped: they are not served. So are chambers that cannot be
+parsed, or that inherit from one, which fail every read until fixed.
+
+A write below a chamber that cannot be parsed is refused (409, naming it):
+what that chamber seals and constrains cannot be known, and reads below it
+fail anyway.
 
 Only writes that change constraints pay for the scan. It happens before the
 write, outside its transaction (`storage.Update` may run its function more

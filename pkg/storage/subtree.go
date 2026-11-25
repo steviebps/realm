@@ -251,30 +251,11 @@ type View struct {
 // A chamber that cannot be parsed sets the view's Err; a failed read, or a
 // path storage refuses (see ValidatePath), is returned as an error.
 func BuildView(ctx context.Context, read LayerReader, p string, inheritable bool) (View, error) {
-	if err := ValidatePath(p); err != nil {
-		return View{}, err
-	}
-	own, err := read(ctx, p)
+	lin, err := BuildLineage(ctx, read, p, inheritable)
 	if err != nil {
 		return View{}, err
 	}
-	lin := Lineage{Inheritable: inheritable, Layers: []Layer{own}}
-	if inheritable {
-		// read farthest first, as InheritableStorage.Get does, so a failed
-		// read reports the same ancestor
-		for _, a := range consultedAncestors(p) {
-			layer, err := read(ctx, a)
-			if err != nil {
-				return View{}, err
-			}
-			if layer.Err != nil {
-				layer.Err = fmt.Errorf("could not parse parent chamber %s: %w", a, layer.Err)
-			}
-			lin.Layers = append(lin.Layers, layer)
-		}
-		slices.Reverse(lin.Layers[1:])
-	}
-	v := View{Path: p, Stored: own.Chamber != nil || own.Err != nil, Revision: lin.Revision()}
+	v := View{Path: p, Stored: lin.Stored(), Revision: lin.Revision()}
 	v.Chamber, v.Err = lin.Merge()
 	return v, nil
 }

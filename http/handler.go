@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -133,7 +132,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 
 	streamReads := &sharedReads{strg: hc.Storage, brk: brk, timeout: hc.RequestTimeout}
 	trees := &subtrees{strg: hc.Storage, views: newSharedViews(hc.Storage, brk, hc.RequestTimeout), brk: brk, limit: hc.MaxSubtreeChambers, compress: !hc.DisableSubtreeCompression}
-	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, meta, brk, streamReads, trees, notify))
+	mux.Handle("/v1/chambers/", handleChambers(hc.Storage, newChamberWriter(hc.Storage, notify), brk, streamReads, trees))
 	mux.Handle("/v1/evaluate/", handleEvaluate(hc.Storage, brk, streamReads))
 	mux.Handle("/v1/history/", handleHistory(meta))
 	mux.Handle("/v1/catalog", handleCatalog(meta))
@@ -301,20 +300,7 @@ func handleError(ctx context.Context, w http.ResponseWriter, status int, resp ap
 	_ = utils.WriteInterfaceWith(w, resp, true)
 }
 
-// preconditionFailed reports whether the request's If-Match / If-None-Match
-// headers reject a write against a resource whose current ETag is current
-// ("" when it does not exist).
-func preconditionFailed(r *http.Request, current string) bool {
-	if h := r.Header.Get("If-Match"); h != "" && !etagMatches(h, current) {
-		return true
-	}
-	if h := r.Header.Get("If-None-Match"); h != "" && etagMatches(h, current) {
-		return true
-	}
-	return false
-}
-
-func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamReads *sharedReads, trees *subtrees, notify func(path string)) http.Handler {
+func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, streamReads *sharedReads, trees *subtrees) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		ctx := r.Context()
@@ -373,44 +359,30 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 			body = *parsed
 		}
 
-		// commit applies the write and responds with status on success.
-		commit := func(status int) {
-			etag, err := writeChamber(ctx, strg, meta, r, req, &body)
+		// write applies the write and responds with status on success.
+		write := func(status int, recursive bool) {
+			res, err := writer.Write(ctx, writeRequest{
+				Path:          req.Path,
+				Operation:     req.Operation,
+				Body:          &body,
+				Recursive:     recursive,
+				Preconditions: preconditions{IfMatch: r.Header.Get("If-Match"), IfNoneMatch: r.Header.Get("If-None-Match")},
+				Actor:         p.Actor(),
+			})
 			var pf *preconditionError
-			var nf *storage.NotFoundError
-			var se *sealedError
-			var ce *constraintError
 			switch {
-			case errors.As(err, &se):
-				fail(http.StatusBadRequest, se)
-			case errors.As(err, &ce):
-				fail(http.StatusBadRequest, ce)
 			case errors.As(err, &pf):
 				if pf.current != "" {
 					w.Header().Set("ETag", pf.current)
 				}
 				handleError(ctx, w, http.StatusPreconditionFailed, createResponseWithErrors(nil, []string{"the chamber was changed by someone else; reload and try again"}))
-			case errors.Is(err, errPatchMissing):
-				fail(http.StatusBadRequest, fmt.Errorf("%w: %w", err, &storage.NotFoundError{Key: req.Path}))
-			case errors.As(err, &nf):
-				fail(http.StatusNotFound, nf)
-			case errors.Is(err, storage.ErrConflict):
-				fail(http.StatusConflict, errors.New("the chamber is being changed by others; try again"))
-			case errors.Is(err, storage.ErrInvalidPath):
-				// refused before anything was written
-				fail(http.StatusBadRequest, err)
-			case errors.Is(err, storage.ErrTooLarge):
-				// refused before anything was written
-				fail(http.StatusRequestEntityTooLarge, err)
 			case err != nil:
-				// Backends without transactions apply a write's changes one
-				// at a time, so part of it may have landed: let streams look.
-				notify(req.Path)
-				fail(http.StatusInternalServerError, err)
+				fail(writeFailure(err, recursive))
+			case recursive:
+				handleOkJSON(ctx, w, deleteResult{Deleted: res.Deleted})
 			default:
-				notify(req.Path)
-				if etag != "" {
-					w.Header().Set("ETag", etag)
+				if res.ETag != "" {
+					w.Header().Set("ETag", res.ETag)
 				}
 				if status == http.StatusCreated {
 					handleWithStatus(w, status, nil)
@@ -455,7 +427,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 			own := r.URL.Query().Get("inherit") == "false"
 			source := strg
 			if own {
-				source = meta.strg
+				source = writer.raw
 			}
 			entry, err := source.Get(ctx, req.Path)
 			if err != nil {
@@ -489,11 +461,11 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 			return
 
 		case PutOperation:
-			commit(http.StatusCreated)
+			write(http.StatusCreated, false)
 			return
 
 		case PatchOperation:
-			commit(http.StatusOK)
+			write(http.StatusOK, false)
 			return
 
 		case DeleteOperation:
@@ -502,46 +474,7 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 				fail(http.StatusBadRequest, err)
 				return
 			}
-			if !recursive {
-				commit(http.StatusOK)
-				return
-			}
-			if req.Path == "/" {
-				fail(http.StatusBadRequest, errors.New("refusing to recursively delete every chamber; delete the chambers below / instead"))
-				return
-			}
-			deleted, err := deleteChamberTree(ctx, meta, r, req.Path)
-			var pf *preconditionError
-			var nf *storage.NotFoundError
-			switch {
-			case errors.As(err, &pf):
-				if pf.current != "" {
-					w.Header().Set("ETag", pf.current)
-				}
-				handleError(ctx, w, http.StatusPreconditionFailed, createResponseWithErrors(nil, []string{"the chamber was changed by someone else; reload and try again"}))
-			case errors.As(err, &nf):
-				fail(http.StatusNotFound, nf)
-			case errors.Is(err, storage.ErrConflict):
-				fail(http.StatusConflict, errors.New("the chambers are being changed by others; try again"))
-			case errors.Is(err, storage.ErrInvalidPath):
-				fail(http.StatusBadRequest, err)
-			case errors.Is(err, storage.ErrTooLarge):
-				fail(http.StatusRequestEntityTooLarge, fmt.Errorf("%w; delete fewer chambers at once", err))
-			case err != nil:
-				// part of the deletion may have landed (see commit)
-				notify(req.Path)
-				for _, p := range deleted {
-					notify(p)
-				}
-				fail(http.StatusInternalServerError, err)
-			default:
-				// each deleted chamber is announced, as a change feed
-				// announces each key: subtree streams learn which went
-				for _, p := range deleted {
-					notify(p)
-				}
-				handleOkJSON(ctx, w, deleteResult{Deleted: deleted})
-			}
+			write(http.StatusOK, recursive)
 			return
 
 		case ListOperation:
@@ -572,241 +505,6 @@ func handleChambers(strg storage.Storage, meta *metaStore, brk *broker, streamRe
 	})
 }
 
-// errPatchMissing is returned when a PATCH targets a chamber that does not exist.
-var errPatchMissing = errors.New("cannot patch a resource that does not exist")
-
-// preconditionError is returned when If-Match / If-None-Match reject a write.
-// current is the chamber's ETag, or empty when it does not exist.
-type preconditionError struct {
-	current string
-}
-
-func (e *preconditionError) Error() string { return "precondition failed" }
-
-// sealedFlag is a flag a write would define although a parent seals it.
-type sealedFlag struct {
-	key string
-	by  string
-}
-
-// sealedError refuses a write that adds or changes flags that parent
-// chambers seal.
-type sealedError struct {
-	flags []sealedFlag
-}
-
-func (e *sealedError) Error() string {
-	if len(e.flags) == 1 {
-		f := e.flags[0]
-		return fmt.Sprintf("flag %q is sealed by %s: chambers below it cannot define it", f.key, f.by)
-	}
-	parts := make([]string, len(e.flags))
-	for i, f := range e.flags {
-		parts[i] = fmt.Sprintf("%q (by %s)", f.key, f.by)
-	}
-	return "flags are sealed by parent chambers, which chambers below them cannot define: " + strings.Join(parts, ", ")
-}
-
-// sameFlag reports whether a and b are written the same.
-func sameFlag(a, b *realm.Flag) bool {
-	x, errA := json.Marshal(a)
-	y, errB := json.Marshal(b)
-	return errA == nil && errB == nil && bytes.Equal(x, y)
-}
-
-// writeGuard is what a PUT or PATCH must respect beyond its own body: what
-// the chambers above say about the flags it defines, and which flags'
-// constraints it checked against the chambers below.
-type writeGuard struct {
-	// ancestry is read before the write, not with it: a seal that lands
-	// meanwhile still hides what this write stores (Lineage.Merge enforces
-	// seals; the check explains them), and constraints that land meanwhile
-	// check the chambers below them, this one included.
-	ancestry *storage.Ancestry
-	// scanned reports whether checkBelow ran, and checkedBelow holds the
-	// flags whose new constraints it checked against the definitions below.
-	scanned      bool
-	checkedBelow []string
-}
-
-// guardWrite prepares the checks of a PUT or PATCH of body at req.Path: it
-// reads what the chambers above say about its flags and, when it adds or
-// changes constraints, checks them against the chambers below (see
-// checkBelow), after the chambers above have had their say. strg is the
-// server's storage and raw holds chambers as stored.
-func guardWrite(ctx context.Context, strg, raw storage.Storage, req *AgentRequest, body *realm.Chamber) (*writeGuard, error) {
-	ancestry, err := storage.ReadAncestry(ctx, strg, req.Path)
-	if err != nil {
-		return nil, err
-	}
-	g := &writeGuard{ancestry: ancestry}
-	if !storage.IsInheritable(strg) || !hasConstraints(body) {
-		// only a body with constraints can add or change them
-		return g, nil
-	}
-	// Which constraints change is known for certain only within the write;
-	// check refuses a write whose changes differ from those checked here.
-	stored, err := storage.ReadLayer(ctx, raw, req.Path)
-	if err != nil {
-		return nil, err
-	}
-	before := stored.Chamber
-	if before == nil {
-		before = &realm.Chamber{Rules: map[string]*realm.Flag{}}
-	}
-	next := nextChamber(req.Operation, before, body)
-	if err := g.check(nil, before, next); err != nil {
-		return nil, err
-	}
-	g.scanned, g.checkedBelow = true, constraintChanges(before, next)
-	if err := checkBelow(ctx, raw, req.Path, next, g.checkedBelow); err != nil {
-		return nil, err
-	}
-	return g, nil
-}
-
-// hasConstraints reports whether a flag of c has constraints.
-func hasConstraints(c *realm.Chamber) bool {
-	for _, f := range c.Rules {
-		if f != nil && len(f.Constraints) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// nextChamber returns the chamber a PUT or PATCH of body would store over
-// before, the chamber as stored, which it leaves as it is.
-func nextChamber(op Operation, before, body *realm.Chamber) *realm.Chamber {
-	if op != PatchOperation {
-		return body
-	}
-	merged := &realm.Chamber{Rules: maps.Clone(before.Rules)}
-	merged.OverwriteFrom(body)
-	return merged
-}
-
-// check refuses next, the chamber a write would store over before (the
-// chamber as stored, or nil to decode it from stored when needed), for the
-// flags it adds or changes: with a sealedError when parents seal any, else
-// with a constraintError when any breaks a parent's constraints. A
-// definition stored before the seal or the constraints may stay as it is,
-// so the chamber can still be edited. Once the chambers below are checked,
-// it also refuses with storage.ErrConflict a write whose constraint changes
-// are not those checked (the chamber changed since).
-func (g *writeGuard) check(stored *storage.StorageEntry, before, next *realm.Chamber) error {
-	decoded := func() *realm.Chamber {
-		if before == nil {
-			before = storedChamber(stored)
-		}
-		return before
-	}
-	var sealed []sealedFlag
-	var reasons []string
-	for _, key := range slices.Sorted(maps.Keys(next.Rules)) {
-		by, isSealed := g.ancestry.Seals[key]
-		defs := g.ancestry.Constraints[key]
-		if !isSealed && len(defs) == 0 {
-			continue
-		}
-		if old, had := decoded().Rules[key]; had && sameFlag(old, next.Rules[key]) {
-			continue
-		}
-		if isSealed {
-			sealed = append(sealed, sealedFlag{key: key, by: by})
-		} else if reason := breaksParents(key, next.Rules[key], defs); reason != "" {
-			reasons = append(reasons, reason)
-		}
-	}
-	switch {
-	case len(sealed) > 0:
-		return &sealedError{flags: sealed}
-	case len(reasons) > 0:
-		return &constraintError{reasons: reasons}
-	}
-	if g.scanned {
-		for _, key := range constraintChanges(decoded(), next) {
-			if !slices.Contains(g.checkedBelow, key) {
-				return storage.ErrConflict
-			}
-		}
-	}
-	return nil
-}
-
-// writeChamber applies a PUT, PATCH, or DELETE of req.Path and records it in
-// the chamber's history, atomically, and returns the chamber's new ETag
-// (empty after a delete). Conditional headers are checked against the chamber
-// as stored, and a PATCH merges into it rather than its inherited view, so
-// inherited rules are never copied into the child. A PUT or PATCH is checked
-// against the chambers above and below it first (see guardWrite) and again
-// within the write (see writeGuard.check). strg is the server's storage.
-func writeChamber(ctx context.Context, strg storage.Storage, meta *metaStore, r *http.Request, req *AgentRequest, body *realm.Chamber) (string, error) {
-	var guard *writeGuard
-	if req.Operation == PutOperation || req.Operation == PatchOperation {
-		var err error
-		if guard, err = guardWrite(ctx, strg, meta.strg, req, body); err != nil {
-			return "", err
-		}
-	}
-	var etag string
-	indexKey := historyIndexKey(req.Path)
-	err := storage.Update(ctx, meta.strg, []string{req.Path, indexKey}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
-		stored := cur[req.Path]
-		current := ""
-		if stored != nil {
-			current = etagOf(stored.Value)
-		}
-		if preconditionFailed(r, current) {
-			return nil, &preconditionError{current: current}
-		}
-
-		var value []byte
-		var err error
-		switch req.Operation {
-		case PutOperation:
-			if err := guard.check(stored, nil, body); err != nil {
-				return nil, err
-			}
-			value, err = json.Marshal(body)
-		case PatchOperation:
-			if stored == nil {
-				return nil, errPatchMissing
-			}
-			var before realm.Chamber
-			if err := json.Unmarshal(stored.Value, &before); err != nil {
-				return nil, fmt.Errorf("could not unmarshal current chamber while patching: %w", err)
-			}
-			next := nextChamber(PatchOperation, &before, body)
-			if err := guard.check(stored, &before, next); err != nil {
-				return nil, err
-			}
-			value, err = json.Marshal(next)
-		case DeleteOperation:
-			if stored == nil {
-				return nil, &storage.NotFoundError{Key: req.Path}
-			}
-		}
-		if err != nil {
-			return nil, err
-		}
-
-		rev := Revision{Time: time.Now().UTC(), Actor: auth.FromContext(ctx).Actor(), Operation: req.Operation}
-		etag = ""
-		if value != nil {
-			etag = etagOf(value)
-			rev.ETag = etag
-			rev.Chamber = value
-		}
-		history, err := historyOps(cur[indexKey], req.Path, rev)
-		if err != nil {
-			return nil, err
-		}
-		return append([]storage.Op{{Key: req.Path, Value: value}}, history...), nil
-	})
-	return etag, err
-}
-
 // deleteResult is the response body of a recursive delete.
 type deleteResult struct {
 	// Deleted lists the chambers removed, sorted.
@@ -827,59 +525,32 @@ func queryBool(r *http.Request, name string) (bool, error) {
 	return b, nil
 }
 
-// deleteChamberTree deletes the chamber at root and every chamber below it in
-// one Update, recording each deletion in that chamber's history, and returns
-// the deleted paths, sorted. Conditional headers are checked against root's
-// chamber. It returns a NotFoundError when there is no chamber at or below
-// root. When the Update fails after deciding what to delete, it returns the
-// paths it set out to delete with the error: part of the deletion may have
-// landed.
-//
-// The tree is listed before the Update, so a chamber created below root
-// concurrently may survive; deleting again removes it.
-func deleteChamberTree(ctx context.Context, meta *metaStore, r *http.Request, root string) ([]string, error) {
-	paths, err := storage.ListTree(ctx, meta.strg, root, 0)
-	if err != nil {
-		return nil, err
+// writeFailure returns the status of a write that chamberWriter.Write
+// refused or failed with err (other than a preconditionError), and the error
+// to report. A server error's cause is logged, not sent (see handleError).
+func writeFailure(err error, recursive bool) (int, error) {
+	var se *sealedError
+	var ce *constraintError
+	var nf *storage.NotFoundError
+	var broken *storage.ChamberError
+	switch {
+	case errors.As(err, &se), errors.As(err, &ce), errors.Is(err, errPatchMissing), errors.Is(err, errDeleteEverything), errors.Is(err, storage.ErrInvalidPath):
+		return http.StatusBadRequest, err
+	case errors.As(err, &broken):
+		// a chamber above is broken: say which and why, as reads do
+		return http.StatusConflict, err
+	case errors.As(err, &nf):
+		return http.StatusNotFound, nf
+	case errors.Is(err, storage.ErrConflict):
+		if recursive {
+			return http.StatusConflict, errors.New("the chambers are being changed by others; try again")
+		}
+		return http.StatusConflict, errors.New("the chamber is being changed by others; try again")
+	case errors.Is(err, storage.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, err
+	default:
+		return http.StatusInternalServerError, err
 	}
-	keys := make([]string, 0, 2*len(paths))
-	for _, p := range paths {
-		keys = append(keys, p, historyIndexKey(p))
-	}
-
-	var deleted []string
-	err = storage.Update(ctx, meta.strg, keys, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
-		current := ""
-		if stored := cur[root]; stored != nil {
-			current = etagOf(stored.Value)
-		}
-		if preconditionFailed(r, current) {
-			return nil, &preconditionError{current: current}
-		}
-
-		deleted = deleted[:0]
-		var ops []storage.Op
-		actor := auth.FromContext(ctx).Actor()
-		now := time.Now().UTC()
-		for _, p := range paths {
-			if cur[p] == nil {
-				continue // a path that only leads to chambers below it
-			}
-			history, err := historyOps(cur[historyIndexKey(p)], p, Revision{Time: now, Actor: actor, Operation: DeleteOperation})
-			if err != nil {
-				return nil, err
-			}
-			ops = append(ops, storage.Op{Key: p})
-			ops = append(ops, history...)
-			deleted = append(deleted, p)
-		}
-		if len(deleted) == 0 {
-			return nil, &storage.NotFoundError{Key: root}
-		}
-		return ops, nil
-	})
-	slices.Sort(deleted)
-	return deleted, err
 }
 
 // setRevision sets the revision header (see api.RevisionHeader), unless the

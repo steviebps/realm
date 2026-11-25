@@ -204,7 +204,7 @@ func TestWriteGuardRechecksChanges(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.guard.check(tt.stored, nil, next); err != tt.want {
+			if err := tt.guard.check(storedChamber(tt.stored), next); err != tt.want {
 				t.Fatalf("check = %v, want %v", err, tt.want)
 			}
 		})

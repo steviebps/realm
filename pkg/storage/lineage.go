@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"path"
+	"slices"
 
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/utils"
@@ -45,15 +47,73 @@ type Layered interface {
 	// Layers returns the lineage of the chamber at logicalPath, or a
 	// NotFoundError when there is no chamber there.
 	Layers(ctx context.Context, logicalPath string) (*Lineage, error)
-	// Ancestry returns what the ancestors of logicalPath say about the flags
-	// a chamber there may define, whether or not one exists there.
-	Ancestry(ctx context.Context, logicalPath string) (*Ancestry, error)
+}
+
+// BuildLineage reads the lineage of the path p through read: the
+// chamber at p, then, when inheritable, each ancestor its inherited view
+// consults. Ancestors are read farthest first, so a failed read reports the
+// farthest one that fails; the lineage holds them nearest first. Every
+// lineage, and so every inherited view, Ancestry, and Resolution, is built
+// here.
+//
+// The chamber at p need not exist (see Lineage.Stored): a lineage without it
+// is what a chamber written there would inherit. An ancestor that cannot be
+// parsed is recorded with its error, wrapped to name it; a failed read, or a
+// path storage refuses (see ValidatePath), is returned as an error.
+func BuildLineage(ctx context.Context, read LayerReader, p string, inheritable bool) (*Lineage, error) {
+	return buildLineage(ctx, read, p, inheritable, false)
+}
+
+// buildLineage is BuildLineage; with needStored, it returns a NotFoundError
+// as soon as it finds no chamber at p, without reading the ancestors.
+func buildLineage(ctx context.Context, read LayerReader, p string, inheritable, needStored bool) (*Lineage, error) {
+	if err := ValidatePath(p); err != nil {
+		return nil, err
+	}
+	own, err := read(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	// p is read as given, as a plain Get would read it, and named
+	// canonically
+	key := p
+	p = canonicalChamberPath(p)
+	own.Path = p
+	lin := &Lineage{Inheritable: inheritable, Layers: []Layer{own}}
+	if needStored && !lin.Stored() {
+		return nil, &NotFoundError{Key: key}
+	}
+	if !inheritable {
+		return lin, nil
+	}
+	for _, a := range consultedAncestors(p) {
+		layer, err := read(ctx, a)
+		if err != nil {
+			return nil, err
+		}
+		if layer.Err != nil {
+			// skipping it would silently drop its flags (kill switches
+			// included) from every chamber below it
+			layer.Err = fmt.Errorf("could not parse parent chamber %s: %w", a, layer.Err)
+		}
+		lin.Layers = append(lin.Layers, layer)
+	}
+	slices.Reverse(lin.Layers[1:])
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return lin, nil
+}
+
+// Stored reports whether a chamber is stored at the lineage's path, whether
+// or not it can be parsed.
+func (l *Lineage) Stored() bool {
+	return len(l.Layers) > 0 && (l.Layers[0].Chamber != nil || l.Layers[0].Err != nil)
 }
 
 // Ancestry is what the chambers above a path say about the flags a chamber
 // there may define: which flags they seal, and which they constrain.
-// Ancestors that are missing or cannot be parsed say nothing: one that cannot
-// be parsed fails every inherited read below it until it is fixed.
+// Ancestors that are missing say nothing.
 type Ancestry struct {
 	// Seals maps each flag an ancestor seals to the path of the farthest
 	// ancestor that seals it, as Lineage.Merge resolves seals: a chamber at
@@ -74,27 +134,56 @@ type Constrained struct {
 	Flag *realm.Flag
 }
 
-// ancestryOf returns what layers, the ancestors of a path farthest first,
-// say about the flags a chamber at the path may define.
-func ancestryOf(layers []Layer) *Ancestry {
+// Ancestry returns what the lineage's ancestors say about the flags a chamber
+// at its path may define. It fails, as Merge does, with the farthest
+// ancestor's Err: a chamber below a broken one serves nothing until it is
+// fixed, so what it may define cannot be known either. The chamber's own Err
+// does not matter, as a write may replace it.
+func (l *Lineage) Ancestry() (*Ancestry, error) {
+	if err := l.ancestorErr(); err != nil {
+		return nil, err
+	}
 	a := &Ancestry{Seals: map[string]string{}, Constraints: map[string][]Constrained{}}
-	for _, l := range layers {
-		if l.Chamber == nil || l.Err != nil {
+	for key, i := range l.sealedAt() {
+		a.Seals[key] = l.Layers[i].Path
+	}
+	for i := len(l.Layers) - 1; i > 0; i-- {
+		layer := l.Layers[i]
+		if layer.Chamber == nil {
 			continue
 		}
-		for key, flag := range l.Chamber.Rules {
-			if flag == nil {
-				continue
-			}
-			if _, ok := a.Seals[key]; flag.Sealed && !ok {
-				a.Seals[key] = l.Path
-			}
-			if len(flag.Constraints) > 0 {
-				a.Constraints[key] = append(a.Constraints[key], Constrained{Path: l.Path, Flag: flag})
+		for key, flag := range layer.Chamber.Rules {
+			if flag != nil && len(flag.Constraints) > 0 {
+				a.Constraints[key] = append(a.Constraints[key], Constrained{Path: layer.Path, Flag: flag})
 			}
 		}
 	}
-	return a
+	return a, nil
+}
+
+// ancestorErr returns the farthest ancestor's Err: the one a top-down walk
+// meets first.
+func (l *Lineage) ancestorErr() error {
+	for i := len(l.Layers) - 1; i > 0; i-- {
+		if err := l.Layers[i].Err; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sealedAt maps each flag an ancestor seals to the index of the farthest
+// ancestor that seals it.
+func (l *Lineage) sealedAt() map[string]int {
+	at := map[string]int{}
+	for i := len(l.Layers) - 1; i > 0; i-- {
+		for key := range sealedIn(l.Layers[i].Chamber) {
+			if _, ok := at[key]; !ok {
+				at[key] = i
+			}
+		}
+	}
+	return at
 }
 
 // Merge builds the inherited view: the chamber's flags, plus each flag it
@@ -140,23 +229,11 @@ func (l *Lineage) merge(res *Resolution) (*realm.Chamber, error) {
 	if err := l.Layers[0].Err; err != nil {
 		return nil, err
 	}
-	// The farthest broken ancestor is the one a top-down walk meets first.
-	for i := len(l.Layers) - 1; i > 0; i-- {
-		if err := l.Layers[i].Err; err != nil {
-			return nil, err
-		}
+	if err := l.ancestorErr(); err != nil {
+		return nil, err
 	}
 
-	// sealedAt maps each flag an ancestor seals to the index of the
-	// farthest such ancestor
-	sealedAt := map[string]int{}
-	for i := len(l.Layers) - 1; i > 0; i-- {
-		for key := range sealedIn(l.Layers[i].Chamber) {
-			if _, ok := sealedAt[key]; !ok {
-				sealedAt[key] = i
-			}
-		}
-	}
+	sealedAt := l.sealedAt()
 	if res != nil {
 		for key, i := range sealedAt {
 			res.SealedBy[key] = l.Layers[i].Path
@@ -218,15 +295,6 @@ func sealedIn(c *realm.Chamber) iter.Seq[string] {
 			}
 		}
 	}
-}
-
-// ReadAncestry returns s.Ancestry when s applies inheritance, and an empty
-// Ancestry otherwise: without inheritance, no chamber is above another.
-func ReadAncestry(ctx context.Context, s Storage, logicalPath string) (*Ancestry, error) {
-	if layered, ok := s.(Layered); ok {
-		return layered.Ancestry(ctx, logicalPath)
-	}
-	return ancestryOf(nil), nil
 }
 
 // ReadLineage returns the lineage of the chamber at logicalPath: s.Layers
