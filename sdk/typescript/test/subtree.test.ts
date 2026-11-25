@@ -470,6 +470,61 @@ describe('ServerClient with a path', () => {
   });
 });
 
+describe('ServerClient path and template modes', () => {
+  // the same chamber, read by path and picked by a template that falls back to its root
+  const rules = {
+    beta: {
+      type: 'boolean',
+      value: false,
+      targeting: [{ clauses: [{ attribute: 'env', op: 'in', values: ['prod'] }], value: true }],
+    },
+    tier: {
+      type: 'string',
+      value: 'basic',
+      targeting: [{ clauses: [{ attribute: 'tenantId', op: 'in', values: ['t-1'] }], value: 'gold' }],
+    },
+  };
+
+  it('answer alike for the same chamber', async () => {
+    const byPath = fakeRealm(
+      () =>
+        new Response(JSON.stringify({ data: { rules } }), {
+          headers: { 'Content-Type': 'application/json', 'X-Realm-Revision': '7' },
+        })
+    );
+    const byTemplate = fakeRealm(() => ({ chambers: [{ path: '/prod/', rules, revision: 7 }] }));
+    const common = { address: 'http://realm.test', attributes: { env: 'prod' }, streaming: false };
+    const clients = [
+      new ServerClient({ ...common, path: '/prod/', fetch: byPath.fetch }),
+      new ServerClient({ ...common, pathTemplate: '/prod/{tenantId}/', fetch: byTemplate.fetch }),
+    ];
+    for (const c of clients) cleanup.push(() => c.stop());
+
+    const answers = (c: ServerClient) =>
+      [undefined, ctx('t-1'), ctx('t-2')].map((context) => ({
+        ready: c.isReady(),
+        path: c.chamberPath(context),
+        revision: c.revision(context),
+        beta: c.bool('beta', context, false),
+        tier: c.string('tier', context, 'none'),
+        all: c.allFlags(context),
+        initial: c.initialState(context),
+      }));
+
+    const [path, template] = clients as [ServerClient, ServerClient];
+    // before the first load, both serve fallbacks and know no chamber
+    expect(answers(template)).toEqual(answers(path));
+    expect(answers(path)[1]).toMatchObject({ ready: false, path: undefined, revision: undefined, tier: 'none' });
+
+    await Promise.all(clients.map((c) => c.start()));
+    expect(answers(template)).toEqual(answers(path));
+    const loaded = answers(path)[1]!;
+    expect(loaded).toMatchObject({ ready: true, path: '/prod/', revision: 7, beta: true, tier: 'gold' });
+    // initial state evaluates as the server's endpoint does: without the process-wide env
+    expect(loaded.initial.flags?.beta?.value).toBe(false);
+  });
+});
+
 describe('subtree stream conformance', () => {
   it.each(streamCases.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
     const subtree = new Subtree();
