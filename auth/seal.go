@@ -38,7 +38,9 @@ func (s *sealer) seal(purpose string, v any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	nonce := make([]byte, s.aead.NonceSize(), s.aead.NonceSize()+len(plain)+s.aead.Overhead())
+	// Seal appends the ciphertext to nonce and grows it as needed; sizing the
+	// capacity from len(plain) here could overflow on a huge value.
+	nonce := make([]byte, s.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
