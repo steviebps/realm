@@ -236,6 +236,9 @@ func ParseChamber(b []byte) (*Chamber, error) {
 	if err := checkFields(b, chamberShape, ""); err != nil {
 		return nil, err
 	}
+	if err := c.checkDefined(); err != nil {
+		return nil, err
+	}
 	if err := c.checkSupported(); err != nil {
 		return nil, err
 	}
@@ -246,6 +249,18 @@ func ParseChamber(b []byte) (*Chamber, error) {
 		return nil, err
 	}
 	return &c, nil
+}
+
+// checkDefined reports the first flag, in key order, written as null: it
+// serves nothing, so a write that means to remove a flag must leave it out.
+// Reads accept one, which SDKs skip.
+func (c *Chamber) checkDefined() error {
+	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
+		if c.Rules[key] == nil {
+			return fmt.Errorf("flag %q has no definition; leave it out to remove it", key)
+		}
+	}
+	return nil
 }
 
 // checkConstraints reports the first flag, in key order, with a lifecycle

@@ -175,3 +175,16 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return strings.TrimSpace(string(b))
 }
+
+// TestParseChamberRejectsNullFlags checks that a write refuses a flag written
+// as null, which serves nothing, while a plain read keeps decoding one.
+func TestParseChamberRejectsNullFlags(t *testing.T) {
+	_, err := ParseChamber([]byte(`{"rules":{"b":{"type":"boolean","value":true},"a":null}}`))
+	if err == nil || err.Error() != `flag "a" has no definition; leave it out to remove it` {
+		t.Errorf("ParseChamber = %v, want the null flag refused", err)
+	}
+	var c Chamber
+	if err := json.Unmarshal([]byte(`{"rules":{"a":null}}`), &c); err != nil {
+		t.Errorf("a read of a null flag = %v, want it decoded", err)
+	}
+}

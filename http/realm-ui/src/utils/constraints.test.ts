@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import type { Flag, Lineage, RuleType, Schema } from '../models/response.ts';
+import type { Flag, Lineage, FlagType, Schema } from '../models/response.ts';
 import {
   allowedValues,
   constraintProblems,
@@ -19,7 +19,7 @@ import {
 const conformance = JSON.parse(
   readFileSync(new URL('../../../../sdk/conformance/constraints.json', import.meta.url), 'utf8')
 ) as {
-  schemas: { name: string; flagType: RuleType; schema: unknown; error?: string }[];
+  schemas: { name: string; flagType: FlagType; schema: unknown; error?: string }[];
   values: { name: string; schema: Schema; value: unknown; error?: string }[];
 };
 

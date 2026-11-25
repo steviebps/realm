@@ -3,92 +3,41 @@ export type ListResponse = {
   errors?: Array<string>;
 };
 
-export type ChamberResponse = {
-  data?: Chamber;
-  errors?: Array<string>;
-};
+// The wire types realm's API shares with the TypeScript SDK are the SDK's
+// (sdk/typescript/src/types.ts), so the two cannot drift; only the shapes the
+// UI alone reads are declared here. Type-only, so nothing of the SDK reaches the
+// bundle, and node:test can still strip these imports.
+export type {
+  Clause,
+  Flag,
+  FlagType,
+  Lifecycle,
+  Operator,
+  Rollout,
+  Schedule,
+  Schema,
+  TargetingRule,
+} from '../../../../sdk/typescript/src/types.ts';
+import type { Chamber as WireChamber, Flag } from '../../../../sdk/typescript/src/types.ts';
 
-export type Chamber = {
-  rules: Rules;
-};
+/** A chamber as the server sends it, whose flags may be null (see withoutNullFlags in utils/flags). */
+export type { WireChamber };
 
+/** A flag's value: any JSON, as a custom flag may hold arrays and null. */
+export type FlagValue = Flag['value'];
+
+/** Every flag a chamber defines, by key. */
 export type Rules = Record<string, Flag>;
 
-export type RuleType = 'string' | 'number' | 'boolean' | 'custom';
-
-export type FlagValue = string | number | boolean | Record<string, unknown>;
-
-export type Operator = 'in' | 'notIn' | 'startsWith' | 'semverGte' | 'semverLte';
-
-export type Clause = {
-  attribute: string;
-  op: Operator;
-  values: string[];
-};
-
-export type Rollout = {
-  percentage: number;
-  bucketBy?: string;
-  seed?: string;
-};
-
-/** A window of time, as RFC 3339 times: from start (inclusive) until end (exclusive). */
-export type Schedule = {
-  start?: string;
-  end?: string;
-};
-
-export type TargetingRule = {
-  id?: string;
-  description?: string;
-  clauses?: Clause[];
-  value: FlagValue;
-  rollout?: Rollout;
-  schedule?: Schedule;
-};
-
-/** Whether a flag is meant to be removed once it has served its purpose, or to stay. */
-export type Lifecycle = 'temporary' | 'permanent';
-
 /**
- * The subset of JSON Schema a flag's values are checked against on write (see utils/constraints). The server refuses
- * any other keyword.
+ * A chamber as the UI holds it: the server's, without flags written as null, which writes now refuse (api.ts drops
+ * them as it loads a chamber, and saving lists each one it removes: see NullFlag in utils/provenance).
  */
-export type Schema = {
-  type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';
-  enum?: unknown[];
-  minimum?: number;
-  maximum?: number;
-  multipleOf?: number;
-  minLength?: number;
-  maxLength?: number;
-  properties?: Record<string, Schema>;
-  required?: string[];
-  additionalProperties?: boolean;
-  items?: Schema;
-};
+export type Chamber = { rules: Rules };
 
-export type Flag = {
-  type: RuleType;
-  value: FlagValue;
-  /** What the flag is for. */
-  description?: string;
-  /** Who is responsible for it: a team or a person. */
-  owner?: string;
-  lifecycle?: Lifecycle;
-  /**
-   * The values the flag may take, here and in every chamber below: the server refuses a write whose default or rule
-   * values (paused too) fall outside them.
-   */
-  constraints?: Schema;
-  /** Chambers below the one that defines the flag cannot override it. */
-  sealed?: boolean;
-  targeting?: TargetingRule[];
-  /**
-   * The rules while the flag's targeting is turned off: kept, but never evaluated, so every context gets the default.
-   * The server refuses a flag with rules in both lists.
-   */
-  pausedTargeting?: TargetingRule[];
+export type ChamberResponse = {
+  data?: WireChamber;
+  errors?: Array<string>;
 };
 
 /**
