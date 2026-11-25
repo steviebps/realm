@@ -66,6 +66,17 @@ void test('a conflict re-applies the change to the latest chamber and names flag
   assert.deepEqual(await confirm(result.proposal, io(current)), { saved: true });
 });
 
+void test('restoring a revision names the flags someone else added or deleted since', async () => {
+  const base = loaded({ a: on(false), x: on(true) }, '"1"');
+  // they added c and deleted x; restoring discards both
+  const current = { value: loaded({ a: on(false), c: on(true) }, '"2"') };
+  const p = propose(base, 'Restore', changes.replace({ rules: { a: on(true), x: on(true) } }));
+  const result = await confirm(p, io(current));
+  assert.equal(result.saved, false);
+  if (result.saved) return;
+  assert.deepEqual(result.proposal.overwrites, ['c', 'x']);
+});
+
 void test('a rebased change that builds on their change to the same flag overwrites nothing', async () => {
   const ruled = (value: boolean): Flag => ({ type: 'boolean', value, targeting: [{ value: true }] });
   const base = loaded({ a: ruled(false) }, '"1"');

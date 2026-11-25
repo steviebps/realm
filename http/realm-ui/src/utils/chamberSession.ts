@@ -81,11 +81,11 @@ export const confirm = async (proposal: Proposal, io: SessionIO): Promise<Confir
   const after = proposal.apply(structuredClone(fresh.own ?? { rules: {} }));
   // Their change to a flag survives when re-applying this one builds on it (pausing targeting, say); it is lost
   // when the flag comes out just as this change made it before, ignoring theirs (replacing or deleting the flag).
+  // That includes flags this change did not edit but still discards, as restoring a revision does to flags they
+  // added or deleted.
   const theirs = changedFlags(proposal.base.own, fresh.own);
-  const mine = new Set(changedFlags(proposal.base.own, proposal.after));
   const overwrites = theirs.filter(
     (name) =>
-      mine.has(name) &&
       sameDefinition(after.rules[name], proposal.after.rules[name]) &&
       !sameDefinition(after.rules[name], fresh.own?.rules[name])
   );
