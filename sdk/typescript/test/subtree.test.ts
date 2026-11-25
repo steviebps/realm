@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RealmError, ServerClient, type EvaluationContext } from '../src/index.js';
+import { Subtree } from '../src/subtree.js';
 import { parseTemplate } from '../src/template.js';
 
 // The cases the Go SDK runs too (see docs/design/subtree.md).
@@ -16,6 +17,18 @@ const conformance = JSON.parse(readFileSync(new URL('../../conformance/subtree.j
     expect: string | null;
   }[];
   invalidTemplates: string[];
+};
+
+// How a stream's events change the views held; the Go SDK runs these too
+// (pkg/stream_conformance_test.go).
+const streamCases = JSON.parse(readFileSync(new URL('../../conformance/stream.json', import.meta.url), 'utf8')) as {
+  cases: {
+    name: string;
+    held: unknown[];
+    events: { event: string; id?: string; data: unknown }[];
+    views: Record<string, string>;
+    revisions?: Record<string, number>;
+  }[];
 };
 
 let cleanup: (() => unknown)[] = [];
@@ -454,5 +467,35 @@ describe('ServerClient with a path', () => {
     expect(realm.requests).toEqual(['/v1/chambers/prod/web/']);
     expect(c.chamberPath(ctx('t-1'))).toBe('/prod/web/');
     expect(c.bool('beta', ctx('t-1'), false)).toBe(true);
+  });
+});
+
+describe('subtree stream conformance', () => {
+  it.each(streamCases.cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
+    const subtree = new Subtree();
+    subtree.set({ chambers: c.held });
+    subtree.open();
+    for (const ev of c.events) {
+      const raw = typeof ev.data === 'string' ? ev.data : JSON.stringify(ev.data);
+      try {
+        subtree.event(ev.event, raw, ev.id === undefined ? undefined : Number(ev.id));
+      } catch {
+        // an event the SDK cannot use is skipped; only the views count
+      }
+    }
+
+    // every path the case mentions is held exactly when it expects a view
+    const paths = new Set<string>(Object.keys(c.views));
+    for (const entry of [...c.held, ...c.events.map((e) => e.data)]) {
+      const path = (entry as { path?: unknown } | null)?.path;
+      if (typeof path === 'string') paths.add(path);
+    }
+    for (const path of paths) {
+      const rules = subtree.get(path)?.chamber.rules as Record<string, { value: unknown }> | undefined;
+      expect(rules?.msg?.value, path).toBe(c.views[path]);
+    }
+    for (const [path, revision] of Object.entries(c.revisions ?? {})) {
+      expect(subtree.get(path)?.revision, path).toBe(revision);
+    }
   });
 });

@@ -1,0 +1,140 @@
+{
+  "description": "How an SDK applies the events of a subtree stream (see docs/design/subtree.md) to the views it holds. Each case starts with the views a read delivered ('held': subtree entries, as GET ?subtree=true returns them), opens a stream, applies 'events' in order, and expects 'views': each held path's 'msg' flag value, and its revision when 'revisions' names it. An event's 'data' is sent as written when it is a string (so it may be invalid JSON), and as JSON otherwise. An event an SDK cannot use is skipped (Go logs it or ends the stream; TypeScript reports it and stays open): the cases check only the views. A stream's synced event drops the paths the stream did not send only when the stream is known to have sent the whole subtree: no event's path went unread, and it sent at least the 'chambers' synced counts.",
+  "cases": [
+    {
+      "name": "the first synced replaces the views with the snapshot",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "id": "5", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "synced", "data": {"chambers": 1}}
+      ],
+      "views": {"/r/": "r2"},
+      "revisions": {"/r/": 5}
+    },
+    {
+      "name": "views stay as they were until synced",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}}
+      ],
+      "views": {"/r/": "r", "/r/x/": "x"}
+    },
+    {
+      "name": "fewer paths sent than synced counts keeps the others",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "synced", "data": {"chambers": 2}}
+      ],
+      "views": {"/r/": "r2", "/r/x/": "x"}
+    },
+    {
+      "name": "an event whose path went unread keeps the others",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "chamber", "data": "{not json"},
+        {"event": "synced", "data": {}}
+      ],
+      "views": {"/r/": "r2", "/r/x/": "x"}
+    },
+    {
+      "name": "an event without a path keeps the others",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "chamber", "data": {"rules": {"msg": {"type": "string", "value": "?"}}}},
+        {"event": "synced", "data": {"chambers": 1}}
+      ],
+      "views": {"/r/": "r2", "/r/x/": "x"}
+    },
+    {
+      "name": "synced without a count drops what was not sent",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "synced", "data": {}}
+      ],
+      "views": {"/r/": "r2"}
+    },
+    {
+      "name": "a view that cannot be built keeps the one held",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}, {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "chamber", "data": {"path": "/r/x/", "error": "a chamber it inherits from cannot be parsed"}},
+        {"event": "synced", "data": {"chambers": 2}}
+      ],
+      "views": {"/r/": "r2", "/r/x/": "x"}
+    },
+    {
+      "name": "a view that cannot be built and was never held stays absent",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "chamber", "data": {"path": "/r/y/", "error": "broken"}},
+        {"event": "synced", "data": {"chambers": 2}}
+      ],
+      "views": {"/r/": "r2"}
+    },
+    {
+      "name": "a path deleted during the snapshot is not held",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}},
+        {"event": "chamber", "data": {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}},
+        {"event": "deleted", "data": {"path": "/r/x/"}},
+        {"event": "synced", "data": {"chambers": 1}}
+      ],
+      "views": {"/r/": "r"}
+    },
+    {
+      "name": "changes after synced apply as they arrive",
+      "held": [],
+      "events": [
+        {"event": "chamber", "id": "1", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}},
+        {"event": "chamber", "id": "1", "data": {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}},
+        {"event": "synced", "data": {"chambers": 2}},
+        {"event": "chamber", "id": "9", "data": {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x2"}}}},
+        {"event": "chamber", "id": "9", "data": {"path": "/r/y/", "rules": {"msg": {"type": "string", "value": "y"}}}},
+        {"event": "deleted", "data": {"path": "/r/x/"}}
+      ],
+      "views": {"/r/": "r", "/r/y/": "y"},
+      "revisions": {"/r/": 1, "/r/y/": 9}
+    },
+    {
+      "name": "a resync drops the paths it did not send",
+      "held": [],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}},
+        {"event": "chamber", "data": {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}},
+        {"event": "synced", "data": {"chambers": 2}},
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "synced", "data": {"chambers": 1}}
+      ],
+      "views": {"/r/": "r2"}
+    },
+    {
+      "name": "a resync that sent fewer paths than it counts keeps the others",
+      "held": [],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}},
+        {"event": "chamber", "data": {"path": "/r/x/", "rules": {"msg": {"type": "string", "value": "x"}}}},
+        {"event": "synced", "data": {"chambers": 2}},
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "synced", "data": {"chambers": 2}}
+      ],
+      "views": {"/r/": "r2", "/r/x/": "x"}
+    },
+    {
+      "name": "events with other names are ignored",
+      "held": [{"path": "/r/", "rules": {"msg": {"type": "string", "value": "r"}}}],
+      "events": [
+        {"event": "chamber", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "r2"}}}},
+        {"event": "future", "data": {"path": "/r/", "rules": {"msg": {"type": "string", "value": "?"}}}},
+        {"event": "synced", "data": {"chambers": 1}}
+      ],
+      "views": {"/r/": "r2"}
+    }
+  ]
+}

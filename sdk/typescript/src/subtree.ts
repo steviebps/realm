@@ -117,11 +117,19 @@ export class Subtree implements Feed {
         return true;
       }
       case 'synced': {
+        // The stream is known to have sent every path only when none went
+        // unread and it sent at least the views synced counts (which
+        // include those the server could not build); otherwise the paths
+        // it did not send are kept. The Go SDK follows the same rule
+        // (sdk/conformance/stream.json).
+        const counted = syncedCount(raw);
+        const sentCount = this.#batch ? this.#batch.size : this.#seen.size;
+        const complete = !this.#unknown && (counted === undefined || sentCount >= counted);
         if (this.#batch) {
           const batch = this.#batch;
           this.#batch = undefined;
-          this.#replace(batch, !this.#unknown);
-        } else if (!this.#unknown) {
+          this.#replace(batch, complete);
+        } else if (complete) {
           // A resync: the whole subtree again, applied as it arrived.
           let dropped = false;
           for (const path of [...this.#views.keys()]) {
@@ -200,6 +208,17 @@ export class Subtree implements Feed {
         console.error('[realm] a subscriber threw', e);
       }
     }
+  }
+}
+
+// syncedCount returns the views a synced event says the snapshot held (its
+// `chambers`), or undefined when it does not say.
+function syncedCount(raw: string): number | undefined {
+  try {
+    const data: unknown = JSON.parse(raw);
+    return isRecord(data) && typeof data.chambers === 'number' ? data.chambers : undefined;
+  } catch {
+    return undefined;
   }
 }
 
