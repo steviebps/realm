@@ -5,6 +5,7 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BrowserClient,
+  contextKeyOf,
   serializeInitialState,
   ServerClient,
   type EvaluationContext,
@@ -131,7 +132,7 @@ describe('an InitialState without flags', () => {
     const storage = memoryStorage();
     seedStale(storage, realm.address, { key: 'u1' });
     const client = new BrowserClient({ address: realm.address, path: '/prod/web/', initialState: state, storage });
-    expect(client.contextKey()).toBe(JSON.stringify({ key: 'u1' }));
+    expect(client.contextKey()).toBe(contextKeyOf({ key: 'u1' }));
     expect(client.source()).toBe('cache');
     expect(client.isReady()).toBe(false);
     const empty = new BrowserClient({ address: realm.address, initialState: state });
@@ -160,7 +161,7 @@ describe('BrowserClient initialState', () => {
     const state = server.initialState({ key: 'vip' });
     const client = new BrowserClient({ address: realm.address, path: '/prod/web/', initialState: state, streaming: false });
     cleanup.push(() => client.stop());
-    expect(client.contextKey()).toBe(JSON.stringify({ key: 'vip' }));
+    expect(client.contextKey()).toBe(contextKeyOf({ key: 'vip' }));
     expect(client.source()).toBe('render');
     expect(client.isReady()).toBe(true);
     expect(client.bool('beta', false)).toBe(true);

@@ -75,28 +75,6 @@ interface Construction {
   bootstrap: Given | undefined;
 }
 
-const constructions = new WeakMap<BrowserClient, Construction>();
-
-/**
- * The values a server render reads from client for context (the context it
- * was constructed with, if undefined), and their source: the initialState
- * values when they are for that context, else the bootstrap values when they
- * are, else undefined. It depends only on the client's options, never on
- * what it has received since, so a page renders the same on the server and
- * while it hydrates in the browser, however late that is.
- */
-export function renderedValues(
-  client: BrowserClient,
-  context: EvaluationContext | undefined,
-): { flags: EvaluatedFlags; source: FlagSource } | undefined {
-  const given = constructions.get(client);
-  if (!given) return undefined; // not a BrowserClient: a test double, say
-  const match = context === undefined ? given.match : matchKey(context);
-  if (given.initial?.match === match) return { flags: given.initial.flags, source: 'render' };
-  if (given.bootstrap?.match === match) return { flags: given.bootstrap.flags, source: 'bootstrap' };
-  return undefined;
-}
-
 /**
  * The value of flag in flags when it has type want (a copy, with copy), and
  * otherwise fallback. It never throws: a flag of a shape this SDK does not
@@ -119,6 +97,16 @@ function matchKey(context: EvaluationContext | undefined): string {
   return canonicalContext(normalizeContext(context));
 }
 
+/**
+ * The key of context that contextKey compares: the context as the server
+ * receives it, in a canonical form, so contexts that differ only in the order
+ * of their attributes, or in a number written for a string, have the same
+ * key, and are evaluated alike.
+ */
+export function contextKeyOf(context: EvaluationContext | undefined): string {
+  return matchKey(context);
+}
+
 // given returns the values of a bootstrap or initialState option, if it has
 // any, for the context match.
 function given(match: string, flags: unknown, revision?: unknown): Given | undefined {
@@ -138,12 +126,12 @@ export class BrowserClient {
   readonly #options: BrowserClientOptions;
   readonly #evaluation = new Snapshot<Evaluation>({ flags: {} }, asEvaluation);
   #context: EvaluationContext;
-  // The context as JSON, and the key its values are stored under.
-  #contextKey: string;
+  // The key its values are stored under.
   #storageKey: string;
   // The prefix of every storage key: the evaluate URL (server and chamber).
   readonly #storagePrefix: string;
-  // The context as the server receives it (see matchKey).
+  // The context as the server receives it (see matchKey): contexts with the
+  // same match are the same context.
   #match: string;
   // The bootstrap and initialState values.
   readonly #given: Construction;
@@ -170,7 +158,6 @@ export class BrowserClient {
     this.#transport = new Transport(options.path === undefined && statePath ? { ...options, path: statePath } : options);
     this.#storagePrefix = this.#transport.url('evaluate');
     this.#context = options.context ?? initialContext;
-    this.#contextKey = JSON.stringify(this.#context);
     this.#match = matchKey(this.#context);
     this.#storageKey = this.#keyFor(this.#context);
     this.#given = {
@@ -178,7 +165,6 @@ export class BrowserClient {
       initial: given(matchKey(initialContext), initialState?.flags, initialState?.revision),
       bootstrap: given(this.#match, options.bootstrap),
     };
-    constructions.set(this, this.#given);
     this.#restore();
   }
 
@@ -205,18 +191,26 @@ export class BrowserClient {
    * context (another user on a shared device, say) are never served for
    * this one. The client keeps retrying if the evaluation
    * fails. On a stopped client it only sets the context.
+   *
+   * A context the server would receive as the current one (the same key and
+   * attributes, in any order, numbers written as strings or not; see
+   * contextKeyOf) is the current one: its values stay, and nothing is
+   * evaluated again.
    */
   async identify(context: EvaluationContext): Promise<void> {
     if (context === undefined) context = {};
-    const contextKey = JSON.stringify(context);
+    const match = matchKey(context);
     this.#context = context;
-    if (contextKey !== this.#contextKey) {
-      this.#contextKey = contextKey;
-      this.#match = matchKey(context);
-      this.#storageKey = this.#keyFor(context);
-      this.#restore();
-    }
+    if (match === this.#match) return;
+    this.#match = match;
+    this.#storageKey = this.#keyFor(context);
+    this.#restore();
     if (this.#running) await this.#connect();
+  }
+
+  /** Whether the client is started: start was called, and stop has not been since. */
+  isStarted(): boolean {
+    return this.#running !== undefined;
   }
 
   /** Stops refreshing. The last known values stay available. */
@@ -260,11 +254,29 @@ export class BrowserClient {
   }
 
   /**
-   * The context flags are evaluated for, as JSON: compare it to tell whether
-   * the values are for a given context.
+   * The key of the context flags are evaluated for (see contextKeyOf):
+   * compare it with contextKeyOf(context) to tell whether the values are for
+   * context.
    */
   contextKey(): string {
-    return this.#contextKey;
+    return this.#match;
+  }
+
+  /**
+   * The values a server render reads for context (the context the client
+   * was constructed with, if undefined), and their source: the initialState
+   * values when they are for that context, else the bootstrap values when
+   * they are, else undefined. It depends only on the client's options, never
+   * on what it has received since, so a page renders the same on the server
+   * and while it hydrates in the browser, however late that is. The React
+   * provider reads it.
+   */
+  renderedValues(context?: EvaluationContext): { flags: EvaluatedFlags; source: FlagSource } | undefined {
+    const given = this.#given;
+    const match = context === undefined ? given.match : matchKey(context);
+    if (given.initial?.match === match) return { flags: given.initial.flags, source: 'render' };
+    if (given.bootstrap?.match === match) return { flags: given.bootstrap.flags, source: 'bootstrap' };
+    return undefined;
   }
 
   /**
@@ -336,7 +348,7 @@ export class BrowserClient {
   // values later, if the context is unchanged and neither the server nor a
   // server render has answered by then.
   #restore(): void {
-    const contextKey = this.#contextKey;
+    const match = this.#match;
     const storage = this.#options.storage;
     const forContext = (values: Given | undefined) => (values?.match === this.#match ? values : undefined);
     const initial = forContext(this.#given.initial);
@@ -355,9 +367,9 @@ export class BrowserClient {
       if (isPromise(stored)) {
         stored
           // by now the server's values, or other stored ones, may be shown
-          .then((raw) => (this.#source === 'bootstrap' || this.#source === undefined) && this.#applyStored(contextKey, raw))
+          .then((raw) => (this.#source === 'bootstrap' || this.#source === undefined) && this.#applyStored(match, raw))
           .catch((e: unknown) => this.#reportStorage(e));
-      } else if (this.#applyStored(contextKey, stored)) {
+      } else if (this.#applyStored(match, stored)) {
         return;
       }
     }
@@ -369,11 +381,11 @@ export class BrowserClient {
     }
   }
 
-  // applyStored serves the values raw holds for contextKey, unless the
-  // context has changed since they were read or raw holds no evaluation. It
-  // reports whether it served them.
-  #applyStored(contextKey: string, raw: string | null | undefined): boolean {
-    if (contextKey !== this.#contextKey) return false;
+  // applyStored serves the values raw holds for the context match, unless
+  // the context has changed since they were read or raw holds no
+  // evaluation. It reports whether it served them.
+  #applyStored(match: string, raw: string | null | undefined): boolean {
+    if (match !== this.#match) return false;
     const flags = decodeFlags(raw);
     if (!flags) return false;
     this.#stored = raw!;

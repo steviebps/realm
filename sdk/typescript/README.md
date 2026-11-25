@@ -370,10 +370,14 @@ function Checkout() {
 }
 ```
 
-The provider starts the client when it mounts and stops it when it unmounts.
-When `context` changes by value, such as when a user signs in, every flag is
-evaluated again for the new context; an inline object with the same value
-does not trigger that.
+The provider starts the client when it mounts, and stops it when it unmounts
+if providers started it and no other provider still uses it: a client your
+app started itself keeps running, and providers that share a client don't
+stop it for each other. When `context` changes, such as when a user signs
+in, every flag is evaluated again for the new context. A context the server
+would receive the same way (an inline object with the same value, attributes
+in another order, or a number written for a string) is the same context, and
+is not evaluated again.
 
 | Hook | Returns |
 |---|---|
@@ -613,7 +617,10 @@ Both clients take these options:
 |---|---|
 | `start()` | Evaluates for the current context and starts keeping values current. |
 | `stop()` | Stops refreshing and closes the stream. |
-| `identify(context)` | Switches to a new context and evaluates for it. |
+| `identify(context)` | Switches to a new context and evaluates for it. The same context written another way (see `contextKeyOf`) keeps its values. |
+| `isStarted()` | Whether the client is started. |
+| `contextKey()` | The current context's key; compare it with `contextKeyOf(context)`. |
+| `renderedValues(context?)` | The values a server render reads for `context` (its `initialState`, else `bootstrap`); the React provider uses it. |
 | `isReady()` | Whether the values are the server's evaluation for the current context (or a server render's). |
 | `source()` | Where the current values came from: `'render'`, `'bootstrap'`, `'cache'`, `'network'`, or `undefined`. |
 | `bool(flag, fallback)` | A boolean flag's value. |

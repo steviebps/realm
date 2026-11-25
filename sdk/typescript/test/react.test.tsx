@@ -3,7 +3,7 @@ import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BrowserClient, localStorageAdapter, type EvaluationContext } from '../src/index.js';
+import { BrowserClient, contextKeyOf, localStorageAdapter, type EvaluationContext } from '../src/index.js';
 import {
   RealmProvider,
   useAllFlags,
@@ -75,6 +75,50 @@ describe('RealmProvider', () => {
     view.unmount();
     await vi.waitFor(() => expect(realm.streams.size).toBe(0));
     expect(client.bool('beta', false)).toBe(true); // the last values stay
+  });
+
+  it('does not evaluate again for the same context written another way', async () => {
+    const realm = await setup();
+    const client = new BrowserClient({ address: realm.address, path: '/prod/web/' });
+    const view = render(app(client, { key: 'u1', attributes: { plan: 'pro', region: 'eu', tier: '2' } }));
+    await vi.waitFor(() => expect(view.text()).toBe('ready beta=false'));
+    await vi.waitFor(() => expect(realm.streams.size).toBe(1));
+    const settle = () => new Promise((r) => setTimeout(r, 200));
+    const requests = realm.requests.length;
+
+    // attributes reordered
+    view.rerender(app(client, { attributes: { tier: '2', region: 'eu', plan: 'pro' }, key: 'u1' }));
+    await settle();
+    expect(realm.requests.length).toBe(requests);
+    // a number written for a string
+    view.rerender(app(client, { key: 'u1', attributes: { region: 'eu', plan: 'pro', tier: 2 } as never }));
+    await settle();
+    expect(realm.requests.length).toBe(requests);
+    expect(view.text()).toBe('ready beta=false');
+
+    // a context that is not the same evaluates again
+    view.rerender(app(client, { key: 'u2' }));
+    await vi.waitFor(() => expect(realm.requests.length).toBeGreaterThan(requests));
+  });
+
+  it('keeps running a client the application started, and one another provider uses', async () => {
+    const realm = await setup();
+    const own = new BrowserClient({ address: realm.address, path: '/prod/web/' });
+    await own.start();
+    cleanup.push(() => own.stop());
+    const first = render(app(own));
+    await vi.waitFor(() => expect(first.text()).toBe('ready beta=false'));
+    first.unmount();
+    expect(own.isStarted()).toBe(true);
+
+    const shared = new BrowserClient({ address: realm.address, path: '/prod/web/' });
+    const a = render(app(shared));
+    const b = render(app(shared));
+    await vi.waitFor(() => expect(b.text()).toBe('ready beta=false'));
+    a.unmount();
+    expect(shared.isStarted()).toBe(true);
+    b.unmount();
+    expect(shared.isStarted()).toBe(false);
   });
 
   it('re-evaluates when the context changes by value', async () => {
@@ -209,7 +253,7 @@ describe('offline start', () => {
         <Record />
       </RealmProvider>,
     );
-    await vi.waitFor(() => expect(client.contextKey()).toBe(JSON.stringify({ key: 'u1' })));
+    await vi.waitFor(() => expect(client.contextKey()).toBe(contextKeyOf({ key: 'u1' })));
     await vi.waitFor(() => expect(view.text()).toBe('undefined beta=false'));
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((t) => t === 'undefined beta=false')).toBe(true);
