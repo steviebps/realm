@@ -205,6 +205,12 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   reads use, accepts them so older SDKs survive newer servers: an unknown
   operator never matches, and an unknown-type flag cannot be served. Unknown
   operators and types round-trip byte for byte.
+- **Wire types live in the TypeScript SDK.** `sdk/typescript/src/types.ts`
+  declares the JSON the API serves (`Chamber`, `Flag`, `TargetingRule`, …);
+  the UI's `http/realm-ui/src/models/response.ts` re-exports them (type-only,
+  so the Docker UI stage copies just that file) and declares only the shapes
+  the UI alone reads. The UI holds chambers without null flags
+  (`withoutNullFlags`), which writes refuse.
 - **Paths are canonicalized once** (`utils.CanonicalPath`: request paths in
   `logicalPath`, `http/agent.go`; key and grant paths in `auth.scopePath`) and
   never unescaped twice; check `storage.IsReservedPath` on the canonical form.
@@ -242,7 +248,7 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   `schemaKeywords` and `typeKeywords`, port both to
   `http/realm-ui/src/utils/constraints.ts`, add cases to
   `sdk/conformance/constraints.json`, add it to `Schema` in
-  `sdk/typescript/src/types.ts` and `http/realm-ui/src/models/response.ts`,
+  `sdk/typescript/src/types.ts` (the UI's `models/response.ts` re-exports the wire types from it),
   and describe it in `docs/design/constraints.md`.
 - **Add a storage backend:** implement `storage.Storage`, register it in
   `StorageOptions` (and `SourcableStorageOptions` if it can be a cache source),

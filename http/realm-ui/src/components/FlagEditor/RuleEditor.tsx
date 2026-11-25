@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Button, Card, Label, RangeSlider, Select, TextInput, ToggleSwitch } from 'flowbite-react';
 import { HiArrowDown, HiArrowUp, HiPlus, HiTrash } from 'react-icons/hi';
-import { Catalog, Clause, Operator, RuleType, TargetingRule } from '../../models/response';
+import { Catalog, Clause, Operator, FlagType, TargetingRule } from '../../models/response';
 import { Bound } from '../../utils/constraints';
 import { OPERATOR_LABELS, describeRule } from '../../utils/describe';
 import { fromLocalInput, nextHour, toLocalInput } from '../../utils/schedule';
@@ -12,7 +12,7 @@ type Props = {
   index: number;
   count: number;
   rule: TargetingRule;
-  type: RuleType;
+  type: FlagType;
   catalog: Catalog;
   attributes: string[];
   /** Rollout seeds used in this chamber and the ones above it, suggested for the seed field. */

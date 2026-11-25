@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { HelperText, Select, Textarea, TextInput, ToggleSwitch } from 'flowbite-react';
-import { FlagValue, RuleType } from '../../models/response';
+import { FlagValue, FlagType } from '../../models/response';
 import { allowedValues, Bound, numberRange, refusal } from '../../utils/constraints';
 
 type Props = {
   id: string;
-  type: RuleType;
+  type: FlagType;
   value: FlagValue;
   onChange: (value: FlagValue) => void;
   /** Reports whether the current input is valid (custom JSON may not parse). */

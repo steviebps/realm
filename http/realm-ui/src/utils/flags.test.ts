@@ -11,6 +11,7 @@ import {
   withRules,
   withSealed,
   withTargetingPaused,
+  withoutNullFlags,
 } from './flags.ts';
 
 void test('withSealed sets the seal, and removes it entirely', () => {
@@ -75,4 +76,11 @@ void test('withFields sets what a flag says about itself, and removes it entirel
   assert.deepEqual(described, { ...flag, ...about });
   const bare = withFields(described, { description: undefined, owner: undefined, lifecycle: undefined });
   assert.equal(JSON.stringify(bare), JSON.stringify(flag));
+});
+
+void test('withoutNullFlags drops flags written as null, which serve nothing', () => {
+  const on: Flag = { type: 'boolean', value: true };
+  assert.deepEqual(withoutNullFlags({ rules: { on, gone: null } }), { rules: { on } });
+  assert.equal(withoutNullFlags(null), null);
+  assert.equal(withoutNullFlags(undefined), null);
 });

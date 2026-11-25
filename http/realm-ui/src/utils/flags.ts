@@ -1,8 +1,8 @@
 // Type imports only, so node:test can run this file with Node's type stripping.
-import type { Flag, FlagValue, RuleType, TargetingRule } from '../models/response';
+import type { Chamber, Flag, FlagType, FlagValue, TargetingRule, WireChamber } from '../models/response';
 
 /** The initial value for a new flag or rule of the given type. */
-export const defaultValueFor = (type: RuleType): FlagValue => {
+export const defaultValueFor = (type: FlagType): FlagValue => {
   switch (type) {
     case 'boolean':
       return false;
@@ -27,7 +27,17 @@ export const rulesOf = (flag: Flag): TargetingRule[] =>
 
 /** Returns flag with the given fields set, or removed entirely when undefined. */
 export const withFields = (flag: Flag, fields: Partial<Flag>): Flag =>
-  Object.fromEntries(Object.entries({ ...flag, ...fields }).filter(([, v]) => v !== undefined)) as Flag;
+  Object.fromEntries(Object.entries({ ...flag, ...fields }).filter(([, v]) => v !== undefined)) as unknown as Flag;
+
+/**
+ * Returns chamber as the UI holds it (see Chamber): without the flags written as null, which serve nothing. Null when
+ * there is no chamber.
+ */
+export const withoutNullFlags = (chamber: WireChamber | null | undefined): Chamber | null => {
+  if (!chamber) return null;
+  const rules = Object.entries(chamber.rules ?? {}).filter((entry): entry is [string, Flag] => entry[1] !== null);
+  return { rules: Object.fromEntries(rules) };
+};
 
 /**
  * Returns flag with rules as its targeting rules: in `targeting`, or in `pausedTargeting` when paused. The other list

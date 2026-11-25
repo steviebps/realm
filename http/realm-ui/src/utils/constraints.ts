@@ -1,5 +1,5 @@
 // Value imports name their .ts file, so node:test can run this file with Node's type stripping.
-import type { Flag, Lineage, RuleType, Schema } from '../models/response';
+import type { Flag, Lineage, FlagType, Schema } from '../models/response';
 import { get } from './provenance.ts';
 import { plural } from './strings.ts';
 
@@ -147,7 +147,7 @@ type Parsed = { schema: Schema; error?: undefined } | { schema?: undefined; erro
  * Checks raw as the constraints of a flag of flagType, as the server does on write: only realm's keywords, of the
  * right form, consistent with each other and, for a number, string, or boolean flag, about values of that type.
  */
-export const parseConstraints = (raw: unknown, flagType: RuleType): Parsed =>
+export const parseConstraints = (raw: unknown, flagType: FlagType): Parsed =>
   parseSchema(raw, '', flagType === 'custom' ? '' : flagType);
 
 const parseSchema = (raw: unknown, at: string, implied: string): Parsed => {
@@ -269,7 +269,7 @@ export type Bound = { path?: string; schema: Schema };
  * defines it with constraints, farthest first, as the server checks them. Parents that cannot be parsed, and
  * constraints this version cannot parse, are left out; the server reports them on save.
  */
-export const parentBounds = (lineage: Lineage | null, name: string, type: RuleType): Bound[] => {
+export const parentBounds = (lineage: Lineage | null, name: string, type: FlagType): Bound[] => {
   if (!lineage) return [];
   return lineage.layers
     .slice(1)
@@ -324,7 +324,7 @@ export const allowedValues = (schemas: Schema[]): unknown[] | undefined => {
 };
 
 /** A plain-language summary of the values a schema allows, for a flag of the given type. */
-export const describeConstraints = (schema: Schema, type: RuleType): string => {
+export const describeConstraints = (schema: Schema, type: FlagType): string => {
   if (type === 'custom') return `matches ${JSON.stringify(schema)}`;
   const parts: string[] = [];
   if (schema.enum) parts.push(`one of ${schema.enum.map(describeValue).join(', ')}`);
@@ -343,7 +343,7 @@ export const describeConstraints = (schema: Schema, type: RuleType): string => {
 };
 
 /** A flag's constraints in plain language, or as JSON when this version cannot parse them. */
-export const summarizeConstraints = (constraints: Schema, type: RuleType): string => {
+export const summarizeConstraints = (constraints: Schema, type: FlagType): string => {
   const parsed = parseConstraints(constraints, type);
   return parsed.schema ? describeConstraints(parsed.schema, type) : JSON.stringify(constraints);
 };

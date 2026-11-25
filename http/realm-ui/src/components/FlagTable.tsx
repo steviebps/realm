@@ -2,7 +2,7 @@ import { Fragment, useId, useState } from 'react';
 import { Badge } from 'flowbite-react';
 import { HiChevronRight, HiLockClosed, HiPause } from 'react-icons/hi';
 import { Link } from 'react-router-dom';
-import { Catalog, Flag, FlagValue, RuleType } from '../models/response';
+import { Catalog, Flag, FlagValue, FlagType } from '../models/response';
 import { summarizeConstraints } from '../utils/constraints';
 import { describeDefinition, formatValue, same } from '../utils/describe';
 import { rulesOf, targetingPaused } from '../utils/flags';
@@ -86,7 +86,7 @@ export const FlagTable = ({
 );
 
 /** A served value: booleans as an on/off indicator, everything else as code. */
-export const FlagValueView = ({ type, value, small }: { type: RuleType; value: FlagValue; small?: boolean }) => {
+export const FlagValueView = ({ type, value, small }: { type: FlagType; value: FlagValue; small?: boolean }) => {
   if (type === 'boolean') {
     const on = value === true;
     const size = small ? 'h-2 w-2' : 'h-2.5 w-2.5';

@@ -3,7 +3,7 @@ import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react
 import { HiClock, HiExclamation, HiPause, HiPencil, HiPlay, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ConflictError, ForbiddenError, getCatalog, getChamber, getRevision, saveChamber } from '../api';
-import { Flag, Lifecycle, RuleType } from '../models/response';
+import { Flag, Lifecycle, FlagType } from '../models/response';
 import { parentBounds } from '../utils/constraints';
 import { diffChambers } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
@@ -83,7 +83,7 @@ export const ChamberView = ({ path }: { path: string }) => {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [restoreError, setRestoreError] = useState<string | undefined>();
   const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<RuleType>('boolean');
+  const [newType, setNewType] = useState<FlagType>('boolean');
   const [lifecycleFilter, setLifecycleFilter] = useState<Lifecycle | 'unset' | ''>('');
   // lineage is only set once its shape is checked, so layers[0] exists. Memoized so that typing in the
   // form doesn't hand every flag row new provenance objects.
@@ -336,7 +336,7 @@ export const ChamberView = ({ path }: { path: string }) => {
                   id="new-flag-type"
                   sizing="sm"
                   value={newType}
-                  onChange={(e) => setNewType(e.target.value as RuleType)}
+                  onChange={(e) => setNewType(e.target.value as FlagType)}
                 >
                   <option value="boolean">boolean</option>
                   <option value="string">string</option>

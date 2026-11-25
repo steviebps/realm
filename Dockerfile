@@ -20,6 +20,9 @@ WORKDIR /src/http/realm-ui
 COPY http/realm-ui/package.json http/realm-ui/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY http/realm-ui/ ./
+# the UI's wire types are the TypeScript SDK's (type-only: nothing else of it
+# reaches the bundle)
+COPY sdk/typescript/src/types.ts /src/sdk/typescript/src/types.ts
 RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build

@@ -9,7 +9,9 @@ import {
   ListResponse,
   Me,
   Revision,
+  WireChamber,
 } from './models/response';
+import { withoutNullFlags } from './utils/flags';
 import { encodePath, ensureTrailingSlash } from './utils/path';
 import { messageOf } from './utils/strings';
 
@@ -111,7 +113,11 @@ const lineageFrom = async (res: Response): Promise<Pick<LoadedChamber, 'lineage'
     if (typeof lineage?.inheritable !== 'boolean' || !Array.isArray(lineage.layers) || lineage.layers.length === 0) {
       return { lineage: null, lineageError: new Error(OLDER_SERVER) };
     }
-    return { lineage, lineageError: null };
+    // flags written as null serve nothing; the UI never holds one
+    const layers = lineage.layers.map((l) =>
+      l.rules ? { ...l, rules: withoutNullFlags({ rules: l.rules })?.rules } : l
+    );
+    return { lineage: { ...lineage, layers }, lineageError: null };
   } catch (err) {
     return { lineage: null, lineageError: err instanceof Error ? err : new Error(messageOf(err)) };
   }
@@ -132,7 +138,7 @@ export const getChamber = async (path: string): Promise<LoadedChamber> => {
   const lineage = await lineageFrom(layersRes);
   const here = lineage.lineage?.layers[0];
   if (etag && here?.status === 'ok') {
-    return { own: { rules: here.rules ?? {} }, etag, ...lineage };
+    return { own: withoutNullFlags({ rules: here.rules ?? {} }), etag, ...lineage };
   }
   const ownRes = await fetch(chamberURL(path, '?inherit=false'));
   if (ownRes.status === 404) {
@@ -142,7 +148,7 @@ export const getChamber = async (path: string): Promise<LoadedChamber> => {
     throw await errorFrom(ownRes);
   }
   const own = (await ownRes.json()) as ChamberResponse;
-  return { own: own.data ?? null, etag: ownRes.headers.get('ETag'), ...lineage };
+  return { own: withoutNullFlags(own.data), etag: ownRes.headers.get('ETag'), ...lineage };
 };
 
 // The server records an unset actor as anonymous.
@@ -172,8 +178,12 @@ export const createChamber = (path: string) => saveChamber(path, { rules: {} }, 
 export const getHistory = async (path: string) =>
   (await dataFrom<Revision[] | undefined>(await fetch(historyURL(path)))) ?? [];
 
-export const getRevision = async (path: string, revision: number) =>
-  dataFrom<Revision>(await fetch(historyURL(path, `?revision=${revision}`)));
+export const getRevision = async (path: string, revision: number): Promise<Revision> => {
+  const rev = await dataFrom<Revision & { chamber?: WireChamber | null }>(
+    await fetch(historyURL(path, `?revision=${revision}`))
+  );
+  return { ...rev, chamber: withoutNullFlags(rev.chamber) };
+};
 
 export const getCatalog = async (): Promise<Catalog> => {
   const res = await fetch('/v1/catalog');

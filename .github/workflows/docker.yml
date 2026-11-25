@@ -16,6 +16,7 @@ on:
       - go.mod
       - go.sum
       - http/realm-ui/package-lock.json
+      - sdk/typescript/src/types.ts
 
 permissions:
   contents: read

@@ -1,11 +1,11 @@
 import { useId, useState } from 'react';
 import { HelperText, Label, Textarea, TextInput } from 'flowbite-react';
-import { RuleType, Schema } from '../../models/response';
+import { FlagType, Schema } from '../../models/response';
 import { KEYWORDS } from '../../utils/constraints';
 import { messageOf } from '../../utils/strings';
 
 type Props = {
-  type: RuleType;
+  type: FlagType;
   constraints: Schema | undefined;
   /** Called with the new constraints, or undefined when none are left. */
   onChange: (constraints: Schema | undefined) => void;
@@ -14,7 +14,7 @@ type Props = {
 };
 
 /** The keywords the fields below edit, by flag type; others are kept as they are and listed. */
-const EDITED: Partial<Record<RuleType, (keyof Schema)[]>> = {
+const EDITED: Partial<Record<FlagType, (keyof Schema)[]>> = {
   number: ['minimum', 'maximum', 'multipleOf'],
   string: ['enum', 'maxLength'],
 };
