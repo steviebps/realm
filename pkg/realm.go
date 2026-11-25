@@ -7,7 +7,6 @@ import (
 	"io"
 	"maps"
 	"os"
-	"slices"
 	"sync"
 	"time"
 
@@ -23,11 +22,6 @@ type Realm struct {
 	// semver caches the canonical form of the "version" attribute for the
 	// views of a subtree snapshot.
 	semver semverCache
-	// path is the chamber realm reads, or empty with a template.
-	path string
-	// template is the path template (see WithPathTemplate), or nil when
-	// realm reads the single chamber at path.
-	template *pathTemplate
 	// lifecycle guards started, ctx, and cancel.
 	lifecycle sync.Mutex
 	started   bool
@@ -35,26 +29,19 @@ type Realm struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	// mu guards the snapshot (root, or views with a template) and the fields
-	// that describe it.
-	mu   sync.RWMutex
-	root *ChamberEntry
-	// views is the subtree snapshot with a template: the view of each path
-	// at or below the template's root, nil until the first load. The views
-	// are immutable; the map changes in place under mu, so a change costs the
-	// same however large the subtree.
-	views map[string]*ChamberEntry
-	// unsupportedSeen holds the flags of a subtree snapshot that this SDK
-	// cannot fully evaluate, as logged.
+	// mu guards the snapshot's state and the fields that describe it.
+	mu sync.RWMutex
+	// snap is what flag reads evaluate against: the chamber at a path, or
+	// the subtree a path template picks from.
+	snap snapshot
+	// unsupportedSeen holds the flags this SDK cannot fully evaluate, as
+	// logged (once each).
 	unsupportedSeen map[string]struct{}
-	// version counts the snapshot's replacements, so that a chamber fetched
+	// version counts the snapshot's changes, so that a chamber fetched
 	// while a newer one arrived (from the stream, say) never replaces it.
 	version uint64
-	// refreshed is when the snapshot was last replaced.
+	// refreshed is when the snapshot last changed.
 	refreshed time.Time
-	// unsupported lists the snapshot's flags that this SDK cannot fully
-	// evaluate, as last logged.
-	unsupported []string
 
 	client          *client.HttpClient
 	pollingInterval time.Duration
@@ -277,17 +264,21 @@ func NewRealm(options ...RealmOption) (*Realm, error) {
 	}
 
 	v := attributes[VersionAttribute]
-	return &Realm{
+	rlm := &Realm{
 		tracer:          otel.Tracer("github.com/steviebps/realm"),
 		logger:          logger,
 		client:          cfg.client,
-		path:            cfg.path,
-		template:        template,
 		attributes:      attributes,
 		semver:          semverCache{raw: v, canonical: canonicalSemver(v)},
 		pollingInterval: cfg.pollingInterval,
 		streaming:       cfg.streaming,
-	}, nil
+	}
+	if template != nil {
+		rlm.snap = &subtreeSnapshot{rlm: rlm, template: template}
+	} else {
+		rlm.snap = &chamberSnapshot{rlm: rlm, path: cfg.path}
+	}
+	return rlm, nil
 }
 
 // defaultLogger writes JSON lines to standard error, or human-readable ones
@@ -383,53 +374,12 @@ func (rlm *Realm) snapshotVersion() uint64 {
 	return rlm.version
 }
 
-// setChamber replaces the snapshot with c, at the server's revision rev (0
-// when unknown).
-func (rlm *Realm) setChamber(c *Chamber, rev uint64) {
-	rlm.replace(c, rev, false, 0)
-}
-
-// setChamberIf replaces the snapshot with c, at the server's revision rev,
-// which was fetched while the snapshot was at version, unless the snapshot
-// has changed since: a newer chamber (from the stream, say) arrived while c
-// was in flight. It reports whether it replaced the snapshot.
-func (rlm *Realm) setChamberIf(c *Chamber, rev uint64, version uint64) bool {
-	return rlm.replace(c, rev, true, version)
-}
-
-func (rlm *Realm) replace(c *Chamber, rev uint64, conditional bool, version uint64) bool {
-	entry := NewChamberEntry(c, rlm.attributes)
-	entry.revision = rev
-	unsupported := c.unsupportedFlags()
-	rlm.mu.Lock()
-	if conditional && rlm.version != version {
-		rlm.mu.Unlock()
-		return false
-	}
-	rlm.root = entry
-	rlm.version++
-	rlm.refreshed = time.Now()
-	changed := !slices.Equal(unsupported, rlm.unsupported)
-	rlm.unsupported = unsupported
-	rlm.mu.Unlock()
-	if changed && len(unsupported) > 0 {
-		rlm.logger.Warn().Strs("flags", unsupported).Msg("these flags use flag types or targeting operators this version of the realm SDK does not support: a flag of an unknown type returns the caller's default, and a rule with an unknown operator never matches; upgrade the SDK")
-	}
-	return true
-}
-
-// refreshedAt returns when the snapshot was last replaced, or the zero time
-// if it never was.
+// refreshedAt returns when the snapshot last changed, or the zero time if it
+// never did.
 func (rlm *Realm) refreshedAt() time.Time {
 	rlm.mu.RLock()
 	defer rlm.mu.RUnlock()
 	return rlm.refreshed
-}
-
-func (rlm *Realm) getChamber() *ChamberEntry {
-	rlm.mu.RLock()
-	defer rlm.mu.RUnlock()
-	return rlm.root
 }
 
 // hasSnapshot reports whether a load (or a stream) has delivered the
@@ -437,27 +387,21 @@ func (rlm *Realm) getChamber() *ChamberEntry {
 func (rlm *Realm) hasSnapshot() bool {
 	rlm.mu.RLock()
 	defer rlm.mu.RUnlock()
-	if rlm.template != nil {
-		return rlm.views != nil
-	}
-	return rlm.root != nil
+	return rlm.snap.loaded()
 }
 
-// resolve returns the subtree view ec resolves to (see WithPathTemplate), or
-// nil when the snapshot holds none.
-func (rlm *Realm) resolve(ec EvaluationContext) *ChamberEntry {
-	ec = ec.withDefaults(rlm.attributes)
+// pick returns the view flag reads with ec use (see snapshot.pick).
+func (rlm *Realm) pick(ec EvaluationContext) *ChamberEntry {
 	rlm.mu.RLock()
 	defer rlm.mu.RUnlock()
-	return rlm.template.resolve(rlm.views, ec)
+	return rlm.snap.pick(ec)
 }
 
-// rootView returns the view of the template's root, or nil when the
-// snapshot holds none.
-func (rlm *Realm) rootView() *ChamberEntry {
+// pinned returns the view NewContext pins (see snapshot.pinned).
+func (rlm *Realm) pinned() *ChamberEntry {
 	rlm.mu.RLock()
 	defer rlm.mu.RUnlock()
-	return rlm.views[rlm.template.root]
+	return rlm.snap.pinned()
 }
 
 func chamberFromContext(ctx context.Context) *ChamberEntry {
@@ -472,28 +416,17 @@ func chamberFromContext(ctx context.Context) *ChamberEntry {
 // the current chamber, or with a template the view the context's
 // EvaluationContext resolves to.
 func (rlm *Realm) chamberFromContext(ctx context.Context) *ChamberEntry {
-	c := chamberFromContext(ctx)
-	if c != nil {
+	if c := chamberFromContext(ctx); c != nil {
 		return c
 	}
-	if rlm.template != nil {
-		return rlm.resolve(evaluationFromContext(ctx))
-	}
-	return rlm.getChamber()
+	return rlm.pick(evaluationFromContext(ctx))
 }
 
 // NewContext pins the current chamber snapshot to ctx, so every flag read
 // with the returned context sees the same chamber. With WithPathTemplate, it
 // pins the view of the template's root.
 func (rlm *Realm) NewContext(ctx context.Context) context.Context {
-	var c *ChamberEntry
-	if rlm.template != nil {
-		c = rlm.rootView()
-	} else {
-		c = rlm.getChamber()
-	}
-	ctx = context.WithValue(ctx, RequestContextKey, c)
-	return ctx
+	return context.WithValue(ctx, RequestContextKey, rlm.pinned())
 }
 
 // ChamberPath returns the path of the chamber flag reads with ctx use: with
@@ -505,14 +438,10 @@ func (rlm *Realm) NewContext(ctx context.Context) context.Context {
 // A placeholder filled from a mistyped or missing attribute falls back to a
 // shallower chamber silently; ChamberPath shows where a request landed.
 func (rlm *Realm) ChamberPath(ctx context.Context) string {
-	c := rlm.chamberFromContext(ctx)
-	switch {
-	case c == nil:
-		return ""
-	case rlm.template == nil:
-		return rlm.path
+	if c := rlm.chamberFromContext(ctx); c != nil {
+		return c.path
 	}
-	return c.path
+	return ""
 }
 
 // Revision returns the server's storage revision of the chamber snapshot
@@ -544,11 +473,7 @@ func (rlm *Realm) Revision(ctx context.Context) uint64 {
 // reads with the returned context do not resolve the template again. Before
 // the first load there is none to pin, and each read resolves it.
 func (rlm *Realm) NewContextWithEvaluation(ctx context.Context, ec EvaluationContext) context.Context {
-	if rlm.template != nil {
-		ctx = context.WithValue(ctx, RequestContextKey, rlm.resolve(ec))
-	} else {
-		ctx = rlm.NewContext(ctx)
-	}
+	ctx = context.WithValue(ctx, RequestContextKey, rlm.pick(ec))
 	return context.WithValue(ctx, EvaluationContextKey, ec)
 }
 

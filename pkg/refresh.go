@@ -132,21 +132,30 @@ func newRetryPolicy(max time.Duration) *retryPolicy {
 	}
 }
 
-// delay returns how long to wait before retrying after err: minutes after a
-// 401, 403, or 404, or a server that does not serve subtrees, at least what
-// a 429's or 503's Retry-After asks for, and otherwise the fast backoff.
+// delay returns how long to wait before retrying after err: the slow
+// backoff after a failure retryClass calls slow, else the fast backoff, and
+// never less than its Retry-After.
 func (p *retryPolicy) delay(err error) time.Duration {
-	if errors.Is(err, errNotSubtree) {
+	slow, retryAfter := retryClass(err)
+	if slow {
 		return p.slow.wait()
 	}
-	var se *statusError
-	if errors.As(err, &se) {
-		if se.permanent() {
-			return p.slow.wait()
-		}
-		return max(p.fast.wait(), se.retryAfter)
+	return max(p.fast.wait(), retryAfter)
+}
+
+// retryClass says how a failure is retried: slowly (minutes) after a 401,
+// 403, or 404, or a server that does not serve subtrees, which waiting
+// seconds would not fix; and no sooner than what a 429's or 503's
+// Retry-After asks for.
+func retryClass(err error) (slow bool, retryAfter time.Duration) {
+	if errors.Is(err, errNotSubtree) {
+		return true, 0
 	}
-	return p.fast.wait()
+	var se *statusError
+	if !errors.As(err, &se) {
+		return false, 0
+	}
+	return se.permanent(), se.retryAfter
 }
 
 func (p *retryPolicy) reset() {
@@ -155,20 +164,12 @@ func (p *retryPolicy) reset() {
 }
 
 // holdOff is the least a poll that failed with err waits before polling
-// again: minutes after a 401, 403, or 404, or a server that does not serve
-// subtrees, or what a 429's or 503's Retry-After asks for.
+// again (see retryClass).
 func holdOff(err error) time.Duration {
-	if errors.Is(err, errNotSubtree) {
-		return slowRetryBackoff
+	if slow, retryAfter := retryClass(err); !slow {
+		return retryAfter
 	}
-	var se *statusError
-	if !errors.As(err, &se) {
-		return 0
-	}
-	if se.permanent() {
-		return slowRetryBackoff
-	}
-	return se.retryAfter
+	return slowRetryBackoff
 }
 
 // jitter spreads a fixed interval by up to ±10%.
@@ -232,20 +233,7 @@ func (l *failureLog) ok() (int, bool) {
 // it, unless a newer one arrived while it was being fetched. Failures are
 // logged, rate-limited.
 func (rlm *Realm) load(ctx context.Context) error {
-	version := rlm.snapshotVersion()
-	var err error
-	if rlm.template != nil {
-		var views []subtreeView
-		if views, err = rlm.retrieveSubtree(ctx, rlm.template.root); err == nil {
-			rlm.setSubtreeIf(ctx, views, version)
-		}
-	} else {
-		var c *Chamber
-		var rev uint64
-		if c, rev, err = rlm.retrieveChamber(ctx, rlm.path); err == nil {
-			rlm.setChamberIf(c, rev, version)
-		}
-	}
+	err := rlm.snap.fetch(ctx, rlm.snapshotVersion())
 	if err != nil {
 		if !errors.Is(ctx.Err(), context.Canceled) {
 			if log, n := rlm.loadFailures.fail(time.Now()); log {
@@ -268,10 +256,7 @@ func (rlm *Realm) load(ctx context.Context) error {
 // readPath returns the path realm reads: its chamber's, or its template's
 // root.
 func (rlm *Realm) readPath() string {
-	if rlm.template != nil {
-		return rlm.template.root
-	}
-	return rlm.path
+	return rlm.snap.readPath()
 }
 
 // poll refreshes the chamber on the polling interval until realm stops. err
@@ -447,10 +432,7 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 		return err
 	}
 
-	var h streamHandler = chamberStream{rlm}
-	if rlm.template != nil {
-		h = newSubtreeStream(rlm)
-	}
+	h := rlm.snap.stream()
 	version := rlm.snapshotVersion()
 	resp, err := h.open(ctx)
 	if err != nil {
@@ -525,16 +507,14 @@ func (rlm *Realm) consumeStream(ctx context.Context, delivered func()) (received
 // applyEvent applies the chamber an event carries, at the server's revision
 // rev (0 when unknown), reporting whether it did. One that does not hold a
 // chamber is skipped (the last one stays) and logged, rate-limited.
-func (rlm *Realm) applyEvent(ctx context.Context, data []byte, rev uint64) bool {
+func (s *chamberSnapshot) applyEvent(ctx context.Context, data []byte, rev uint64) bool {
 	c, err := decodeChamber(data)
 	if err != nil {
-		if log, n := rlm.badEvents.fail(time.Now()); log {
-			rlm.logger.WarnCtx(ctx).Err(err).Int("failures", n).Msg("skipped a streamed chamber that could not be read; keeping the last one")
-		}
+		s.rlm.badEvent(ctx, "", err)
 		return false
 	}
-	_, _ = rlm.badEvents.ok()
-	rlm.setChamber(c, rev)
+	_, _ = s.rlm.badEvents.ok()
+	s.set(ctx, c, rev)
 	return true
 }
 
