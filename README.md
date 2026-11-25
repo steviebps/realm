@@ -1,41 +1,119 @@
-# realm
+<div align="center">
 
-[![release](https://github.com/steviebps/realm/actions/workflows/go.yml/badge.svg)](https://github.com/steviebps/realm/actions/workflows/go.yml)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/hero-dark.svg">
+  <img alt="realm: feature flags that inherit, target, and roll out" src="docs/assets/hero-light.svg" width="100%">
+</picture>
 
-realm is an open-source feature-flag and configuration platform written in Go.
-One binary gives you three things:
+<br>
+<br>
 
-- **A server** that stores flags and serves them over HTTP, with a web UI at `/ui/`.
-- **A CLI** (`realm server`, `realm client`).
-- **A Go SDK** that your application embeds to read flags from a local snapshot.
+[![CI](https://github.com/steviebps/realm/actions/workflows/ci.yml/badge.svg)](https://github.com/steviebps/realm/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/steviebps/realm?color=1c6876)](https://github.com/steviebps/realm/releases)
+[![Go Reference](https://pkg.go.dev/badge/github.com/steviebps/realm/pkg.svg)](https://pkg.go.dev/github.com/steviebps/realm/pkg)
+[![npm](https://img.shields.io/npm/v/@steviebps/realm-sdk?color=1c6876&label=npm)](https://www.npmjs.com/package/@steviebps/realm-sdk)
+[![Go version](https://img.shields.io/github/go-mod/go-version/steviebps/realm?color=1c6876)](go.mod)
+[![License](https://img.shields.io/github/license/steviebps/realm?color=1c6876)](LICENSE.txt)
 
-A TypeScript SDK in [`sdk/typescript`](sdk/typescript) reads flags in Node
-services and in browsers, with hooks for React.
+**[Quick start](#quick-start)** · **[How it works](#how-it-works)** · **[Go SDK](#use-the-go-sdk)** · **[TypeScript SDK](#use-the-typescript-sdk)** · **[Architecture](docs/ARCHITECTURE.md)**
+
+</div>
+
+<br>
+
+**realm** is an open-source feature-flag and configuration platform. Put a
+flag in a chamber once, and every chamber below it inherits the flag. Target
+it at any attribute, roll it out to a sticky percentage, schedule it, or seal
+it, and stream each change to your services as it happens.
+
+One self-hosted Go binary is the server, the web UI, and the CLI. The SDKs for
+Go and TypeScript keep a local snapshot of your flags, so reading a flag never
+waits on the network.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/ui-chamber-dark.webp">
+  <img alt="The realm web UI showing the /prod chamber: seven flags with their types, lifecycles, sealed badges, and defaults, and one flag expanded to show its two targeting rules" src="docs/assets/ui-chamber-light.webp">
+</picture>
 
 ## Features
 
-- **Typed flags:** `boolean`, `number`, `string`, and `custom` (any JSON).
-- **Hierarchical chambers:** a child chamber inherits the flags of its parents.
-- **Targeting rules:** match on any attribute (tenant, location, environment,
-  semver `version`, build SHA, …).
-- **Progressive rollout:** deterministic, sticky percentages, bucketed on any attribute.
-- **Scheduled rules:** limit a rule to a window of time, such as three hours on a Wednesday.
-- **Real-time updates:** the SDK polls, or receives changes over server-sent events.
-- **Many tenants from one client:** the SDK reads every chamber below a path
-  and picks a chamber for each request, such as the chamber of the request's
-  tenant and location.
-- **Safe editing:** ETag optimistic concurrency and per-chamber change history.
-- **Storage:** file, BoltDB, in-memory, Google Cloud Storage, Amazon S3,
-  PostgreSQL, and etcd (the last two support running several replicas).
-- **Optional auth:** OIDC or GitHub sign-in with roles on every chamber or
-  beneath chosen paths, and path-scoped API keys.
-- **Browsers and other languages:** the server evaluates flags for a context and
-  returns only the values, never the rules.
+<table>
+<tr>
+<td valign="top" width="33%">
+<b>Inheritance</b><br>
+Chambers nest like folders: <code>/prod/tenants/t-42/</code> inherits from
+<code>/prod/</code> and <code>/</code>. Seal a flag to stop the chambers below
+from overriding it.
+</td>
+<td valign="top" width="33%">
+<b>Targeting</b><br>
+Rules match any attribute: tenant, location, environment, service, semver
+<code>version</code>, build SHA, or your own.
+</td>
+<td valign="top" width="33%">
+<b>Progressive rollout</b><br>
+Deterministic, sticky percentages, bucketed on any attribute, so a whole
+location can get a feature at once.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<b>Schedules</b><br>
+Limit a rule to a window of time, such as a holiday weekend or three hours on
+a Wednesday.
+</td>
+<td valign="top">
+<b>Real-time</b><br>
+SDKs receive changes over server-sent events, or poll. If realm goes down,
+they keep serving the last values they loaded.
+</td>
+<td valign="top">
+<b>Kill switches</b><br>
+Turn a flag's targeting off without losing its rollout. Turn it back on, and
+the same users get the feature again.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<b>Typed and constrained</b><br>
+<code>boolean</code>, <code>number</code>, <code>string</code>, or any JSON,
+checked against a JSON Schema subset on every write.
+</td>
+<td valign="top">
+<b>Many tenants, one client</b><br>
+A path template such as <code>/prod/tenants/{tenantId}/{locationId}/</code>
+picks the chamber for each request.
+</td>
+<td valign="top">
+<b>Safe editing</b><br>
+Review a diff before you save. ETags stop lost updates, and each chamber keeps
+a history that you can restore from.
+</td>
+</tr>
+<tr>
+<td valign="top">
+<b>Your storage</b><br>
+PostgreSQL or etcd for several replicas. S3, Google Cloud Storage, BoltDB, or
+files for one.
+</td>
+<td valign="top">
+<b>Sign-in and API keys</b><br>
+OIDC or GitHub sign-in with viewer, editor, and admin roles, on every chamber
+or beneath chosen paths. Path-scoped API keys.
+</td>
+<td valign="top">
+<b>Private rules</b><br>
+Browsers send a context and get back values, never the rules behind them.
+React pages render on the server and hydrate cleanly.
+</td>
+</tr>
+</table>
 
 ## Contents
 
 - [Quick start](#quick-start)
 - [Install](#install)
+- [How it works](#how-it-works)
 - [Concepts](#concepts)
 - [Run the server](#run-the-server)
 - [Manage flags](#manage-flags)
@@ -48,9 +126,10 @@ services and in browsers, with hooks for React.
 
 ## Quick start
 
-This procedure starts a server with in-memory storage, adds a flag, and reads it.
+In a minute: start a server, add a flag that is on for beta users and for 20%
+of everyone else, and ask realm who gets it.
 
-1. Start the server:
+1. Start a server with in-memory storage:
 
    ```bash
    docker run --rm -p 8080:8080 ghcr.io/steviebps/realm server --dev
@@ -61,23 +140,40 @@ This procedure starts a server with in-memory storage, adds a flag, and reads it
    ```bash
    curl -X POST http://localhost:8080/v1/chambers/root \
      -H 'Content-Type: application/json' \
-     -d '{"rules":{"new-checkout":{"type":"boolean","value":false}}}'
+     -d '{"rules":{"new-checkout":{"type":"boolean","value":false,"targeting":[
+           {"clauses":[{"attribute":"plan","op":"in","values":["beta"]}],"value":true},
+           {"value":true,"rollout":{"percentage":20}}]}}}'
    ```
 
-3. Read the chamber:
+3. Evaluate the flag for a beta user:
 
    ```bash
-   curl http://localhost:8080/v1/chambers/root
+   curl -X POST http://localhost:8080/v1/evaluate/root \
+     -d '{"key":"user-1","attributes":{"plan":"beta"}}'
    ```
 
-4. Open the web UI at <http://localhost:8080/ui/>.
+   ```json
+   {
+     "data": {
+       "flags": {
+         "new-checkout": { "type": "boolean", "value": true }
+       }
+     }
+   }
+   ```
+
+   Leave out `plan` and try other keys: about one key in five gets `true`, and
+   a key gets the same answer every time.
+
+4. Open the web UI at <http://localhost:8080/ui/> to edit the rules, or read
+   the chamber with `curl http://localhost:8080/v1/chambers/root`.
 
 > [!NOTE]
 > Dev mode keeps all data in memory. When the server stops, the data is lost.
 
 ## Install
 
-Use one of these methods.
+### Server and CLI
 
 | Method | Command | Web UI |
 |---|---|---|
@@ -89,11 +185,40 @@ Use one of these methods.
 Docker images are multi-arch (`linux/amd64`, `linux/arm64`). The `latest` tag
 and the semver tags are releases. The `edge` tag follows `master`.
 
-To use the Go SDK in your application, add the module:
+### SDKs
 
-```bash
-go get github.com/steviebps/realm
+| SDK | Command | Guide |
+|---|---|---|
+| Go | `go get github.com/steviebps/realm` | [Use the Go SDK](#use-the-go-sdk) |
+| TypeScript and React | `npm install @steviebps/realm-sdk` | [Use the TypeScript SDK](#use-the-typescript-sdk) |
+
+## How it works
+
+```mermaid
+flowchart LR
+    ui["Web UI"] --> server
+    cli["realm client"] --> server
+    api["HTTP API"] --> server
+    server[("<b>realm server</b><br/>Postgres · etcd · S3 · GCS · BoltDB · files")]
+    server -- "chambers: stream or poll" --> gosdk["<b>Go SDK</b><br/><i>evaluates in your process</i>"]
+    server -- "chambers: stream or poll" --> node["<b>TypeScript ServerClient</b><br/><i>evaluates in your process</i>"]
+    server -- "evaluated values" --> browser["<b>BrowserClient and React</b><br/><i>never sees the rules</i>"]
+
+    classDef edge fill:none,stroke:#4a9ca9,stroke-width:1.5px
+    classDef core fill:#155763,stroke:#155763,color:#ffffff
+    class ui,cli,api,gosdk,node,browser edge
+    class server core
+    linkStyle default stroke:#4a9ca9,stroke-width:1.5px
 ```
+
+- **Writes are checked.** The server refuses a write with an unknown field, a
+  value of the wrong type, or a value outside the flag's constraints. Send
+  `If-Match` and it also refuses a write based on a stale read.
+- **Services evaluate locally.** Server SDKs hold a snapshot of their chambers
+  and evaluate flags in memory. A change reaches them over server-sent events,
+  or at the next poll.
+- **Browsers never see the rules.** A `BrowserClient` sends its context to
+  `POST /v1/evaluate/<path>` and gets back only the values for that context.
 
 ## Concepts
 
@@ -229,7 +354,7 @@ realm server --dev
 
 #### Where realm finds its config
 
-Every command (`server`, `client`, `keys`) uses the first of:
+Every command (`server` and `client`) uses the first of:
 
 1. `--config <file>`
 2. `$REALM_CONFIG`
@@ -440,6 +565,11 @@ You can change flags in three ways:
   save, and restore an earlier version from the history.
 - **CLI** with `realm client`.
 - **HTTP API** at `/v1/chambers/<path>`.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/ui-editor-dark.webp">
+  <img alt="The flag editor in the realm web UI: a targeting rule that serves true to 20% of the locations that run version 2.0.0 or later, with a rollout slider, the bucketing attribute, and an optional time window" src="docs/assets/ui-editor-light.webp">
+</picture>
 
 ### CLI
 
