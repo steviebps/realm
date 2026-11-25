@@ -7,7 +7,7 @@ realm is a feature-flag and configuration platform: it holds flag definitions in
 ### Flags and values
 
 **Flag**:
-A named, typed setting with a default value and ordered targeting rules.
+A named, typed value an application reads, with a default value and ordered targeting rules.
 _Avoid_: Switch, toggle, feature, setting, rule
 
 **Flag key**:
@@ -35,7 +35,7 @@ Whether a flag is meant to be removed once it has served its purpose (temporary)
 The person or team accountable for a flag.
 
 **Constraints**:
-The rules every value of a flag must satisfy, which bind its definitions in every chamber below; a lower chamber may tighten them but never loosen them.
+The limits every value of a flag must satisfy, which bind its definitions in every chamber below; a lower chamber may tighten them but never loosen them.
 _Avoid_: Validation, schema (when talking to users)
 
 ### Targeting
@@ -119,13 +119,13 @@ A chamber path with placeholders filled from the evaluation context, which picks
 
 **Revision**:
 The version of the stored data a read, evaluation, or change notice reflects.
-_Avoid_: Version (that is an attribute), ETag, generation
+_Avoid_: Version (that is an attribute), generation
 
 ### Delivery
 
 **SDK**:
-A library an application embeds to read flags from a local snapshot kept current by the server.
-_Avoid_: Library, agent
+A library an application embeds to read flags, either from a local snapshot kept current by the server or by asking the server to evaluate them.
+_Avoid_: Agent
 
 **Snapshot**:
 The SDK's local copy of a chamber (or subtree) that evaluations read from.
