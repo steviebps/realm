@@ -113,11 +113,11 @@ func consultedAncestors(logicalPath string) []string {
 }
 
 // lineage reads the chamber at logicalPath and each ancestor its inherited
-// view consults (see BuildLineage), reusing the chambers it parsed before. It
-// returns a NotFoundError, without reading the ancestors, when there is no
+// view consults (see storedLineage), reusing the chambers it parsed before.
+// It returns a NotFoundError, without reading the ancestors, when there is no
 // chamber at logicalPath.
 func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*Lineage, error) {
-	return buildLineage(ctx, s.readLayer, logicalPath, true, true)
+	return storedLineage(ctx, logicalPath, s.source.Get, s.cache.parseLayer, s.readLayer, true)
 }
 
 // readLayer reads the chamber at p from the source as ReadLayer does,
