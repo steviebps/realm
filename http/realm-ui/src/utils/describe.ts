@@ -1,7 +1,8 @@
-import { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
-import { jsonEqual, summarizeConstraints } from './constraints';
-import { rulesOf, targetingPaused } from './flags';
-import { formatTime } from './schedule';
+// Type imports only from models, and .ts extensions, so node:test can run this file with Node's type stripping.
+import type { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
+import { jsonEqual, summarizeConstraints } from './constraints.ts';
+import { rulesOf, targetingPaused } from './flags.ts';
+import { formatTime } from './schedule.ts';
 
 export const OPERATOR_LABELS: Record<Operator, string> = {
   in: 'is one of',
@@ -50,9 +51,12 @@ export const same = jsonEqual;
 /** How a change describes a flag whose targeting is turned off. */
 const TARGETING_OFF = 'Targeting off: every context gets the default, and the rules are kept';
 
-/** A rule's line: paused rules say so. */
-const ruleLine = (rule: TargetingRule, i: number, paused: boolean, catalog: Catalog) =>
-  `${paused ? 'Paused rule' : 'Rule'} ${i + 1}: ${describeRule(rule, catalog)}`;
+/** A rule's line: paused rules say so, and a rule's id and description are part of it, so changing them shows. */
+const ruleLine = (rule: TargetingRule, i: number, paused: boolean, catalog: Catalog) => {
+  const id = rule.id ? ` (${rule.id})` : '';
+  const description = rule.description ? ` — ${rule.description}` : '';
+  return `${paused ? 'Paused rule' : 'Rule'} ${i + 1}${id}: ${describeRule(rule, catalog)}${description}`;
+};
 
 const describeRules = (flag: Flag, catalog: Catalog) =>
   rulesOf(flag).map((r, i) => ruleLine(r, i, targetingPaused(flag), catalog));
@@ -127,6 +131,10 @@ export const diffChambers = (before: Chamber | null, after: Chamber | null, cata
     }
 
     const lines: FlagChange['lines'] = [];
+    if (was.type !== now.type) {
+      lines.push({ kind: 'remove', text: `Type: ${was.type}` });
+      lines.push({ kind: 'add', text: `Type: ${now.type}` });
+    }
     for (const [k, line] of Object.entries(ABOUT) as [keyof typeof ABOUT, (f: Flag) => string | false][]) {
       if (same(was[k], now[k])) continue;
       let before = line(was);

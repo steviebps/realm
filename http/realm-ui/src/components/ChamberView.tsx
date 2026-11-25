@@ -2,13 +2,22 @@ import { useCallback, useMemo, useState } from 'react';
 import { Alert, Button, Label, Select, Spinner, TextInput } from 'flowbite-react';
 import { HiClock, HiExclamation, HiPause, HiPencil, HiPlay, HiPlus, HiTrash } from 'react-icons/hi';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ConflictError, ForbiddenError, LoadedChamber, getCatalog, getChamber, getRevision, saveChamber } from '../api';
-import { Chamber, Flag, Lifecycle, RuleType } from '../models/response';
+import { ConflictError, ForbiddenError, getCatalog, getChamber, getRevision, saveChamber } from '../api';
+import { Flag, Lifecycle, RuleType } from '../models/response';
 import { parentBounds } from '../utils/constraints';
 import { diffChambers } from '../utils/describe';
 import { ConfirmChange } from './ConfirmChange';
 import { FlagEditor } from './FlagEditor/FlagEditor';
-import { defaultValueFor, rulesOf, targetingPaused, withTargetingPaused } from '../utils/flags';
+import {
+  changes,
+  checkAdd,
+  confirm as confirmChange,
+  overrideSeed,
+  propose as proposeChange,
+  rowActions,
+  type Proposal,
+} from '../utils/chamberSession';
+import { defaultValueFor, rulesOf } from '../utils/flags';
 import { aboutOf, ancestorsOf, get, provenance } from '../utils/provenance';
 import { messageOf } from '../utils/strings';
 import { HistoryDrawer } from './HistoryDrawer';
@@ -28,16 +37,6 @@ const CONVENTIONAL_ATTRIBUTES = [
   'version',
   'buildSha',
 ];
-
-type Proposal = {
-  title: string;
-  apply: (chamber: Chamber) => Chamber;
-  base: LoadedChamber;
-  after: Chamber;
-  saving: boolean;
-  rebased?: boolean;
-  error?: string;
-};
 
 const attributesIn = (flags: Flag[]) =>
   flags.flatMap((f) =>
@@ -90,7 +89,10 @@ export const ChamberView = ({ path }: { path: string }) => {
   // form doesn't hand every flag row new provenance objects.
   const lineage = data?.lineage ?? null;
   const prov = useMemo(() => (lineage ? provenance(lineage) : null), [lineage]);
-  const override = useCallback((name: string, flag: Flag) => setEditing({ name, flag, isNew: true }), []);
+  const override = useCallback(
+    (name: string, flag: Flag) => setEditing({ name, flag: overrideSeed(flag), isNew: true }),
+    []
+  );
 
   if (isLoading) return <Spinner aria-label="Loading chamber" size="lg" />;
   if (error instanceof ForbiddenError) return <NoAccess path={path} />;
@@ -125,40 +127,26 @@ export const ChamberView = ({ path }: { path: string }) => {
     )
   ).sort();
   const seeds = Array.from(new Set(seedsIn([...Object.values(own.rules), ...inheritedFlags]).filter(Boolean))).sort();
-  const typed = newName.trim();
-  const typedInherited = typed in own.rules ? undefined : get(prov?.inherited, typed);
-  // a parent that seals the typed key: this chamber cannot define it
-  const typedSealedBy = typed in own.rules ? undefined : get(prov?.sealedBy, typed);
-  const cannotAdd = !typed || typed in own.rules || typedSealedBy !== undefined;
+  const adding = checkAdd(own, prov, newName);
+  const typed = adding.name;
+  const typedInherited = adding.inherited;
+  const typedSealedBy = adding.sealedBy;
+  const cannotAdd = !adding.allowed;
 
-  const propose = (title: string, apply: Proposal['apply']) => {
-    setProposal({ title, apply, base: data, after: apply(structuredClone(own)), saving: false });
-  };
+  const propose = (title: string, apply: Proposal['apply']) => setProposal(proposeChange(data, title, apply));
 
   const confirm = async () => {
     if (!proposal) return;
     setProposal({ ...proposal, saving: true, error: undefined });
-    try {
-      await saveChamber(path, proposal.after, proposal.base.etag);
-    } catch (err) {
-      if (!(err instanceof ConflictError)) {
-        setProposal({ ...proposal, saving: false, error: messageOf(err) });
-        return;
-      }
-      // Re-apply the same change on top of the latest version and ask again.
-      try {
-        const fresh = await getChamber(path);
-        queryClient.setQueryData(['chamber', path], fresh);
-        const after = proposal.apply(structuredClone(fresh.own ?? { rules: {} }));
-        setProposal({ ...proposal, base: fresh, after, saving: false, rebased: true });
-      } catch (reloadErr) {
-        // Keep the old base: confirming again retries the save, and the reload after it.
-        setProposal({
-          ...proposal,
-          saving: false,
-          error: `Someone else changed this chamber, and loading their change failed: ${messageOf(reloadErr)}`,
-        });
-      }
+    const result = await confirmChange(proposal, {
+      save: (chamber, etag) => saveChamber(path, chamber, etag),
+      load: () => getChamber(path),
+      isConflict: (err) => err instanceof ConflictError,
+      messageOf,
+    });
+    if (!result.saved) {
+      if (result.reloaded) queryClient.setQueryData(['chamber', path], result.reloaded);
+      setProposal(result.proposal);
       return;
     }
     setProposal(null);
@@ -177,9 +165,8 @@ export const ChamberView = ({ path }: { path: string }) => {
         setRestoreError(`Revision #${revision} has no chamber to restore.`);
         return;
       }
-      const chamber = rev.chamber;
       setHistoryOpen(false);
-      propose(`Restore revision #${revision}`, () => structuredClone(chamber));
+      propose(`Restore revision #${revision}`, changes.replace(rev.chamber));
     } catch (err) {
       setRestoreError(`Could not load revision #${revision}: ${messageOf(err)}`);
     }
@@ -236,9 +223,8 @@ export const ChamberView = ({ path }: { path: string }) => {
             <FlagTable labelledBy="flags-heading">
               {ownNames.map((name) => {
                 const flag = own.rules[name];
-                // a definition saved before a parent sealed the flag: not served, and the server refuses changes
-                const hiddenBy = get(prov?.sealedBy, name);
-                const paused = targetingPaused(flag);
+                // a definition saved before a parent sealed the flag is not served, and the server refuses changes
+                const { hiddenBy, editable, pausable, paused } = rowActions(own, prov, name);
                 return (
                   <FlagRow
                     key={name}
@@ -252,7 +238,7 @@ export const ChamberView = ({ path }: { path: string }) => {
                     actions={
                       canEdit && (
                         <>
-                          {hiddenBy === undefined && (
+                          {editable && (
                             <Button
                               size="xs"
                               color="light"
@@ -262,7 +248,7 @@ export const ChamberView = ({ path }: { path: string }) => {
                               <HiPencil className="mr-1" /> Edit
                             </Button>
                           )}
-                          {hiddenBy === undefined && rulesOf(flag).length > 0 && (
+                          {pausable && (
                             <Button
                               size="xs"
                               color="light"
@@ -273,11 +259,10 @@ export const ChamberView = ({ path }: { path: string }) => {
                                   : 'Turn targeting off: every context gets the default, and the rules are kept.'
                               }
                               onClick={() =>
-                                propose(`${paused ? 'Resume' : 'Pause'} targeting for ${name}`, (c) => {
-                                  // re-applied to the latest chamber after a conflict, which may have changed the flag
-                                  if (c.rules[name]) c.rules[name] = withTargetingPaused(c.rules[name], !paused);
-                                  return c;
-                                })
+                                propose(
+                                  `${paused ? 'Resume' : 'Pause'} targeting for ${name}`,
+                                  changes.pause(name, !paused)
+                                )
                               }
                             >
                               {paused ? <HiPlay className="mr-1" /> : <HiPause className="mr-1" />}
@@ -290,12 +275,7 @@ export const ChamberView = ({ path }: { path: string }) => {
                             aria-label={`Delete ${name}`}
                             title={`Delete ${name}`}
                             className="text-gray-500 hover:text-red-700 dark:text-gray-400 dark:hover:text-red-400"
-                            onClick={() =>
-                              propose(`Delete ${name}`, (c) => {
-                                delete c.rules[name];
-                                return c;
-                              })
-                            }
+                            onClick={() => propose(`Delete ${name}`, changes.remove(name))}
                           >
                             <HiTrash />
                           </Button>
@@ -395,10 +375,7 @@ export const ChamberView = ({ path }: { path: string }) => {
           onReview={(flag) => {
             // Keep the draft so cancelling the confirmation returns to it.
             setEditing({ ...editing, flag });
-            propose(`${editing.isNew ? 'Add' : 'Update'} ${editing.name}`, (c) => {
-              c.rules[editing.name] = flag;
-              return c;
-            });
+            propose(`${editing.isNew ? 'Add' : 'Update'} ${editing.name}`, changes.put(editing.name, flag));
           }}
         />
       )}
@@ -409,6 +386,7 @@ export const ChamberView = ({ path }: { path: string }) => {
           changes={diffChambers(proposal.base.own, proposal.after, catalog)}
           saving={proposal.saving}
           rebased={proposal.rebased}
+          overwrites={proposal.overwrites}
           error={proposal.error}
           onCancel={() => setProposal(null)}
           onConfirm={() => void confirm()}

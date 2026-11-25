@@ -101,12 +101,12 @@ export type LoadedChamber = {
 const OLDER_SERVER = "This server doesn't report where inherited flags come from. Update it to see parent chambers.";
 
 /**
- * Loads the lineage of the chamber at path. It never throws: a failure is
- * returned, so that the chamber stays editable without it.
+ * Reads the lineage in a response to `?inherit=layers`. It never throws: a failure is returned, so that the
+ * chamber stays editable without it.
  */
-const getLineage = async (path: string): Promise<Pick<LoadedChamber, 'lineage' | 'lineageError'>> => {
+const lineageFrom = async (res: Response): Promise<Pick<LoadedChamber, 'lineage' | 'lineageError'>> => {
   try {
-    const lineage = await dataFrom<Lineage | undefined>(await fetch(chamberURL(path, '?inherit=layers')));
+    const lineage = await dataFrom<Lineage | undefined>(res);
     // A server that predates ?inherit=layers answers with the inherited chamber instead.
     if (typeof lineage?.inheritable !== 'boolean' || !Array.isArray(lineage.layers) || lineage.layers.length === 0) {
       return { lineage: null, lineageError: new Error(OLDER_SERVER) };
@@ -117,8 +117,24 @@ const getLineage = async (path: string): Promise<Pick<LoadedChamber, 'lineage' |
   }
 };
 
+/**
+ * Loads the chamber at path for editing: as stored, with its ETag, and the lineage it inherits from, all from one
+ * read when the server sends the ETag with the lineage. Otherwise (an older server, a chamber that cannot be parsed,
+ * or parents the caller may not read) it also reads the chamber on its own, and the lineage may then be from another
+ * moment.
+ */
 export const getChamber = async (path: string): Promise<LoadedChamber> => {
-  const [ownRes, lineage] = await Promise.all([fetch(chamberURL(path, '?inherit=false')), getLineage(path)]);
+  const layersRes = await fetch(chamberURL(path, '?inherit=layers'));
+  if (layersRes.status === 404) {
+    return { own: null, etag: null, lineage: null, lineageError: null };
+  }
+  const etag = layersRes.headers.get('ETag');
+  const lineage = await lineageFrom(layersRes);
+  const here = lineage.lineage?.layers[0];
+  if (etag && here?.status === 'ok') {
+    return { own: { rules: here.rules ?? {} }, etag, ...lineage };
+  }
+  const ownRes = await fetch(chamberURL(path, '?inherit=false'));
   if (ownRes.status === 404) {
     return { own: null, etag: null, lineage: null, lineageError: null };
   }

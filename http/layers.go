@@ -119,5 +119,10 @@ func serveLayers(w http.ResponseWriter, r *http.Request, strg storage.Storage, p
 	if resp.Error != "" {
 		logger.WarnCtx(ctx).Str("path", path).Str("error", resp.Error).Msg("the inherited view cannot be built")
 	}
+	// the ETag of the chamber as stored, from the same read as its layers,
+	// so an editor can save against exactly what it shows
+	if raw := lin.Layers[0].Raw; raw != nil {
+		w.Header().Set("ETag", etagOf(raw))
+	}
 	handleOkJSON(ctx, w, resp)
 }
