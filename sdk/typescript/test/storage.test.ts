@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { BrowserClient, localStorageAdapter, type EvaluationContext, type StorageAdapter } from '../src/index.js';
+import { IDBFactory } from 'fake-indexeddb';
+import { BrowserClient, indexedDbAdapter, localStorageAdapter, type EvaluationContext, type StorageAdapter } from '../src/index.js';
 import { decodeFlags, maxStoredContexts, recentKey, storageKey } from '../src/storage.js';
 import { fakeRealm, memoryStorage, seedStorage } from './fake-realm.js';
 
@@ -408,5 +409,133 @@ describe('localStorageAdapter', () => {
     const adapter = localStorageAdapter();
     expect(() => adapter.setItem('a', '1')).not.toThrow();
     expect(adapter.getItem('a')).toBeUndefined();
+  });
+});
+
+describe('indexedDbAdapter', () => {
+  // stubIndexedDb gives one test an empty IndexedDB of its own, or with
+  // factory undefined (as in server rendering), none.
+  function stubIndexedDb(factory: IDBFactory | undefined) {
+    vi.stubGlobal('indexedDB', factory);
+    cleanup.push(() => vi.unstubAllGlobals());
+  }
+
+  it('reads, writes, and removes values by key', async () => {
+    stubIndexedDb(new IDBFactory());
+    const adapter = indexedDbAdapter();
+    expect(await adapter.getItem('a')).toBeNull();
+    await adapter.setItem('a', '1');
+    await adapter.setItem('b', '2');
+    await adapter.setItem('a', '3');
+    expect(await adapter.getItem('a')).toBe('3');
+    await adapter.removeItem('a');
+    expect(await adapter.getItem('a')).toBeNull();
+    expect(await adapter.getItem('b')).toBe('2');
+  });
+
+  it('rejects where there is no IndexedDB, and works once there is', async () => {
+    stubIndexedDb(undefined);
+    const adapter = indexedDbAdapter();
+    await expect(adapter.getItem('a')).rejects.toThrow(/IndexedDB is unavailable/);
+    await expect(adapter.setItem('a', '1')).rejects.toThrow(/IndexedDB is unavailable/);
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    await adapter.setItem('a', '1');
+    expect(await adapter.getItem('a')).toBe('1');
+  });
+
+  it('rejects where reading indexedDB throws', async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
+    Object.defineProperty(globalThis, 'indexedDB', {
+      configurable: true,
+      get() {
+        throw new DOMException('denied', 'SecurityError');
+      },
+    });
+    cleanup.push(() => {
+      if (descriptor) Object.defineProperty(globalThis, 'indexedDB', descriptor);
+      else delete (globalThis as { indexedDB?: unknown }).indexedDB;
+    });
+    await expect(indexedDbAdapter().getItem('a')).rejects.toThrow(/IndexedDB is unavailable/);
+  });
+
+  it('adds its store to a database the app already uses, keeping the app\'s', async () => {
+    stubIndexedDb(new IDBFactory());
+    const app = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open('shared', 3);
+      req.onupgradeneeded = () => req.result.createObjectStore('app');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    // The app keeps its connection open; the adapter's upgrade asks it to close.
+    app.onversionchange = () => app.close();
+    const adapter = indexedDbAdapter({ dbName: 'shared', storeName: 'realm-flags' });
+    await adapter.setItem('a', '1');
+    expect(await adapter.getItem('a')).toBe('1');
+    const names = await new Promise<string[]>((resolve, reject) => {
+      const req = indexedDB.open('shared');
+      req.onsuccess = () => {
+        resolve(Array.from(req.result.objectStoreNames));
+        req.result.close();
+      };
+      req.onerror = () => reject(req.error);
+    });
+    expect(names).toEqual(['app', 'realm-flags']);
+  });
+
+  it('rejects while another connection blocks adding its store, and works once it closes', async () => {
+    stubIndexedDb(new IDBFactory());
+    // An app connection that ignores version changes, and so blocks them.
+    const app = await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open('shared', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('app');
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    const adapter = indexedDbAdapter({ dbName: 'shared' });
+    await expect(adapter.setItem('a', '1')).rejects.toThrow(/blocks adding store flags/);
+    app.close();
+    await adapter.setItem('a', '1');
+    expect(await adapter.getItem('a')).toBe('1');
+  });
+
+  it('keeps stores apart by name', async () => {
+    stubIndexedDb(new IDBFactory());
+    const a = indexedDbAdapter({ storeName: 'a' });
+    const b = indexedDbAdapter({ storeName: 'b' });
+    await a.setItem('k', 'from a');
+    expect(await b.getItem('k')).toBeNull();
+    expect(await a.getItem('k')).toBe('from a');
+  });
+
+  it('leaves a client without IndexedDB serving the network, reporting why', async () => {
+    stubIndexedDb(undefined);
+    const realm = await setup();
+    const errors: unknown[] = [];
+    const client = new BrowserClient({
+      address: realm.address,
+      path: '/prod/web/',
+      context: { key: 'vip' },
+      storage: indexedDbAdapter(),
+      streaming: false,
+      onError: (err) => errors.push(err),
+    });
+    cleanup.push(() => client.stop());
+    await client.start();
+    expect(client.source()).toBe('network');
+    expect(client.bool('beta', false)).toBe(true);
+    await vi.waitFor(() => expect(String(errors[0])).toMatch(/IndexedDB is unavailable/));
+  });
+
+  it('starts a client offline from the values it stored', async () => {
+    stubIndexedDb(new IDBFactory());
+    const realm = await setup();
+    await seed(realm.address, indexedDbAdapter(), { key: 'vip' });
+
+    // a reload with no network
+    const client = new BrowserClient({ address: realm.address, path: '/prod/web/', context: { key: 'vip' }, storage: indexedDbAdapter(), fetch: offline, onError: () => {} });
+    cleanup.push(() => client.stop());
+    expect(client.source()).toBeUndefined(); // asynchronous storage answers later
+    await vi.waitFor(() => expect(client.source()).toBe('cache'));
+    expect(client.bool('beta', false)).toBe(true);
   });
 });
