@@ -34,7 +34,6 @@ type PostgresStorage struct {
 	pool   *pgxpool.Pool
 	tracer trace.Tracer
 
-	// ctx is canceled by Close, stopping every Watch.
 	// feed runs the Watches (see changeFeed).
 	feed *changeFeed
 }
