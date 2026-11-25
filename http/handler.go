@@ -377,7 +377,7 @@ func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, st
 				}
 				handleError(ctx, w, http.StatusPreconditionFailed, createResponseWithErrors(nil, []string{"the chamber was changed by someone else; reload and try again"}))
 			case err != nil:
-				fail(writeFailure(err, recursive))
+				fail(writeStatus(err), err)
 			case recursive:
 				handleOkJSON(ctx, w, deleteResult{Deleted: res.Deleted})
 			default:
@@ -427,7 +427,7 @@ func handleChambers(strg storage.Storage, writer *chamberWriter, brk *broker, st
 			own := r.URL.Query().Get("inherit") == "false"
 			source := strg
 			if own {
-				source = writer.raw
+				source = storage.Raw(strg)
 			}
 			entry, err := source.Get(ctx, req.Path)
 			if err != nil {
@@ -523,34 +523,6 @@ func queryBool(r *http.Request, name string) (bool, error) {
 		return false, fmt.Errorf("query parameter %q must be a boolean", name)
 	}
 	return b, nil
-}
-
-// writeFailure returns the status of a write that chamberWriter.Write
-// refused or failed with err (other than a preconditionError), and the error
-// to report. A server error's cause is logged, not sent (see handleError).
-func writeFailure(err error, recursive bool) (int, error) {
-	var se *sealedError
-	var ce *constraintError
-	var nf *storage.NotFoundError
-	var broken *storage.ChamberError
-	switch {
-	case errors.As(err, &se), errors.As(err, &ce), errors.Is(err, errPatchMissing), errors.Is(err, errDeleteEverything), errors.Is(err, storage.ErrInvalidPath):
-		return http.StatusBadRequest, err
-	case errors.As(err, &broken):
-		// a chamber above is broken: say which and why, as reads do
-		return http.StatusConflict, err
-	case errors.As(err, &nf):
-		return http.StatusNotFound, nf
-	case errors.Is(err, storage.ErrConflict):
-		if recursive {
-			return http.StatusConflict, errors.New("the chambers are being changed by others; try again")
-		}
-		return http.StatusConflict, errors.New("the chamber is being changed by others; try again")
-	case errors.Is(err, storage.ErrTooLarge):
-		return http.StatusRequestEntityTooLarge, err
-	default:
-		return http.StatusInternalServerError, err
-	}
 }
 
 // setRevision sets the revision header (see api.RevisionHeader), unless the

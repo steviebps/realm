@@ -304,11 +304,8 @@ func ReadLineage(ctx context.Context, s Storage, logicalPath string) (*Lineage, 
 	if layered, ok := s.(Layered); ok {
 		return layered.Layers(ctx, logicalPath)
 	}
-	entry, err := s.Get(ctx, logicalPath)
-	if err != nil {
-		return nil, err
-	}
-	return &Lineage{Layers: []Layer{parseLayer(canonicalChamberPath(logicalPath), entry)}}, nil
+	read := func(ctx context.Context, p string) (Layer, error) { return ReadLayer(ctx, s, p) }
+	return buildLineage(ctx, read, logicalPath, false, true)
 }
 
 // ChamberError reports a stored chamber that cannot be parsed. Its message
@@ -324,9 +321,10 @@ func (e *ChamberError) Error() string { return e.Err.Error() }
 
 func (e *ChamberError) Unwrap() error { return e.Err }
 
-// parseLayer parses a stored chamber into a layer at p; a chamber that cannot
-// be parsed sets the layer's Err to a ChamberError.
-func parseLayer(p string, entry *StorageEntry) Layer {
+// ParseLayer parses a chamber stored at the canonical path p into a layer,
+// leniently, as reads do: one that cannot be parsed has no Chamber, and its
+// Err is a ChamberError.
+func ParseLayer(p string, entry *StorageEntry) Layer {
 	c := &realm.Chamber{}
 	if err := json.Unmarshal(entry.Value, c); err != nil {
 		return Layer{Path: p, Err: &ChamberError{Path: p, Err: err}, Version: entry.Version}

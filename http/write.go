@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -24,9 +25,9 @@ import (
 // chamber that cannot be parsed, as reads fail below one), the constraints
 // it adds or changes against the chambers below, and the caller's
 // preconditions; it records each change in the chamber's history in the
-// same storage.Update, and announces it to the broker. It knows nothing of
-// HTTP: handlers turn requests into a writeRequest and its errors into
-// statuses (see writeFailure).
+// same storage.Update, and announces it to the broker. Its interface takes
+// no request: handlers turn requests into a writeRequest, and its errors
+// into statuses with writeStatus.
 type chamberWriter struct {
 	// raw holds chambers as stored (see storage.Raw), along with their
 	// history.
@@ -89,48 +90,79 @@ type writeResult struct {
 	Deleted []string
 }
 
-// Write applies req. It refuses a write with a sealedError, a
-// constraintError, a preconditionError, errPatchMissing, a NotFoundError,
-// errDeleteEverything, a storage.ChamberError (a chamber above cannot be
-// parsed), storage.ErrConflict, storage.ErrInvalidPath, or
-// storage.ErrTooLarge, before anything is written; any other error may come
-// after part of the write landed (see refused). Every change that may have
-// landed is announced.
+// Write applies req. It refuses a write before anything is written with an
+// error writeStatus maps to a 4xx status; any other error may come after
+// part of the write landed. Every change that may have landed is announced.
 func (cw *chamberWriter) Write(ctx context.Context, req writeRequest) (writeResult, error) {
+	recursive := req.Operation == DeleteOperation && req.Recursive
 	var res writeResult
 	var err error
-	if req.Operation == DeleteOperation && req.Recursive {
+	if recursive {
 		res, err = cw.deleteTree(ctx, req)
-		if err != nil && !refused(err) {
-			cw.notify(req.Path)
-		}
-		// each deleted chamber is announced, as a change feed announces
-		// each key: subtree streams learn which went
-		for _, p := range res.Deleted {
-			cw.notify(p)
-		}
-		return res, err
+	} else {
+		res, err = cw.write(ctx, req)
 	}
-	res, err = cw.write(ctx, req)
-	if err == nil || !refused(err) {
-		// Backends without transactions apply a write's changes one at a
-		// time, so part of a failed one may have landed: let streams look.
+	if errors.Is(err, storage.ErrConflict) {
+		err = &busyError{recursive: recursive}
+	}
+
+	// Backends without transactions apply a write's changes one at a time,
+	// so part of a failed one may have landed: let streams look.
+	landed := writeStatus(err) >= http.StatusInternalServerError
+	if (err == nil && !recursive) || landed {
 		cw.notify(req.Path)
+	}
+	// each deleted chamber is announced, as a change feed announces each
+	// key: subtree streams learn which went
+	for _, p := range res.Deleted {
+		cw.notify(p)
 	}
 	return res, err
 }
 
-// refused reports whether err refused a write before anything was written.
-func refused(err error) bool {
+// writeStatus returns the HTTP status of a write that Write refused or failed
+// with err: a 4xx when it refused the write before anything was written, 500
+// otherwise. It is 200 when err is nil.
+func writeStatus(err error) int {
 	var pf *preconditionError
 	var se *sealedError
 	var ce *constraintError
 	var nf *storage.NotFoundError
 	var broken *storage.ChamberError
-	return errors.As(err, &pf) || errors.As(err, &se) || errors.As(err, &ce) || errors.As(err, &nf) || errors.As(err, &broken) ||
-		errors.Is(err, errPatchMissing) || errors.Is(err, errDeleteEverything) ||
-		errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrInvalidPath) || errors.Is(err, storage.ErrTooLarge)
+	switch {
+	case err == nil:
+		return http.StatusOK
+	case errors.As(err, &pf):
+		return http.StatusPreconditionFailed
+	case errors.As(err, &se), errors.As(err, &ce), errors.Is(err, errPatchMissing), errors.Is(err, errDeleteEverything), errors.Is(err, storage.ErrInvalidPath):
+		return http.StatusBadRequest
+	case errors.As(err, &broken), errors.Is(err, storage.ErrConflict):
+		// a chamber above is broken (named, as reads do), or the chamber is
+		// changing under the write
+		return http.StatusConflict
+	case errors.As(err, &nf):
+		return http.StatusNotFound
+	case errors.Is(err, storage.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge
+	default:
+		return http.StatusInternalServerError
+	}
 }
+
+// busyError refuses a write that kept conflicting with concurrent changes
+// (storage.ErrConflict), so the caller may retry it.
+type busyError struct {
+	recursive bool
+}
+
+func (e *busyError) Error() string {
+	if e.recursive {
+		return "the chambers are being changed by others; try again"
+	}
+	return "the chamber is being changed by others; try again"
+}
+
+func (e *busyError) Unwrap() error { return storage.ErrConflict }
 
 // write applies a PUT, PATCH, or DELETE of req.Path and records it in the
 // chamber's history, atomically. Preconditions are checked against the
@@ -166,19 +198,21 @@ func (cw *chamberWriter) write(ctx context.Context, req writeRequest) (writeResu
 		switch req.Operation {
 		case PutOperation:
 			next = req.Body
-			if err := guard.check(storedChamber(stored), next); err != nil {
-				return nil, err
+			if guard.active() {
+				if err := guard.check(storedChamber(req.Path, stored), next); err != nil {
+					return nil, err
+				}
 			}
 		case PatchOperation:
 			if stored == nil {
 				return nil, fmt.Errorf("%w: %w", errPatchMissing, &storage.NotFoundError{Key: req.Path})
 			}
-			var before realm.Chamber
-			if err := json.Unmarshal(stored.Value, &before); err != nil {
-				return nil, fmt.Errorf("could not unmarshal current chamber while patching: %w", err)
+			layer := storage.ParseLayer(req.Path, stored)
+			if layer.Err != nil {
+				return nil, fmt.Errorf("could not unmarshal current chamber while patching: %w", layer.Err)
 			}
-			next = nextChamber(PatchOperation, &before, req.Body)
-			if err := guard.check(&before, next); err != nil {
+			next = nextChamber(PatchOperation, layer.Chamber, req.Body)
+			if err := guard.check(layer.Chamber, next); err != nil {
 				return nil, err
 			}
 		case DeleteOperation:
@@ -290,7 +324,11 @@ func (cw *chamberWriter) prepare(ctx context.Context, req writeRequest) (*writeG
 	ctx, span := otel.Tracer("github.com/steviebps/realm").Start(ctx, "chamberWriter prepare", trace.WithAttributes(attribute.String("realm.server.path", req.Path)))
 	defer span.End()
 
-	lin, err := storage.BuildLineage(ctx, storage.RawLayers(cw.raw), req.Path, cw.inheritable)
+	if !cw.inheritable {
+		// without inheritance, no chamber is above another
+		return &writeGuard{ancestry: &storage.Ancestry{}}, nil
+	}
+	lin, err := storage.BuildLineage(ctx, storage.RawLayers(cw.raw), req.Path, true)
 	if err != nil {
 		return nil, err
 	}
@@ -299,16 +337,13 @@ func (cw *chamberWriter) prepare(ctx context.Context, req writeRequest) (*writeG
 		return nil, fmt.Errorf("chambers below a parent chamber that cannot be parsed cannot be written until it is fixed: %w", err)
 	}
 	g := &writeGuard{ancestry: ancestry}
-	if !cw.inheritable || !hasConstraints(req.Body) {
+	if !hasConstraints(req.Body) {
 		// only a body with constraints can add or change them
 		return g, nil
 	}
 	// Which constraints change is known for certain only within the write;
 	// check refuses a write whose changes differ from those checked here.
-	before := lin.Layers[0].Chamber
-	if before == nil {
-		before = &realm.Chamber{Rules: map[string]*realm.Flag{}}
-	}
+	before := orEmpty(lin.Layers[0].Chamber)
 	next := nextChamber(req.Operation, before, req.Body)
 	if err := g.check(before, next); err != nil {
 		return nil, err
@@ -318,6 +353,12 @@ func (cw *chamberWriter) prepare(ctx context.Context, req writeRequest) (*writeG
 		return nil, err
 	}
 	return g, nil
+}
+
+// active reports whether check can refuse anything: whether the chambers
+// above seal or constrain any flag, or the chambers below were checked.
+func (g *writeGuard) active() bool {
+	return len(g.ancestry.Seals) > 0 || len(g.ancestry.Constraints) > 0 || g.scanned
 }
 
 // check refuses next, the chamber a write would store over before (the
@@ -362,17 +403,22 @@ func (g *writeGuard) check(before, next *realm.Chamber) error {
 	return nil
 }
 
-// storedChamber decodes the chamber as stored, leniently: a missing chamber,
-// or one that cannot be parsed, keeps no flags, as its layer does (see
-// storage.ReadLayer), so a write may replace it.
-func storedChamber(stored *storage.StorageEntry) *realm.Chamber {
-	if stored != nil {
-		c := &realm.Chamber{}
-		if json.Unmarshal(stored.Value, c) == nil {
-			return c
-		}
+// storedChamber decodes the chamber stored at p as reads do (see
+// storage.ParseLayer): a missing chamber, or one that cannot be parsed,
+// keeps no flags, so a write may replace it.
+func storedChamber(p string, stored *storage.StorageEntry) *realm.Chamber {
+	if stored == nil {
+		return orEmpty(nil)
 	}
-	return &realm.Chamber{Rules: map[string]*realm.Flag{}}
+	return orEmpty(storage.ParseLayer(p, stored).Chamber)
+}
+
+// orEmpty returns c, or a chamber without flags when c is nil.
+func orEmpty(c *realm.Chamber) *realm.Chamber {
+	if c == nil {
+		return &realm.Chamber{Rules: map[string]*realm.Flag{}}
+	}
+	return c
 }
 
 // hasConstraints reports whether a flag of c has constraints.

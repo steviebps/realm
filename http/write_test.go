@@ -15,10 +15,7 @@ import (
 // raw storage beneath it, and the paths it announced so far.
 func newTestWriter(t *testing.T) (*chamberWriter, storage.Storage, *[]string) {
 	t.Helper()
-	raw, err := storage.NewBigCacheStorage(map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := newBigCache(t)
 	inh, err := storage.NewInheritableStorage(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -166,10 +163,7 @@ func TestCheckBelowHonorsSeals(t *testing.T) {
 // TestWriteBelowBrokenParentStatus checks that the server refuses a write
 // below a chamber that cannot be parsed with 409, naming that chamber.
 func TestWriteBelowBrokenParentStatus(t *testing.T) {
-	stg, err := storage.NewBigCacheStorage(map[string]string{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	stg := newBigCache(t)
 	if err := stg.Put(context.Background(), storage.StorageEntry{Key: "/b/", Value: []byte(`{"rules":{"x":{"type":"boolean","value":"no"}}}`)}); err != nil {
 		t.Fatal(err)
 	}

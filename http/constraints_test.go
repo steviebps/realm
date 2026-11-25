@@ -179,15 +179,7 @@ func TestFlagMetadataRoundTrips(t *testing.T) {
 // below (because the chamber changed in between) is refused as a conflict,
 // so that the client retries and the new changes are checked.
 func TestWriteGuardRechecksChanges(t *testing.T) {
-	parse := func(s string) *realm.Chamber {
-		t.Helper()
-		c, err := realm.ParseChamber([]byte(s))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return c
-	}
-	next := parse(`{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}},"plain":{"type":"boolean","value":true}}}`)
+	next := mustChamber(t, `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}},"plain":{"type":"boolean","value":true}}}`)
 	stored := &storage.StorageEntry{Key: "/t/", Value: []byte(`{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}}}}`)}
 	empty := &storage.Ancestry{Seals: map[string]string{}, Constraints: map[string][]storage.Constrained{}}
 
@@ -204,7 +196,7 @@ func TestWriteGuardRechecksChanges(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.guard.check(storedChamber(tt.stored), next); err != tt.want {
+			if err := tt.guard.check(storedChamber("/t/", tt.stored), next); err != tt.want {
 				t.Fatalf("check = %v, want %v", err, tt.want)
 			}
 		})

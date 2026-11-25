@@ -158,14 +158,14 @@ func checkBelow(ctx context.Context, strg storage.Storage, root string, next *re
 		if err != nil {
 			return err
 		}
-		res, err := lin.Resolve()
+		above, err := lin.Ancestry()
 		if err != nil {
 			continue // its view cannot be built, so it serves nothing
 		}
 		for _, key := range keys {
 			def := own.Rules[key]
-			if def == nil || slices.Contains(res.Hidden[key], p) {
-				continue
+			if _, sealed := above.Seals[key]; def == nil || sealed {
+				continue // a seal above hides its definition
 			}
 			f := next.Rules[key]
 			var why string

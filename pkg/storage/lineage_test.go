@@ -699,27 +699,27 @@ func TestBuildLineage(t *testing.T) {
 		"/x/y/": `{"rules":{"b":{"type":"boolean","value":true}}}`,
 		"/bad/": `{"rules":{"a":{"type":"boolean","value":"no"}}}`,
 	}}
-	paths := func(lin *Lineage) []string {
-		var ps []string
+	summary := func(lin *Lineage) []string {
+		var ls []string
 		for _, l := range lin.Layers {
-			ps = append(ps, l.Path)
+			ls = append(ls, layerSummary(l))
 		}
-		return ps
+		return ls
 	}
 
 	lin, err := BuildLineage(ctx, RawLayers(src), "/x/y/z/", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"/x/y/z/", "/x/y/", "/x/", "/"}; !slices.Equal(paths(lin), want) {
-		t.Errorf("layers = %v, want %v, nearest first", paths(lin), want)
+	if want := []string{"/x/y/z/=missing", "/x/y/=ok[b]", "/x/=missing", "/=ok[a]"}; !slices.Equal(summary(lin), want) {
+		t.Errorf("layers = %v, want %v, nearest first", summary(lin), want)
 	}
 	if lin.Stored() {
 		t.Error("a path without a chamber is Stored")
 	}
 
 	lin, err = BuildLineage(ctx, RawLayers(src), "/x/y/", false)
-	if err != nil || !lin.Stored() || !slices.Equal(paths(lin), []string{"/x/y/"}) {
+	if err != nil || !lin.Stored() || !slices.Equal(summary(lin), []string{"/x/y/=ok[b]"}) {
 		t.Errorf("without inheritance: %v, %v; want the chamber alone", lin, err)
 	}
 

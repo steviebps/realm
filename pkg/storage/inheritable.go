@@ -117,24 +117,13 @@ func consultedAncestors(logicalPath string) []string {
 // returns a NotFoundError, without reading the ancestors, when there is no
 // chamber at logicalPath.
 func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*Lineage, error) {
-	// validated before cleaning, which would resolve ".."
-	if err := ValidatePath(logicalPath); err != nil {
-		return nil, err
-	}
 	return buildLineage(ctx, s.readLayer, logicalPath, true, true)
 }
 
 // readLayer reads the chamber at p from the source as ReadLayer does,
 // reusing the chamber last parsed at p when it is unchanged.
 func (s *InheritableStorage) readLayer(ctx context.Context, p string) (Layer, error) {
-	entry, err := s.source.Get(ctx, p)
-	if err != nil {
-		if isNotFoundErr(err) {
-			return Layer{Path: p}, nil
-		}
-		return Layer{}, err
-	}
-	return s.cache.parseLayer(p, entry), nil
+	return readLayerWith(ctx, s.source, p, s.cache.parseLayer)
 }
 
 // Put puts the entry at the specified logical path, creating or overwriting it

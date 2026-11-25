@@ -144,6 +144,11 @@ type LayerReader func(ctx context.Context, p string) (Layer, error)
 // the layer has neither Chamber nor Err; when it cannot be parsed, Err is a
 // ChamberError. A failed read is returned as an error.
 func ReadLayer(ctx context.Context, s Storage, p string) (Layer, error) {
+	return readLayerWith(ctx, s, p, ParseLayer)
+}
+
+// readLayerWith is ReadLayer, parsing what it reads with parse.
+func readLayerWith(ctx context.Context, s Storage, p string, parse func(string, *StorageEntry) Layer) (Layer, error) {
 	entry, err := s.Get(ctx, p)
 	if err != nil {
 		if isNotFoundErr(err) {
@@ -151,7 +156,7 @@ func ReadLayer(ctx context.Context, s Storage, p string) (Layer, error) {
 		}
 		return Layer{}, err
 	}
-	return parseLayer(p, entry), nil
+	return parse(p, entry), nil
 }
 
 // ScanLayers reads the chamber stored at each of paths, which ListTree
@@ -181,7 +186,7 @@ func ScanLayers(ctx context.Context, s Storage, paths []string) (layers map[stri
 			return nil, true, err
 		}
 		if _, listed := layers[entry.Key]; listed {
-			layers[entry.Key] = parseLayer(entry.Key, entry)
+			layers[entry.Key] = ParseLayer(entry.Key, entry)
 		}
 	}
 	return layers, true, nil
@@ -359,7 +364,7 @@ func walkTree(ctx context.Context, read LayerReader, inheritable bool, paths []s
 					}
 				}
 				if cur != nil && cur.Key == p {
-					return parseLayer(p, cur), nil
+					return ParseLayer(p, cur), nil
 				}
 				return Layer{Path: p}, nil
 			}

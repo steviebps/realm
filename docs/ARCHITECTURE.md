@@ -117,7 +117,7 @@ Go SDK (Realm)  ┼─► client.HttpClient ─► HTTP /v1/chambers/<path> ─�
 - **Writes** — every PUT, PATCH, and DELETE goes through one module,
   `chamberWriter.Write` (`http/write.go`), which takes the path, operation,
   body, preconditions, and actor as values; the handler only turns a request
-  into those and the module's errors into statuses (`writeFailure`). It reads
+  into those and the module's errors into statuses (`writeStatus`). It reads
   the chamber's lineage once (`storage.BuildLineage`), refuses a write below
   a chamber that cannot be parsed with 409 naming it (reads below it fail
   too), checks seals and constraints, records history in the same `Update`,
