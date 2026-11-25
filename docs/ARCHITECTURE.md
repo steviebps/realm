@@ -421,11 +421,11 @@ Two wrappers compose backends:
   leave this replica's cache stale.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
   `Get`, merges a chamber with every ancestor along the path, up to and
-  including the root chamber `/`, so child chambers inherit parent rules and
+  including the root chamber `/`, so child chambers inherit parent definitions and
   flags set at `/` reach every chamber; the nearest definition of a flag
   wins, whole, unless an ancestor seals it (`"sealed": true`): then the
-  farthest ancestor that seals it wins, and nearer definitions are hidden. A missing ancestor (including `/`) contributes nothing. This
-  hierarchy is the current stand-in for "environments / zones". `Get` is built
+  farthest ancestor that seals it wins, and nearer definitions are hidden.
+  A missing ancestor (including `/`) contributes nothing. `Get` is built
   from `Layers` (the chamber plus each consulted ancestor, nearest first, in
   `lineage.go`) and `Lineage.Merge`, so the layers view and the merged view
   cannot disagree. It still reads every layer on each `Get`, but parses and
@@ -488,7 +488,7 @@ log line of their own.
 | Typed flags (bool/number/string/custom) | ✅ Done | `pkg/rule.go` |
 | Version targeting (semver ranges, build SHAs) | ✅ Done | `pkg/targeting.go` |
 | **Percentage rollout (deterministic, `bucketBy` any attribute)** | ✅ Done | `pkg/targeting.go` |
-| Hierarchy / inheritance (proto "zones") | ✅ Done | `pkg/storage/inheritable.go` |
+| Hierarchy / inheritance | ✅ Done | `pkg/storage/inheritable.go` |
 | Attribute targeting (ordered rules on `EvaluationContext.Attributes`) | ✅ Done | `pkg/targeting.go`, `pkg/flag.go` |
 | Scheduled rules (one-off time windows) | ✅ Done | `Schedule` in `pkg/targeting.go`; evaluation streams re-send at bounds |
 | Per-flag targeting off (serve the default, keep the rules) | ✅ Done | `PausedTargeting` in `pkg/flag.go`; Pause/Resume in `http/realm-ui` |

@@ -15,7 +15,7 @@ binary is three things at once:
   background polling.
 
 **North star:** an open-source LaunchDarkly — immediately sourced feature
-switches, synchronized across application zones, with progressive rollout.
+flags, served the same everywhere an application runs, with progressive rollout.
 
 **Honest current state:** flags are grouped into hierarchical **chambers** that
 inherit from their parents; a parent can **seal** a flag so chambers below it
