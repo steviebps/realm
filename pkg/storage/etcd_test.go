@@ -143,7 +143,7 @@ func TestEtcdWatchAfterCompaction(t *testing.T) {
 	s := newEtcd(t, etcdtest.Options(t))
 
 	out := make(chan Change, 8)
-	w := &etcdWatcher{s: s, out: out}
+	w := &etcdWatcher{s: s, fw: &feedWatch{out: out}}
 	mustPut(t, s, "/a/", `1`)
 	w.last = versionOf(t, s, "/a/") - 1
 	mustPut(t, s, "/a/", `2`)
@@ -184,12 +184,10 @@ func TestEtcdWatchAfterRewind(t *testing.T) {
 
 	s := newEtcd(t, etcdtest.Options(t))
 	changes := s.Watch(ctx)
-	s.mu.Lock()
-	for w := range s.watchers {
+	for _, w := range etcdWatchers(s) {
 		// as if the watch had seen revisions the cluster no longer has
 		w.confirmed.Store(1 << 40)
 	}
-	s.mu.Unlock()
 
 	if c := receive(t, changes, 1)[0]; c.Key != "/" || c.Rev >= 1<<40 {
 		t.Fatalf("change = %+v, want a change to / at the cluster's revision", c)
@@ -251,11 +249,7 @@ func TestEtcdHealth(t *testing.T) {
 	conf["endpoints"] = "http://" + px.ln.Addr().String()
 	s := newEtcd(t, conf)
 	_ = s.Watch(ctx)
-	var w *etcdWatcher
-	s.mu.Lock()
-	for w = range s.watchers {
-	}
-	s.mu.Unlock()
+	w := etcdWatchers(s)[0]
 
 	// quiet: nothing was committed past what the feed has
 	time.Sleep(2 * etcdFeedStaleAfter)
@@ -269,7 +263,7 @@ func TestEtcdHealth(t *testing.T) {
 	mustPut(t, other, "/elsewhere/", `{}`)
 	rev, wrote := versionOf(t, other, "/elsewhere/"), time.Now()
 	eventually(t, 2*time.Second, "the feed confirmed past another prefix's write", func() bool {
-		return w.confirmed.Load() >= rev && w.caughtUp.Load() > wrote.UnixNano()
+		return w.confirmed.Load() >= rev && w.fw.caughtUpAt.Load() > wrote.UnixNano()
 	})
 
 	px.stall(true)
@@ -283,4 +277,15 @@ func TestEtcdHealth(t *testing.T) {
 	if c := receive(t, changes, 1)[0]; c.Key != "/after/" {
 		t.Errorf("change after recovering = %+v, want /after/", c)
 	}
+}
+
+// etcdWatchers returns the sessions of s's running Watches.
+func etcdWatchers(s *EtcdStorage) []*etcdWatcher {
+	s.feed.mu.Lock()
+	defer s.feed.mu.Unlock()
+	var ws []*etcdWatcher
+	for fw := range s.feed.watches {
+		ws = append(ws, fw.session.(*etcdWatcher))
+	}
+	return ws
 }

@@ -251,7 +251,7 @@ func TestPostgresWatchAfterRevisionRegression(t *testing.T) {
 	}
 
 	out := make(chan Change, 8)
-	w := &watcher{p: s, out: out, last: 10} // it saw revision 10 before the database went back to 3
+	w := &watcher{p: s, fw: &feedWatch{out: out}, last: 10} // it saw revision 10 before the database went back to 3
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)

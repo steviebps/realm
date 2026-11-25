@@ -100,7 +100,7 @@ func TestPostgresWatchReportsPrunedGap(t *testing.T) {
 	s := newPostgres(t, pgtest.URL(t))
 
 	out := make(chan Change, 8)
-	w := &watcher{p: s, out: out}
+	w := &watcher{p: s, fw: &feedWatch{out: out}}
 	for i := range 3 {
 		if err := s.Put(ctx, StorageEntry{Key: "/k" + strconv.Itoa(i) + "/", Value: json.RawMessage(`{}`)}); err != nil {
 			t.Fatal(err)

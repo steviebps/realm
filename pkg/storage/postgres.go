@@ -9,8 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -37,16 +35,8 @@ type PostgresStorage struct {
 	tracer trace.Tracer
 
 	// ctx is canceled by Close, stopping every Watch.
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-
-	// mu guards watchers, the running Watches, which Health and the feed age
-	// metric inspect.
-	mu       sync.Mutex
-	watchers map[*watcher]struct{}
-	// metrics is the registration of the feed age callback, if any.
-	metrics metric.Registration
+	// feed runs the Watches (see changeFeed).
+	feed *changeFeed
 }
 
 var (
@@ -172,21 +162,18 @@ func NewPostgresStorage(conf map[string]string) (Storage, error) {
 		return nil, fmt.Errorf("could not create postgres tables: %w", err)
 	}
 
-	sctx, scancel := context.WithCancel(context.Background())
 	p := &PostgresStorage{
-		pool:     pool,
-		tracer:   otel.Tracer("github.com/steviebps/realm"),
-		ctx:      sctx,
-		cancel:   scancel,
-		watchers: map[*watcher]struct{}{},
+		pool:   pool,
+		tracer: otel.Tracer("github.com/steviebps/realm"),
+		feed: newChangeFeed(feedConfig{
+			name:       "postgres",
+			retry:      &watchRetryInterval,
+			maxRetry:   &maxWatchRetryInterval,
+			staleAfter: &feedStaleAfter,
+			restarts:   feedReconnects,
+			age:        feedAgeGauge,
+		}),
 	}
-	// without a working meter, the feed simply goes unmeasured
-	p.metrics, _ = otel.Meter("github.com/steviebps/realm").RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		if age, ok := p.feedAge(); ok {
-			o.ObserveFloat64(feedAgeGauge, age.Seconds())
-		}
-		return nil
-	}, feedAgeGauge)
 	return p, nil
 }
 
@@ -549,73 +536,33 @@ func normalize(keys []string) []string {
 // database went back to an earlier revision (restored from a backup, or
 // failed over to a replica that missed commits).
 func (p *PostgresStorage) Watch(ctx context.Context) <-chan Change {
-	out := make(chan Change, 64)
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(p.ctx, cancel)
-
-	w := &watcher{p: p, out: out}
-	// a new feed has feedStaleAfter to catch up before Health reports it
-	w.caughtUp.Store(time.Now().UnixNano())
-	// start from the current revision; on failure, the first successful
-	// check reports that anything may have changed
-	qctx, qcancel := context.WithTimeout(ctx, feedTimeout)
-	if err := p.pool.QueryRow(qctx, "SELECT rev FROM realm_revision").Scan(&w.last); err != nil {
-		w.lost = true
-	}
-	qcancel()
-
-	p.mu.Lock()
-	p.watchers[w] = struct{}{}
-	p.mu.Unlock()
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-		defer close(out)
-		defer stop()
-		defer cancel()
-		defer func() {
-			p.mu.Lock()
-			delete(p.watchers, w)
-			p.mu.Unlock()
-		}()
-		w.run(ctx)
-	}()
-	return out
+	return p.feed.watch(ctx, func(ctx context.Context, fw *feedWatch) feedSession {
+		w := &watcher{p: p, fw: fw}
+		// start from the current revision; on failure, the first successful
+		// check reports that anything may have changed
+		qctx, qcancel := context.WithTimeout(ctx, feedTimeout)
+		if err := p.pool.QueryRow(qctx, "SELECT rev FROM realm_revision").Scan(&w.last); err != nil {
+			w.lost = true
+		}
+		qcancel()
+		return w
+	})
 }
 
+// watcher is a Watch's session: one LISTEN connection at a time.
 type watcher struct {
-	p    *PostgresStorage
-	out  chan<- Change
+	p  *PostgresStorage
+	fw *feedWatch
+	// last is the revision up to which every change has been reported.
 	last uint64
 	// lost is set when changes may have been missed.
 	lost      bool
 	lastPrune time.Time
-	// caughtUp is when the watcher last caught up with the database (or
-	// started), in Unix nanoseconds.
-	caughtUp atomic.Int64
 }
 
-func (w *watcher) run(ctx context.Context) {
-	logger := logging.Ctx(ctx)
-	delay := watchRetryInterval
-	for ctx.Err() == nil {
-		began := time.Now()
-		err := w.listen(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		// a connection that held for a while starts the backoff over
-		if time.Since(began) > maxWatchRetryInterval {
-			delay = watchRetryInterval
-		}
-		feedReconnects.Add(ctx, 1)
-		logger.WarnCtx(ctx).Str("error", fmt.Sprint(err)).Dur("retry_in", delay).Msg("postgres change feed disconnected; reconnecting")
-		select {
-		case <-ctx.Done():
-		case <-time.After(delay):
-		}
-		delay = min(delay*2, maxWatchRetryInterval)
-	}
+// run implements feedSession.
+func (w *watcher) run(ctx context.Context, _ *feedWatch) error {
+	return w.listen(ctx)
 }
 
 var (
@@ -705,15 +652,13 @@ func (w *watcher) catchUp(ctx context.Context, conn *pgx.Conn) error {
 		changes = nil
 	}
 	for _, c := range changes {
-		select {
-		case w.out <- c:
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := w.fw.send(ctx, c); err != nil {
+			return err
 		}
 	}
 	w.last = head
 	w.lost = false
-	w.caughtUp.Store(time.Now().UnixNano())
+	w.fw.caughtUp()
 
 	if time.Since(w.lastPrune) > pruneInterval && head > changeRetention {
 		w.lastPrune = time.Now()
@@ -755,37 +700,17 @@ func (w *watcher) readChanges(ctx context.Context, conn *pgx.Conn) (head uint64,
 	return head, changes, err
 }
 
-// feedAge returns how long ago the running Watch furthest behind last caught
-// up with the database; ok is false when no Watch is running.
-func (p *PostgresStorage) feedAge() (age time.Duration, ok bool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := time.Now()
-	for w := range p.watchers {
-		if a := now.Sub(time.Unix(0, w.caughtUp.Load())); !ok || a > age {
-			age, ok = a, true
-		}
-	}
-	return age, ok
-}
-
 // Health implements HealthReporter. It fails while a Watch has gone longer
 // than feedStaleAfter without catching up with the database: the server may
 // be missing other servers' changes, and its streams with them.
 func (p *PostgresStorage) Health() error {
-	if age, ok := p.feedAge(); ok && age > feedStaleAfter {
-		return fmt.Errorf("the postgres change feed has not caught up with the database for %v", age.Truncate(time.Second))
-	}
-	return nil
+	return p.feed.health()
 }
 
 // Close stops every Watch and closes the connection pool.
 func (p *PostgresStorage) Close(ctx context.Context) error {
-	p.cancel()
-	p.wg.Wait()
-	if p.metrics != nil {
-		_ = p.metrics.Unregister()
-	}
-	p.pool.Close()
-	return nil
+	return p.feed.close(func() error {
+		p.pool.Close()
+		return nil
+	})
 }
