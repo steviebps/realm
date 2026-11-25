@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -161,5 +162,65 @@ func TestStreamChamberFramesMultiLinePayloads(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(strings.Join(data, "\n")), &chamber); err != nil || chamber.Rules["flag"].Value != "one" {
 		t.Errorf("event data = %q, which does not hold the chamber (%v)", data, err)
+	}
+}
+
+// TestOpenStreamOrder checks that openStream subscribes before it prepares,
+// prepares before the response starts, refuses with the right status at each
+// step, and undoes each step when a later one fails or the stream closes.
+func TestOpenStreamOrder(t *testing.T) {
+	ctx := context.Background()
+	var steps []string
+	subscribe := func(ok bool) func() (<-chan struct{}, func(), bool) {
+		return func() (<-chan struct{}, func(), bool) {
+			steps = append(steps, "subscribe")
+			return make(chan struct{}), func() { steps = append(steps, "unsubscribe") }, ok
+		}
+	}
+	prepare := func(ok bool) func(http.ResponseWriter) (http.ResponseWriter, func(), bool) {
+		return func(w http.ResponseWriter) (http.ResponseWriter, func(), bool) {
+			if w.(*httptest.ResponseRecorder).Code != http.StatusOK || len(w.Header()) != 0 {
+				t.Error("prepare ran after the response started")
+			}
+			steps = append(steps, "prepare")
+			if !ok {
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				return nil, nil, false
+			}
+			return w, func() { steps = append(steps, "end") }, true
+		}
+	}
+
+	tests := []struct {
+		name       string
+		w          http.ResponseWriter
+		subscribe  bool
+		prepare    bool
+		wantStatus int
+		opens      bool
+		wantSteps  []string
+	}{
+		{"cannot stream", struct{ http.ResponseWriter }{httptest.NewRecorder()}, true, true, http.StatusInternalServerError, false, nil},
+		{"no room", httptest.NewRecorder(), false, true, http.StatusServiceUnavailable, false, []string{"subscribe"}},
+		{"prepare refuses", httptest.NewRecorder(), true, false, http.StatusRequestEntityTooLarge, false, []string{"subscribe", "prepare", "unsubscribe"}},
+		{"opens", httptest.NewRecorder(), true, true, http.StatusOK, true, []string{"subscribe", "prepare", "end", "unsubscribe"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps = nil
+			st := openStream(ctx, tt.w, subscribe(tt.subscribe), prepare(tt.prepare))
+			if (st != nil) != tt.opens {
+				t.Fatalf("opened = %v, want %v", st != nil, tt.opens)
+			}
+			if st != nil {
+				st.close()
+			}
+			if rec, ok := tt.w.(*httptest.ResponseRecorder); ok && rec.Code != tt.wantStatus {
+				t.Errorf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+			if !slices.Equal(steps, tt.wantSteps) {
+				t.Errorf("steps = %v, want %v", steps, tt.wantSteps)
+			}
+		})
 	}
 }
