@@ -35,9 +35,10 @@ export interface BrowserClientOptions extends ClientOptions {
   /**
    * Where to keep the latest evaluated values for each context (never the
    * rules), so that a start without a network serves them instead of
-   * fallbacks; see localStorageAdapter. Values are written whenever they
-   * change, and read back only for the context they were evaluated for. For
-   * each chamber, only the ten most recently used contexts' values are kept.
+   * fallbacks; see localStorageAdapter and indexedDbAdapter. Values are
+   * written whenever they change, and read back only for the context they
+   * were evaluated for. For each chamber, only the ten most recently used
+   * contexts' values are kept.
    */
   storage?: StorageAdapter;
 }

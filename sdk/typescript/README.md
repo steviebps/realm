@@ -280,14 +280,14 @@ network (a PWA reloaded offline, say) serves every flag's fallback until the
 server answers. Two options give it values to start from:
 
 ```ts
-import { BrowserClient, localStorageAdapter } from '@steviebps/realm-sdk';
+import { BrowserClient, indexedDbAdapter, localStorageAdapter } from '@steviebps/realm-sdk';
 
 const flags = new BrowserClient({
   address: 'https://realm.example.com',
   token: 'realm_…',
   path: '/prod/web/',
   context: { key: device.id, attributes: { location: device.location } },
-  storage: localStorageAdapter(), // remember each context's latest values
+  storage: localStorageAdapter(), // or indexedDbAdapter(): remember each context's latest values
   bootstrap: { 'new-checkout': { type: 'boolean', value: false } }, // values for `context`
 });
 
@@ -309,7 +309,13 @@ context, and reads them back for that context only:
 - `localStorageAdapter()` uses `localStorage` (or another Web Storage area
   you pass, such as `sessionStorage`). Where there is none, such as in server
   rendering, it stores nothing.
-- For another store, such as IndexedDB, implement `StorageAdapter`:
+- `indexedDbAdapter({ dbName?, storeName? })` uses one object store in
+  IndexedDB (database `realm`, store `flags` by default), for apps such as
+  PWAs that keep their offline data there. It creates the database or the
+  store if missing, so it can share a database your app already uses. Where
+  IndexedDB is unavailable, as in some private modes, it rejects, and the
+  client carries on without the cache.
+- For another store, implement `StorageAdapter`:
   `getItem`, `setItem`, and optionally `removeItem`, each synchronous or
   returning a promise. Values from an asynchronous store apply when they
   arrive, unless the server answered first or the context changed.

@@ -46,6 +46,119 @@ export function localStorageAdapter(storage?: Storage): StorageAdapter {
   };
 }
 
+/** Where an indexedDbAdapter keeps its values. */
+export interface IndexedDbAdapterOptions {
+  /** The database to use; it is created if missing. Default `'realm'`. */
+  dbName?: string;
+  /**
+   * The object store in that database to keep values in; it is created if
+   * missing, even in a database the app already uses. Default `'flags'`.
+   */
+  storeName?: string;
+}
+
+/**
+ * A StorageAdapter over one object store in the browser's IndexedDB, for
+ * apps (such as PWAs) that keep their offline data there rather than in the
+ * small, synchronous localStorage. It opens the database on first use. Where
+ * there is no IndexedDB, as in server rendering or some private modes, or the
+ * browser refuses it, its methods reject, and a client carries on without the
+ * cache.
+ */
+export function indexedDbAdapter(options: IndexedDbAdapterOptions = {}): Required<StorageAdapter> {
+  const dbName = options.dbName ?? 'realm';
+  const storeName = options.storeName ?? 'flags';
+  let db: Promise<IDBDatabase> | undefined;
+  // A failed or closed connection is forgotten, so the next call opens
+  // another; a late event from an old one leaves a newer one alone.
+  const open = (): Promise<IDBDatabase> => {
+    if (db) return db;
+    const forget = (): void => {
+      if (db === opening) db = undefined;
+    };
+    const opening: Promise<IDBDatabase> = openStore(dbName, storeName, forget).catch((err: unknown) => {
+      forget();
+      throw err;
+    });
+    return (db = opening);
+  };
+
+  // run resolves with request's result once its transaction has committed.
+  const run = async <T>(mode: IDBTransactionMode, request: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> => {
+    const database = await open();
+    // On a connection closed meanwhile, transaction throws, and this rejects.
+    return new Promise<T>((resolve, reject) => {
+      const tx = database.transaction(storeName, mode);
+      const req = request(tx.objectStore(storeName));
+      tx.oncomplete = () => resolve(req.result);
+      tx.onerror = () => reject(tx.error ?? req.error);
+      tx.onabort = () => reject(tx.error ?? new DOMException('The transaction was aborted.', 'AbortError'));
+    });
+  };
+
+  return {
+    // A value that is not a string was written by another program; it reads as none.
+    getItem: async (key) => {
+      const value: unknown = await run('readonly', (store) => store.get(key));
+      return typeof value === 'string' ? value : null;
+    },
+    setItem: async (key, value) => {
+      await run('readwrite', (store) => store.put(value, key));
+    },
+    removeItem: async (key) => {
+      await run('readwrite', (store) => store.delete(key));
+    },
+  };
+}
+
+// openStore opens the database name with the object store store, adding the
+// store in a version upgrade if the database lacks it. onClose is called when
+// the connection closes: when another page upgrades the database (this one
+// closes so as not to block it), or the browser closes it. An upgrade that
+// another connection blocks rejects at once rather than wait for it, and
+// the connection it gets later is closed.
+function openStore(name: string, store: string, onClose: () => void, version?: number): Promise<IDBDatabase> {
+  let blocked = false;
+  return new Promise((resolve, reject) => {
+    let factory: IDBFactory | undefined;
+    try {
+      factory = (globalThis as { indexedDB?: IDBFactory }).indexedDB;
+    } catch {
+      // Reading indexedDB throws where the browser forbids storage.
+    }
+    if (!factory) throw new Error('realm: IndexedDB is unavailable');
+    const req = version === undefined ? factory.open(name) : factory.open(name, version);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains(store)) req.result.createObjectStore(store);
+    };
+    req.onsuccess = () => {
+      const database = req.result;
+      if (blocked) {
+        database.close();
+        return;
+      }
+      if (!database.objectStoreNames.contains(store)) {
+        // The app's own database, without our store: add it.
+        const next = database.version + 1;
+        database.close();
+        openStore(name, store, onClose, next).then(resolve, reject);
+        return;
+      }
+      database.onversionchange = () => {
+        database.close();
+        onClose();
+      };
+      database.onclose = onClose;
+      resolve(database);
+    };
+    req.onerror = () => reject(req.error);
+    req.onblocked = () => {
+      blocked = true;
+      reject(new Error(`realm: another connection to IndexedDB database ${name} blocks adding store ${store}`));
+    };
+  });
+}
+
 /** How many contexts' values a client keeps in storage for each chamber. */
 export const maxStoredContexts = 10;
 
