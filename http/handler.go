@@ -117,7 +117,7 @@ func handle(ctx context.Context, hc HandlerConfig, authn *auth.Authenticator) ht
 	// A backend that reports every change, including other servers' writes,
 	// drives the broker; otherwise the handler notifies it after each write.
 	notify := brk.Notify
-	if feed, ok := meta.strg.(storage.Watchable); ok {
+	if feed, ok := storage.ChangeFeed(hc.Storage); ok {
 		notify = func(string) {}
 		go func() {
 			for c := range feed.Watch(ctx) {
@@ -853,8 +853,8 @@ func handleReady(strg storage.Storage, draining <-chan struct{}) http.HandlerFun
 				lastErr = fmt.Errorf("storage unavailable: %w", err)
 			}
 		}
-		if hr, ok := strg.(interface{ Health() error }); ok && lastErr == nil {
-			if err := hr.Health(); err != nil {
+		if lastErr == nil {
+			if err := storage.Health(strg); err != nil {
 				lastErr = fmt.Errorf("storage unhealthy: %w", err)
 			}
 		}

@@ -306,7 +306,7 @@ func sealedIn(c *realm.Chamber) iter.Seq[string] {
 // when s applies inheritance, otherwise the chamber alone (Inheritable is
 // false). It returns a NotFoundError when there is no chamber at logicalPath.
 func ReadLineage(ctx context.Context, s Storage, logicalPath string) (*Lineage, error) {
-	if layered, ok := s.(Layered); ok {
+	if layered, ok := find[Layered](s); ok {
 		return layered.Layers(ctx, logicalPath)
 	}
 	return storedLineage(ctx, logicalPath, s.Get, ParseLayer, nil, false)

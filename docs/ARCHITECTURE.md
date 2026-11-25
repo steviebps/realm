@@ -427,8 +427,9 @@ Two wrappers compose backends:
   then drop the entry from the cache, even when the write failed (it may have
   landed). A generation counter keeps a fill that read the source before a
   write from landing after it, and `Update` reads the source (`UpdateReader`).
-  It refuses a `postgres` or `etcd` source: another replica's write would
-  leave this replica's cache stale.
+  It refuses a source with a change feed (`Watchable`, so `postgres` and
+  `etcd`), in `NewCacheableStorage` itself: another replica's write would
+  leave this replica's cache stale, and the feed would go unseen.
 - **`inheritable`** (`inheritable.go`, enabled by `inheritable: true`) — on
   `Get`, merges a chamber with every ancestor along the path, up to and
   including the root chamber `/`, so child chambers inherit parent definitions and

@@ -31,8 +31,8 @@ type Storage interface {
 
 // HealthReporter is implemented by storage that can tell whether it works as
 // it should beyond answering reads: for example, whether the change feed that
-// keeps this server's streams current is keeping up with the database.
-// Capabilities like this belong to the innermost storage (see Raw).
+// keeps this server's streams current is keeping up with the database. See
+// Health.
 type HealthReporter interface {
 	// Health returns nil when the storage is healthy, or an error saying
 	// what is wrong.
@@ -133,8 +133,8 @@ type Unwrapper interface {
 }
 
 // Raw returns the innermost storage beneath any wrappers that transform
-// reads, which holds entries exactly as written. Capabilities such as
-// Transactional and Watchable belong to it.
+// reads, which holds entries exactly as written: what Update reads and
+// writes.
 func Raw(s Storage) Storage {
 	for {
 		u, ok := s.(Unwrapper)
@@ -143,4 +143,46 @@ func Raw(s Storage) Storage {
 		}
 		s = u.Unwrap()
 	}
+}
+
+// find returns the outermost storage along s's wrappers (s, then what each
+// Unwrapper wraps, down to Raw(s)) that implements T. Every optional
+// capability is found this way, so it does not matter which wrapper offers
+// it: inheritance (Layered) is a wrapper's, and range reads (Scanner), the
+// change feed (Watchable), and health (HealthReporter) are the innermost
+// storage's.
+func find[T any](s Storage) (T, bool) {
+	for {
+		if t, ok := s.(T); ok {
+			return t, true
+		}
+		u, ok := s.(Unwrapper)
+		if !ok {
+			var zero T
+			return zero, false
+		}
+		s = u.Unwrap()
+	}
+}
+
+// CanScan reports whether s reads a prefix with one range read (see Scanner),
+// which ListTree, ReadLayers, and ReadTree use when it can.
+func CanScan(s Storage) bool {
+	_, ok := find[Scanner](s)
+	return ok
+}
+
+// ChangeFeed returns the storage beneath s that reports every change,
+// including other servers' (see Watchable), if there is one.
+func ChangeFeed(s Storage) (Watchable, bool) {
+	return find[Watchable](s)
+}
+
+// Health returns why s does not work as it should beyond answering reads
+// (see HealthReporter), or nil when it does or cannot tell.
+func Health(s Storage) error {
+	if hr, ok := find[HealthReporter](s); ok {
+		return hr.Health()
+	}
+	return nil
 }
