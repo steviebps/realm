@@ -41,7 +41,7 @@ func ListTree(ctx context.Context, s Storage, root string, limit int) ([]string,
 
 	var paths []string
 	var err error
-	if sc, ok := Raw(s).(Scanner); ok {
+	if sc, ok := find[Scanner](s); ok {
 		span.SetAttributes(attribute.Bool("realm.subtree.scan", true))
 		paths, err = scanTree(ctx, sc, root, limit)
 	} else {
@@ -166,7 +166,7 @@ func readLayerWith(ctx context.Context, s Storage, p string, parse func(string, 
 // the paths were listed are left out. ok is false, and nothing is read, when
 // Raw(s) is not a Scanner. The layers are held in memory together.
 func ScanLayers(ctx context.Context, s Storage, paths []string) (layers map[string]Layer, ok bool, err error) {
-	sc, ok := Raw(s).(Scanner)
+	sc, ok := find[Scanner](s)
 	if !ok || len(paths) == 0 {
 		return nil, ok, nil
 	}
@@ -222,7 +222,7 @@ func RawLayers(s Storage) LayerReader {
 // IsInheritable reports whether s applies inheritance to the chambers it
 // reads (see Layered).
 func IsInheritable(s Storage) bool {
-	_, ok := s.(Layered)
+	_, ok := find[Layered](s)
 	return ok
 }
 
@@ -295,7 +295,7 @@ func WalkTree(ctx context.Context, read LayerReader, inheritable bool, paths []s
 // reported before a failed scan.
 func ReadTree(ctx context.Context, s Storage, paths []string) iter.Seq2[View, error] {
 	var scan func(context.Context, string) iter.Seq2[*StorageEntry, error]
-	if sc, ok := Raw(s).(Scanner); ok {
+	if sc, ok := find[Scanner](s); ok {
 		scan = sc.Scan
 	}
 	return walkTree(ctx, RawLayers(s), IsInheritable(s), paths, scan)

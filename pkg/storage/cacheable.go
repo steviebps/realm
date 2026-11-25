@@ -58,10 +58,17 @@ var (
 )
 
 // NewCacheableStorage returns storage that caches source's entries in cache.
-// It is Transactional when source is.
+// It is Transactional when source is. It refuses a source with a change feed
+// (see Watchable): several servers share it, and the cache would hide both
+// the feed and the changes they make.
 func NewCacheableStorage(cache Storage, source Storage) (Storage, error) {
 	if cache == nil || source == nil {
 		return nil, fmt.Errorf("storage cannot be nil")
+	}
+	if _, ok := ChangeFeed(source); ok {
+		// Its feed would go unseen beneath the cache, and other servers'
+		// writes would never leave this one's cache.
+		return nil, errors.New("storage that several servers share (one with a change feed, such as postgres or etcd) cannot be cached: serve it directly")
 	}
 
 	c := &CacheableStorage{

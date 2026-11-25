@@ -598,7 +598,7 @@ func (s *sharedViews) layer(ctx context.Context, p string) (storage.Layer, error
 // same root share the scan, once per change; chambers already read since the
 // change are kept.
 func (s *sharedViews) prefill(ctx context.Context, paths []string) error {
-	if _, ok := s.raw.(storage.Scanner); !ok || len(paths) == 0 {
+	if !storage.CanScan(s.raw) || len(paths) == 0 {
 		return nil
 	}
 	_, err := shared(ctx, s, func(g *viewGeneration) map[string]*sharedCall[struct{}] { return g.scans }, paths[0], func(ctx context.Context, g *viewGeneration) (struct{}, error) {
