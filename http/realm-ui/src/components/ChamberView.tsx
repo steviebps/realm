@@ -383,7 +383,7 @@ export const ChamberView = ({ path }: { path: string }) => {
       {proposal && (
         <ConfirmChange
           title={proposal.title}
-          changes={diffChambers(proposal.base.own, proposal.after, catalog)}
+          changes={diffChambers(proposal.base.own, proposal.after, catalog, proposal.base.nullFlags)}
           saving={proposal.saving}
           rebased={proposal.rebased}
           overwrites={proposal.overwrites}

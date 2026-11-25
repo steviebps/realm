@@ -49,3 +49,42 @@ void test('diffChambers lists added, removed, and unchanged flags', () => {
     ].sort()
   );
 });
+
+void test('diffChambers lists the flags written as null that saving removes, and what is served instead', () => {
+  const changes = diffChambers(
+    chamber({ kept: { type: 'boolean', value: true } }),
+    chamber({ kept: { type: 'boolean', value: false }, again: { type: 'number', value: 1 } }),
+    {},
+    [
+      { name: 'beta', inherits: { path: '/', flag: { type: 'boolean', value: true } } },
+      { name: 'gamma' },
+      { name: 'delta', unknown: true },
+      // defined again by the change: shown as added
+      { name: 'again' },
+    ]
+  );
+  assert.deepEqual(
+    changes.map((c) => [c.flag, c.kind]),
+    [
+      ['again', 'added'],
+      ['beta', 'removed'],
+      ['delta', 'removed'],
+      ['gamma', 'removed'],
+      ['kept', 'changed'],
+    ]
+  );
+  const lines = Object.fromEntries(changes.map((c) => [c.flag, c.lines]));
+  assert.deepEqual(lines.beta, [
+    { kind: 'remove', text: "Written as null: serves nothing here, hiding /'s definition" },
+    { kind: 'info', text: "Saving removes it, so this chamber serves /'s definition:" },
+    { kind: 'add', text: 'No targeting: every context gets true.' },
+  ]);
+  assert.deepEqual(lines.gamma, [
+    { kind: 'remove', text: 'Written as null' },
+    { kind: 'info', text: 'Saving removes it; what this chamber serves for it does not change' },
+  ]);
+  assert.deepEqual(lines.delta, [
+    { kind: 'remove', text: 'Written as null' },
+    { kind: 'info', text: "Saving removes it, so this chamber serves a parent chamber's definition, if one has it" },
+  ]);
+});

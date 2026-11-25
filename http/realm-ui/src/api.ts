@@ -13,6 +13,7 @@ import {
 } from './models/response';
 import { withoutNullFlags } from './utils/flags';
 import { encodePath, ensureTrailingSlash } from './utils/path';
+import { nullFlagsIn, type NullFlag } from './utils/provenance';
 import { messageOf } from './utils/strings';
 
 const ACTOR_KEY = 'realm.actor';
@@ -98,6 +99,8 @@ export type LoadedChamber = {
   lineage: Lineage | null;
   /** Why the lineage could not be loaded: a ForbiddenError when the caller may not read every parent chamber. */
   lineageError: Error | null;
+  /** The flags the stored chamber writes as null, which own leaves out and saving it removes. */
+  nullFlags: NullFlag[];
 };
 
 const OLDER_SERVER = "This server doesn't report where inherited flags come from. Update it to see parent chambers.";
@@ -113,15 +116,30 @@ const lineageFrom = async (res: Response): Promise<Pick<LoadedChamber, 'lineage'
     if (typeof lineage?.inheritable !== 'boolean' || !Array.isArray(lineage.layers) || lineage.layers.length === 0) {
       return { lineage: null, lineageError: new Error(OLDER_SERVER) };
     }
-    // flags written as null serve nothing; the UI never holds one
-    const layers = lineage.layers.map((l) =>
-      l.rules ? { ...l, rules: withoutNullFlags({ rules: l.rules })?.rules } : l
-    );
-    return { lineage: { ...lineage, layers }, lineageError: null };
+    return { lineage, lineageError: null };
   } catch (err) {
     return { lineage: null, lineageError: err instanceof Error ? err : new Error(messageOf(err)) };
   }
 };
+
+/**
+ * The chamber own, read with etag, and its lineage, as the UI holds them: without the flags written as null, which
+ * writes refuse, and with what removing those own writes changes, as saving it does.
+ */
+const loaded = (
+  own: WireChamber | null | undefined,
+  etag: string | null,
+  { lineage, lineageError }: Pick<LoadedChamber, 'lineage' | 'lineageError'>
+): LoadedChamber => ({
+  own: withoutNullFlags(own),
+  etag,
+  lineage: lineage && {
+    ...lineage,
+    layers: lineage.layers.map((l) => (l.rules ? { ...l, rules: withoutNullFlags({ rules: l.rules })?.rules } : l)),
+  },
+  lineageError,
+  nullFlags: nullFlagsIn(own, lineage),
+});
 
 /**
  * Loads the chamber at path for editing: as stored, with its ETag, and the lineage it inherits from, all from one
@@ -132,23 +150,23 @@ const lineageFrom = async (res: Response): Promise<Pick<LoadedChamber, 'lineage'
 export const getChamber = async (path: string): Promise<LoadedChamber> => {
   const layersRes = await fetch(chamberURL(path, '?inherit=layers'));
   if (layersRes.status === 404) {
-    return { own: null, etag: null, lineage: null, lineageError: null };
+    return { own: null, etag: null, lineage: null, lineageError: null, nullFlags: [] };
   }
   const etag = layersRes.headers.get('ETag');
   const lineage = await lineageFrom(layersRes);
   const here = lineage.lineage?.layers[0];
   if (etag && here?.status === 'ok') {
-    return { own: withoutNullFlags({ rules: here.rules ?? {} }), etag, ...lineage };
+    return loaded({ rules: here.rules ?? {} }, etag, lineage);
   }
   const ownRes = await fetch(chamberURL(path, '?inherit=false'));
   if (ownRes.status === 404) {
-    return { own: null, etag: null, lineage: null, lineageError: null };
+    return { own: null, etag: null, lineage: null, lineageError: null, nullFlags: [] };
   }
   if (!ownRes.ok) {
     throw await errorFrom(ownRes);
   }
   const own = (await ownRes.json()) as ChamberResponse;
-  return { own: withoutNullFlags(own.data), etag: ownRes.headers.get('ETag'), ...lineage };
+  return loaded(own.data, ownRes.headers.get('ETag'), lineage);
 };
 
 // The server records an unset actor as anonymous.

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Lineage } from '../models/response.ts';
-import { ancestorsOf, provenance } from './provenance.ts';
+import { ancestorsOf, nullFlagsIn, provenance } from './provenance.ts';
 
 const bool = (value: boolean) => ({ type: 'boolean' as const, value });
 const num = (value: number) => ({ type: 'number' as const, value });
@@ -235,4 +235,38 @@ void test('a server that predates seals seals nothing', () => {
   const p = provenance(canary);
   assert.deepEqual(p.sealedBy, {});
   for (const served of Object.values(p.inherited ?? {})) assert.deepEqual(served.hidden, []);
+});
+
+void test('nullFlagsIn says what removing each flag written as null changes', () => {
+  const lineage: Lineage = {
+    inheritable: true,
+    layers: [
+      // as the server sends it: flags written as null are kept
+      { path: '/prod/', status: 'ok', rules: { beta: null, gamma: null, delta: null, kept: bool(true) } as never },
+      { path: '/', status: 'ok', rules: { beta: bool(true), gamma: null, delta: bool(true) } as never },
+    ],
+    sources: { beta: '/prod/', gamma: '/prod/', delta: '/', kept: '/prod/' },
+    sealedBy: { delta: '/' },
+  };
+  const own = { rules: { kept: bool(true), gamma: null, beta: null, delta: null, unwritten: null } };
+  assert.deepEqual(nullFlagsIn(own, lineage), [
+    // it hides the parent's definition, which removing it serves
+    { name: 'beta', inherits: { path: '/', flag: bool(true) } },
+    // a seal hides it: the sealing parent's definition is served either way
+    { name: 'delta' },
+    // the nearest parent writes it as null too
+    { name: 'gamma' },
+    // no parent defines it
+    { name: 'unwritten' },
+  ]);
+});
+
+void test('nullFlagsIn does not know what removing one changes without the inherited view', () => {
+  const own = { rules: { beta: null, kept: bool(true) } };
+  assert.deepEqual(nullFlagsIn(own, null), [{ name: 'beta', unknown: true }]);
+  assert.deepEqual(nullFlagsIn(own, { ...canary, sources: null, error: 'cannot parse /prod/' }), [
+    { name: 'beta', unknown: true },
+  ]);
+  assert.deepEqual(nullFlagsIn({ rules: { beta: null } }, { ...canary, inheritable: false }), [{ name: 'beta' }]);
+  assert.deepEqual(nullFlagsIn(null, null), []);
 });

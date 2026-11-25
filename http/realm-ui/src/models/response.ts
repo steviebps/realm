@@ -20,7 +20,7 @@ export type {
 } from '../../../../sdk/typescript/src/types.ts';
 import type { Chamber as WireChamber, Flag } from '../../../../sdk/typescript/src/types.ts';
 
-/** A chamber as the server sends it, whose flags may be null (see withoutNullFlags in api.ts). */
+/** A chamber as the server sends it, whose flags may be null (see withoutNullFlags in utils/flags). */
 export type { WireChamber };
 
 /** A flag's value: any JSON, as a custom flag may hold arrays and null. */
@@ -30,8 +30,8 @@ export type FlagValue = Flag['value'];
 export type Rules = Record<string, Flag>;
 
 /**
- * A chamber as the UI holds it: the server's, without flags written as null, which serve nothing and which writes
- * now refuse (api.ts drops them as it loads a chamber).
+ * A chamber as the UI holds it: the server's, without flags written as null, which writes now refuse (api.ts drops
+ * them as it loads a chamber, and saving lists each one it removes: see NullFlag in utils/provenance).
  */
 export type Chamber = { rules: Rules };
 
@@ -40,6 +40,11 @@ export type ChamberResponse = {
   errors?: Array<string>;
 };
 
+/**
+ * How a chamber in a lineage was read: `ok` (its rules hold every flag it
+ * defines), `missing` (no chamber at the path; it contributes nothing), or
+ * `invalid` (it cannot be parsed; `error` says why).
+ */
 export type LayerStatus = 'ok' | 'missing' | 'invalid';
 
 /** One chamber that a path's inherited view is built from. */

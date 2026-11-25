@@ -1,6 +1,6 @@
 // Type imports only: the node:test suite runs this file with Node's type
 // stripping, which cannot resolve extensionless value imports.
-import type { Flag, LayerStatus, Lineage } from '../models/response';
+import type { Flag, LayerStatus, Lineage, WireChamber } from '../models/response';
 
 /** One chamber's definition of a flag. */
 export type Definition = { path: string; flag: Flag };
@@ -73,6 +73,41 @@ export const aboutOf = (
 /** record[key] when record has its own key: a flag named "constructor" must not find Object.prototype's. */
 export const get = <T>(record: Record<string, T> | null | undefined, key: string): T | undefined =>
   record && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+
+/**
+ * A flag a stored chamber writes as null, which writes now refuse. Unless a parent seals the flag, the chamber serves
+ * nothing for it, hiding every parent's definition. The UI does not hold one (see withoutNullFlags), so saving the
+ * chamber from the UI removes it, which can change what the chamber serves.
+ */
+export type NullFlag = {
+  name: string;
+  /** The parent's definition the chamber serves once the flag is removed, when removing it changes what it serves. */
+  inherits?: Definition;
+  /** Set when what removing it changes is unknown: the chamber's inherited view could not be read. */
+  unknown?: boolean;
+};
+
+/**
+ * The flags own writes as null, sorted, and what removing each changes, given the lineage of own as the server sent
+ * it (with the flags its layers write as null).
+ */
+export const nullFlagsIn = (own: WireChamber | null | undefined, lineage: Lineage | null): NullFlag[] =>
+  Object.entries(own?.rules ?? {})
+    .filter(([, flag]) => flag === null)
+    .map(([name]) => name)
+    .sort()
+    .map((name): NullFlag => {
+      if (!lineage || lineage.error !== undefined) return { name, unknown: true };
+      // a seal serves the farthest sealing parent's definition, with or without this one
+      if (!lineage.inheritable || get(lineage.sealedBy, name) !== undefined) return { name };
+      // otherwise the nearest parent that writes the flag decides: its definition, or another null
+      for (const layer of lineage.layers.slice(1)) {
+        const flag = get<Flag | null>(layer.rules, name);
+        if (flag === undefined) continue;
+        return flag ? { name, inherits: { path: layer.path, flag } } : { name };
+      }
+      return { name };
+    });
 
 /**
  * Returns the ancestors of a chamber path, nearest first: "/a/b/c/" →

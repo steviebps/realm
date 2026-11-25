@@ -21,6 +21,7 @@ const loaded = (rules: Chamber['rules'], etag: string): LoadedChamber => ({
   etag,
   lineage: null,
   lineageError: null,
+  nullFlags: [],
 });
 
 class Conflict extends Error {}

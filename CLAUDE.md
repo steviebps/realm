@@ -210,7 +210,9 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   the UI's `http/realm-ui/src/models/response.ts` re-exports them (type-only,
   so the Docker UI stage copies just that file) and declares only the shapes
   the UI alone reads. The UI holds chambers without null flags
-  (`withoutNullFlags`), which writes refuse.
+  (`withoutNullFlags`), which writes refuse. A stored one still hides its
+  parents' definitions, so saving lists each one it removes and what the
+  chamber serves instead (`nullFlagsIn`, `diffChambers`).
 - **Paths are canonicalized once** (`utils.CanonicalPath`: request paths in
   `logicalPath`, `http/agent.go`; key and grant paths in `auth.scopePath`) and
   never unescaped twice; check `storage.IsReservedPath` on the canonical form.

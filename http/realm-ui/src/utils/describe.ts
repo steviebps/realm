@@ -2,6 +2,7 @@
 import type { Catalog, Chamber, Clause, Flag, FlagValue, Operator, Schedule, TargetingRule } from '../models/response';
 import { jsonEqual, summarizeConstraints } from './constraints.ts';
 import { rulesOf, targetingPaused } from './flags.ts';
+import type { NullFlag } from './provenance.ts';
 import { formatTime } from './schedule.ts';
 
 export const OPERATOR_LABELS: Record<Operator, string> = {
@@ -89,19 +90,48 @@ const ABOUT = {
     f.constraints !== undefined && `Allowed values: ${summarizeConstraints(f.constraints, f.type)}`,
 };
 
+/** How a change describes removing a flag the stored chamber writes as null: what the chamber serves instead. */
+const nullRemoved = ({ inherits, unknown }: NullFlag, catalog: Catalog): FlagChange['lines'] => {
+  if (inherits) {
+    return [
+      { kind: 'remove', text: `Written as null: serves nothing here, hiding ${inherits.path}'s definition` },
+      { kind: 'info', text: `Saving removes it, so this chamber serves ${inherits.path}'s definition:` },
+      ...describeDefinition(inherits.flag, catalog).map((text) => ({ kind: 'add' as const, text })),
+    ];
+  }
+  return [
+    { kind: 'remove', text: 'Written as null' },
+    unknown
+      ? { kind: 'info', text: "Saving removes it, so this chamber serves a parent chamber's definition, if one has it" }
+      : { kind: 'info', text: 'Saving removes it; what this chamber serves for it does not change' },
+  ];
+};
+
 /**
  * Computes a human-readable diff between two chambers, flag by flag, so an
  * editor can confirm exactly what will change before saving.
  */
-export const diffChambers = (before: Chamber | null, after: Chamber | null, catalog: Catalog): FlagChange[] => {
+export const diffChambers = (
+  before: Chamber | null,
+  after: Chamber | null,
+  catalog: Catalog,
+  /** The flags the stored chamber writes as null, which before leaves out: saving after removes them. */
+  nullFlags: NullFlag[] = []
+): FlagChange[] => {
   const a = before?.rules ?? {};
   const b = after?.rules ?? {};
-  const names = Array.from(new Set([...Object.keys(a), ...Object.keys(b)])).sort();
+  const nulls = new Map(nullFlags.map((n) => [n.name, n]));
+  const names = Array.from(new Set([...Object.keys(a), ...Object.keys(b), ...nulls.keys()])).sort();
   const changes: FlagChange[] = [];
 
   for (const name of names) {
     const was = a[name];
     const now = b[name];
+    const nulled = nulls.get(name);
+    if (!was && !now && nulled) {
+      changes.push({ flag: name, kind: 'removed', lines: nullRemoved(nulled, catalog) });
+      continue;
+    }
     if (!was && now) {
       changes.push({
         flag: name,
