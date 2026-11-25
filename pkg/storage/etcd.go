@@ -11,7 +11,6 @@ import (
 	"os"
 	"slices"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -41,17 +40,8 @@ type EtcdStorage struct {
 	prefix string
 	tracer trace.Tracer
 
-	// ctx is canceled by Close, stopping every Watch.
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	closeOnce sync.Once
-
-	// mu guards watchers, the running Watches, which Health and the feed age
-	// metric inspect.
-	mu       sync.Mutex
-	watchers map[*etcdWatcher]struct{}
-	metrics  metric.Registration
+	// feed runs the Watches (see changeFeed).
+	feed *changeFeed
 }
 
 var (
@@ -152,22 +142,19 @@ func NewEtcdStorage(conf map[string]string) (Storage, error) {
 		return nil, fmt.Errorf("could not reach etcd at %s: %w", strings.Join(endpoints, ", "), err)
 	}
 
-	sctx, scancel := context.WithCancel(context.Background())
 	s := &EtcdStorage{
-		client:   client,
-		prefix:   prefix,
-		tracer:   otel.Tracer("github.com/steviebps/realm"),
-		ctx:      sctx,
-		cancel:   scancel,
-		watchers: map[*etcdWatcher]struct{}{},
+		client: client,
+		prefix: prefix,
+		tracer: otel.Tracer("github.com/steviebps/realm"),
+		feed: newChangeFeed(feedConfig{
+			name:       "etcd",
+			retry:      &etcdRetryInterval,
+			maxRetry:   &etcdMaxRetryInterval,
+			staleAfter: &etcdFeedStaleAfter,
+			restarts:   etcdFeedRestarts,
+			age:        etcdFeedAgeGauge,
+		}),
 	}
-	// without a working meter, the feed simply goes unmeasured
-	s.metrics, _ = otel.Meter("github.com/steviebps/realm").RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		if age, ok := s.feedAge(); ok {
-			o.ObserveFloat64(etcdFeedAgeGauge, age.Seconds())
-		}
-		return nil
-	}, etcdFeedAgeGauge)
 	return s, nil
 }
 
@@ -479,57 +466,34 @@ func etcdLimitError(err error, ops int) error {
 // compacted, or the cluster's revision went back (it was restored from an
 // older backup), so that its revisions no longer match the ones reported.
 func (s *EtcdStorage) Watch(ctx context.Context) <-chan Change {
-	out := make(chan Change, 64)
-	ctx, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(s.ctx, cancel)
-
-	w := &etcdWatcher{s: s, out: out}
-	// a new feed has etcdFeedStaleAfter to catch up before Health reports it
-	w.caughtUp.Store(time.Now().UnixNano())
-	// start from the current revision; on failure, the watch that starts
-	// first reports that anything may have changed
-	if head, err := w.head(ctx); err == nil {
-		w.last = head
-		w.confirmed.Store(head)
-	} else {
-		w.lost = true
-	}
-
-	s.mu.Lock()
-	s.watchers[w] = struct{}{}
-	s.mu.Unlock()
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		defer close(out)
-		defer stop()
-		defer cancel()
-		defer func() {
-			s.mu.Lock()
-			delete(s.watchers, w)
-			s.mu.Unlock()
-		}()
-		w.run(ctx)
-	}()
-	return out
+	return s.feed.watch(ctx, func(ctx context.Context, fw *feedWatch) feedSession {
+		w := &etcdWatcher{s: s, fw: fw}
+		// start from the current revision; on failure, the watch that starts
+		// first reports that anything may have changed
+		if head, err := w.head(ctx); err == nil {
+			w.last = head
+			w.confirmed.Store(head)
+		} else {
+			w.lost = true
+		}
+		return w
+	})
 }
 
+// etcdWatcher is a Watch's session: one etcd watch at a time.
 type etcdWatcher struct {
-	s   *EtcdStorage
-	out chan<- Change
+	s  *EtcdStorage
+	fw *feedWatch
 	// last is the revision up to which every change has been reported.
 	last uint64
 	// lost is set when changes may have been missed.
 	lost bool
 	// confirmed is the revision up to which etcd has confirmed delivering
-	// every change; probe reads it while watch updates it.
+	// every change; probe reads it while run updates it.
 	confirmed atomic.Uint64
 	// rewound is set by probe when the cluster's revision went below
 	// confirmed.
 	rewound atomic.Bool
-	// caughtUp is when the watch was last found current (or it started),
-	// in Unix nanoseconds.
-	caughtUp atomic.Int64
 }
 
 var (
@@ -543,29 +507,6 @@ var (
 		metric.WithUnit("s"))
 )
 
-func (w *etcdWatcher) run(ctx context.Context) {
-	logger := logging.Ctx(ctx)
-	delay := etcdRetryInterval
-	for ctx.Err() == nil {
-		began := time.Now()
-		err := w.watch(ctx)
-		if ctx.Err() != nil {
-			return
-		}
-		// a watch that held for a while starts the backoff over
-		if time.Since(began) > etcdMaxRetryInterval {
-			delay = etcdRetryInterval
-		}
-		etcdFeedRestarts.Add(ctx, 1)
-		logger.WarnCtx(ctx).Str("error", fmt.Sprint(err)).Dur("retry_in", delay).Msg("etcd change feed ended; restarting it")
-		select {
-		case <-ctx.Done():
-		case <-time.After(delay):
-		}
-		delay = min(delay*2, etcdMaxRetryInterval)
-	}
-}
-
 // head returns the cluster's current revision.
 func (w *etcdWatcher) head(ctx context.Context) (uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, etcdTimeout)
@@ -577,9 +518,9 @@ func (w *etcdWatcher) head(ctx context.Context) (uint64, error) {
 	return uint64(resp.Header.Revision), nil
 }
 
-// watch runs one etcd watch from the revision after w.last, reporting its
-// changes, until etcd ends it or ctx is done.
-func (w *etcdWatcher) watch(ctx context.Context) error {
+// run runs one etcd watch from the revision after w.last, reporting its
+// changes, until etcd ends it or ctx is done. It implements feedSession.
+func (w *etcdWatcher) run(ctx context.Context) error {
 	if w.lost {
 		head, err := w.head(ctx)
 		if err != nil {
@@ -636,7 +577,7 @@ func (w *etcdWatcher) watch(ctx context.Context) error {
 			// every change up to the revision etcd was at has been delivered
 			w.last = max(w.last, uint64(resp.Header.Revision))
 			w.confirmed.Store(w.last)
-			w.caughtUp.Store(time.Now().UnixNano())
+			w.fw.caughtUp()
 		} else if w.last > w.confirmed.Load() {
 			w.confirmed.Store(w.last)
 		}
@@ -674,7 +615,7 @@ func (w *etcdWatcher) probe(ctx context.Context, stop context.CancelFunc) {
 			return
 		}
 		if head == confirmed {
-			w.caughtUp.Store(time.Now().UnixNano())
+			w.fw.caughtUp()
 			continue
 		}
 		// the same metadata (ctx's) selects this watch's stream
@@ -685,51 +626,23 @@ func (w *etcdWatcher) probe(ctx context.Context, stop context.CancelFunc) {
 }
 
 func (w *etcdWatcher) send(ctx context.Context, c Change) error {
-	select {
-	case w.out <- c:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-// feedAge returns how long ago the running Watch furthest behind was last
-// found current; ok is false when no Watch is running.
-func (s *EtcdStorage) feedAge() (age time.Duration, ok bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := time.Now()
-	for w := range s.watchers {
-		if a := now.Sub(time.Unix(0, w.caughtUp.Load())); !ok || a > age {
-			age, ok = a, true
-		}
-	}
-	return age, ok
+	return w.fw.send(ctx, c)
 }
 
 // Health implements HealthReporter. It fails while a Watch has gone longer
 // than etcdFeedStaleAfter without being found current: the server may be
 // missing other servers' changes, and its streams with them.
 func (s *EtcdStorage) Health() error {
-	if age, ok := s.feedAge(); ok && age > etcdFeedStaleAfter {
-		return fmt.Errorf("the etcd change feed has not been current for %v", age.Truncate(time.Second))
-	}
-	return nil
+	return s.feed.health()
 }
 
 // Close stops every Watch and closes the connection to the cluster.
 func (s *EtcdStorage) Close(ctx context.Context) error {
-	var err error
-	s.closeOnce.Do(func() {
-		s.cancel()
-		s.wg.Wait()
-		if s.metrics != nil {
-			_ = s.metrics.Unregister()
-		}
-		err = s.client.Close()
+	return s.feed.close(func() error {
+		err := s.client.Close()
 		if errors.Is(err, context.Canceled) {
 			err = nil
 		}
+		return err
 	})
-	return err
 }
