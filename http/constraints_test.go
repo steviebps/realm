@@ -174,35 +174,6 @@ func TestFlagMetadataRoundTrips(t *testing.T) {
 	}
 }
 
-// TestWriteGuardRechecksChanges checks that a write whose constraint changes
-// differ, within its transaction, from those checked against the chambers
-// below (because the chamber changed in between) is refused as a conflict,
-// so that the client retries and the new changes are checked.
-func TestWriteGuardRechecksChanges(t *testing.T) {
-	next := mustChamber(t, `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}},"plain":{"type":"boolean","value":true}}}`)
-	stored := &storage.StorageEntry{Key: "/t/", Value: []byte(`{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}}}}`)}
-	empty := &storage.Ancestry{Seals: map[string]string{}, Constraints: map[string][]storage.Constrained{}}
-
-	tests := []struct {
-		name   string
-		guard  *writeGuard
-		stored *storage.StorageEntry
-		want   error
-	}{
-		{"checked", &writeGuard{ancestry: empty, scanned: true, checkedBelow: []string{"hold"}}, nil, nil},
-		{"unchanged since", &writeGuard{ancestry: empty, scanned: true}, stored, nil},
-		{"changed since", &writeGuard{ancestry: empty, scanned: true}, nil, storage.ErrConflict},
-		{"nothing checked below", &writeGuard{ancestry: empty}, nil, nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.guard.check(storedChamber("/t/", tt.stored), next); err != tt.want {
-				t.Fatalf("check = %v, want %v", err, tt.want)
-			}
-		})
-	}
-}
-
 // TestConstraintChecksOrder checks that a write is judged by the chambers
 // above it before those below: a flag a parent seals is refused as sealed,
 // whatever definitions below it would break. It also checks that constraints

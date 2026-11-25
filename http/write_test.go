@@ -3,8 +3,10 @@ package http
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	realm "github.com/steviebps/realm/pkg"
@@ -171,5 +173,69 @@ func TestWriteBelowBrokenParentStatus(t *testing.T) {
 	status, out := call(t, nil, "POST", srv.URL+"/v1/chambers/b/c/", `{"rules":{}}`, "")
 	if status != 409 || len(out.Errors) != 1 || !strings.Contains(out.Errors[0], "could not parse parent chamber /b/") {
 		t.Fatalf("PUT below a broken parent = %d %v, want 409 naming /b/", status, out.Errors)
+	}
+}
+
+// changingStorage is storage whose chamber changes after a write's checks
+// read it but before the write's storage.Update does: the first time Update
+// reads, it runs change first.
+type changingStorage struct {
+	storage.Storage
+	once   sync.Once
+	change func()
+}
+
+func (s *changingStorage) ReadForUpdate(ctx context.Context, key string) (*storage.StorageEntry, error) {
+	s.once.Do(s.change)
+	return s.Get(ctx, key)
+}
+
+// TestWriteRechecksConstraintChanges checks that a write whose constraint
+// changes differ, within its storage.Update, from those checked against the
+// chambers below (the chamber changed in between) is refused as a conflict,
+// so the client retries and the new changes are checked; and that one whose
+// chamber did not change in between is not.
+func TestWriteRechecksConstraintChanges(t *testing.T) {
+	ctx := context.Background()
+	stored := []byte(`{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}}}}`)
+	// the stored constraints, unchanged: nothing to check below
+	body := `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}},"plain":{"type":"boolean","value":true}}}`
+
+	tests := []struct {
+		name string
+		// change runs between the checks and the write
+		change func(context.Context, storage.Storage) error
+		want   int
+	}{
+		{"unchanged since", func(context.Context, storage.Storage) error { return nil }, http.StatusOK},
+		{"its constraints removed since", func(ctx context.Context, s storage.Storage) error { return s.Delete(ctx, "/t/") }, http.StatusConflict},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := newBigCache(t)
+			if err := raw.Put(ctx, storage.StorageEntry{Key: "/t/", Value: stored}); err != nil {
+				t.Fatal(err)
+			}
+			changing := &changingStorage{Storage: raw}
+			changing.change = func() {
+				if err := tt.change(ctx, raw); err != nil {
+					t.Error(err)
+				}
+			}
+			inh, err := storage.NewInheritableStorage(changing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var notified []string
+			w := newChamberWriter(inh, func(p string) { notified = append(notified, p) })
+
+			_, err = w.Write(ctx, writeRequest{Path: "/t/", Operation: PutOperation, Body: mustChamber(t, body)})
+			if got := writeStatus(err); got != tt.want {
+				t.Fatalf("Write = %v (status %d), want status %d", err, got, tt.want)
+			}
+			if tt.want == http.StatusConflict && (!errors.Is(err, storage.ErrConflict) || len(notified) != 0) {
+				t.Errorf("a refused write: err %v, announced %v; want ErrConflict and no announcement", err, notified)
+			}
+		})
 	}
 }
