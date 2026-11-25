@@ -112,29 +112,11 @@ func runServer(cmd *cobra.Command) error {
 		logger.DebugCtx(ctx).Any("options", redactOptions(serverConfig.StorageOptions)).Msg("storage options")
 	}
 
-	stg, err := openStorage(serverConfig)
+	stg, err := storage.Open(ctx, serverConfig.StorageType, serverConfig.StorageOptions, serverConfig.Inheritable)
 	if err != nil {
 		return err
 	}
 	defer stg.Close(ctx)
-
-	if serverConfig.Inheritable {
-		if stg, err = storage.NewInheritableStorage(stg); err != nil {
-			return err
-		}
-	}
-
-	// Create the root chamber unless it exists; servers starting together
-	// against shared storage create it once.
-	if err := storage.Update(ctx, stg, []string{"/"}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
-		if cur["/"] != nil {
-			return nil, nil
-		}
-		logger.DebugCtx(ctx).Msg("initializing root entry in storage")
-		return []storage.Op{{Key: "/", Value: emptyChamber}}, nil
-	}); err != nil {
-		return fmt.Errorf("failed to initialize root entry during startup: %w", err)
-	}
 
 	switch {
 	case serverConfig.Auth == nil:
@@ -314,16 +296,6 @@ func init() {
 	serverCmd.Flags().String("port", "", "port to run server on")
 	serverCmd.Flags().Bool("dev", false, "run server in dev mode")
 	rootCmd.AddCommand(serverCmd)
-}
-
-// openStorage creates the storage backend named by the server config, without
-// the inheritance wrapper.
-func openStorage(c ServerConfig) (storage.Storage, error) {
-	create, exists := storage.StorageOptions[c.StorageType]
-	if !exists {
-		return nil, fmt.Errorf("storage type %q does not exist", c.StorageType)
-	}
-	return create(c.StorageOptions)
 }
 
 // redactOptions returns storage options safe to log: credentials inside

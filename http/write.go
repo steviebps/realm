@@ -187,8 +187,7 @@ func (cw *chamberWriter) write(ctx context.Context, req writeRequest) (writeResu
 	}
 
 	var etag string
-	indexKey := historyIndexKey(req.Path)
-	err := storage.Update(ctx, cw.raw, []string{req.Path, indexKey}, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
+	err := storage.Update(ctx, cw.raw, append([]string{req.Path}, historyKeys(req.Path)...), func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
 		stored := cur[req.Path]
 		if err := req.Preconditions.check(stored); err != nil {
 			return nil, err
@@ -233,7 +232,7 @@ func (cw *chamberWriter) write(ctx context.Context, req writeRequest) (writeResu
 			rev.ETag = etag
 			rev.Chamber = value
 		}
-		history, err := historyOps(cur[indexKey], req.Path, rev)
+		history, err := recordRevision(cur, req.Path, rev)
 		if err != nil {
 			return nil, err
 		}
@@ -264,10 +263,7 @@ func (cw *chamberWriter) deleteTree(ctx context.Context, req writeRequest) (writ
 	if err != nil {
 		return writeResult{}, err
 	}
-	keys := make([]string, 0, 2*len(paths))
-	for _, p := range paths {
-		keys = append(keys, p, historyIndexKey(p))
-	}
+	keys := append(slices.Clone(paths), historyKeys(paths...)...)
 
 	var deleted []string
 	err = storage.Update(ctx, cw.raw, keys, func(cur map[string]*storage.StorageEntry) ([]storage.Op, error) {
@@ -281,7 +277,7 @@ func (cw *chamberWriter) deleteTree(ctx context.Context, req writeRequest) (writ
 			if cur[p] == nil {
 				continue // a path that only leads to chambers below it
 			}
-			history, err := historyOps(cur[historyIndexKey(p)], p, Revision{Time: now, Actor: req.Actor, Operation: DeleteOperation})
+			history, err := recordRevision(cur, p, Revision{Time: now, Actor: req.Actor, Operation: DeleteOperation})
 			if err != nil {
 				return nil, err
 			}

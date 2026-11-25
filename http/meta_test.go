@@ -394,3 +394,21 @@ func TestChangeTooLargeForStorage(t *testing.T) {
 		t.Errorf("POST over the limit = %d, want 413", resp.StatusCode)
 	}
 }
+
+// TestRecordRevisionNeedsItsIndex checks that a change is recorded in history
+// only from an Update that read the history index (see historyKeys), so a
+// caller that forgot it cannot start the history over.
+func TestRecordRevisionNeedsItsIndex(t *testing.T) {
+	rev := Revision{Operation: PutOperation}
+	if _, err := recordRevision(map[string]*storage.StorageEntry{"/a/": nil}, "/a/", rev); err == nil {
+		t.Error("a revision was recorded without its history index")
+	}
+	cur := map[string]*storage.StorageEntry{"/a/": nil}
+	for _, k := range historyKeys("/a/") {
+		cur[k] = nil // read, and empty: a new history
+	}
+	ops, err := recordRevision(cur, "/a/", rev)
+	if err != nil || len(ops) != 2 {
+		t.Errorf("recordRevision = %d ops, %v; want the revision and the index", len(ops), err)
+	}
+}
