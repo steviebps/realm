@@ -549,6 +549,115 @@ describe('refreshing', () => {
     expect(polls()).toBe(before);
   }, 15_000);
 
+  it.each([true, false])('reports a failed first load once, and notes the recovery (streaming: %s)', async (streaming) => {
+    shortestWaits();
+    const realm = await setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    cleanup.push(() => {
+      warn.mockRestore();
+      info.mockRestore();
+    });
+
+    realm.setStatus(503);
+    const client = new ServerClient({ address: realm.address, streaming, pollingInterval: 10 });
+    cleanup.push(() => client.stop());
+    // start rejects with the failure, and onError (console.warn by default) hears of it too
+    await expect(client.start()).rejects.toMatchObject({ status: 503 });
+    expect(warn).toHaveBeenCalledTimes(1);
+    // retries that fail the same way are not reported again
+    await vi.waitFor(() => expect(realm.requests.length).toBeGreaterThanOrEqual(3), { timeout: 5000 });
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    realm.setStatus(200);
+    realm.publish(betaOn);
+    await vi.waitFor(() => expect(client.bool('beta', {}, false)).toBe(true), { timeout: 5000 });
+    await vi.waitFor(() => expect(info).toHaveBeenCalledWith('[realm] recovered: refreshing works again'), {
+      timeout: 5000,
+    });
+  }, 15_000);
+
+  it('reports an outage once, across the stream and its fallback polling', async () => {
+    shortestWaits();
+    const realm = await setup();
+    const onError = vi.fn();
+    const client = new ServerClient({ address: realm.address, pollingInterval: 20, onError });
+    cleanup.push(() => client.stop());
+    await client.start();
+    await vi.waitFor(() => expect(realm.streams.size).toBe(1), { timeout: 5000 });
+
+    // everything fails the same way: the stream, and the polling that joins it
+    realm.intercept((_req, res) => answer(res, 503, '{"errors":["down for maintenance"]}'));
+    realm.dropStreams();
+    const polls = () => realm.requests.filter((r) => !isWatch(r)).length;
+    const before = polls();
+    await vi.waitFor(() => expect(polls()).toBeGreaterThanOrEqual(before + 3), { timeout: 10_000 });
+    // the dropped stream is its own failure; the outage, which the stream and the polling both hit, is reported once
+    const messages = onError.mock.calls.map(([e]) => (e as Error).message);
+    expect(messages.filter((m) => m === 'down for maintenance')).toHaveLength(1);
+    expect(messages.at(-1)).toBe('down for maintenance');
+  }, 15_000);
+
+  it('reports each failure once when the stream and its fallback polling fail in different ways', async () => {
+    shortestWaits();
+    const realm = await setup();
+    // a sign-in page in front of the server: requests get no JSON, and the stream no event stream
+    realm.intercept((_req, res) => answer(res, 200, '<html>sign in</html>', { 'Content-Type': 'text/html' }));
+    const onError = vi.fn();
+    const client = new ServerClient({ address: realm.address, pollingInterval: 20, onError });
+    cleanup.push(() => client.stop());
+    await expect(client.start()).rejects.toThrow('the server did not return JSON');
+
+    // the stream fails until the polling joins it, then once more; the polling fails in between
+    const watches = () => realm.requests.filter(isWatch).length;
+    const polls = () => realm.requests.filter((r) => !isWatch(r)).length;
+    await vi.waitFor(() => expect(watches()).toBeGreaterThanOrEqual(4), { timeout: 15_000 });
+    const before = polls();
+    await vi.waitFor(() => expect(polls()).toBeGreaterThanOrEqual(before + 2), { timeout: 5000 });
+    // neither loop's failure is reported again after the other's
+    expect(onError.mock.calls.map(([e]) => (e as Error).message)).toEqual([
+      'the server did not return JSON',
+      'the server did not return an event stream',
+    ]);
+  }, 30_000);
+
+  it("does not count the fallback polling's successes as the stream's recovery", async () => {
+    shortestWaits();
+    const realm = await setup();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    cleanup.push(() => {
+      warn.mockRestore();
+      info.mockRestore();
+    });
+    const client = new ServerClient({ address: realm.address, pollingInterval: 20 });
+    cleanup.push(() => client.stop());
+    await client.start();
+    await vi.waitFor(() => expect(realm.streams.size).toBe(1), { timeout: 5000 });
+
+    // an outage: the stream and the polling that joins it both fail
+    const down = '{"errors":["down"]}';
+    realm.intercept((_req, res) => answer(res, 503, down));
+    realm.dropStreams();
+    const polls = () => realm.requests.filter((r) => !isWatch(r)).length;
+    const before = polls();
+    await vi.waitFor(() => expect(polls()).toBeGreaterThanOrEqual(before + 2), { timeout: 10_000 });
+
+    // requests work again, streams still do not: the polls keep the data current
+    realm.intercept((req, res) => isWatch(req) && answer(res, 503, down));
+    const recovering = polls();
+    await vi.waitFor(() => expect(polls()).toBeGreaterThanOrEqual(recovering + 3), { timeout: 10_000 });
+    // the stream is still down: no recovery noted, and its failure not reported again
+    expect(info).not.toHaveBeenCalled();
+    expect(warn.mock.calls.filter(([, m]) => m === 'down')).toHaveLength(1);
+
+    // once the stream delivers, refreshing works again
+    realm.intercept(undefined);
+    await vi.waitFor(() => expect(info).toHaveBeenCalledWith('[realm] recovered: refreshing works again'), {
+      timeout: 10_000,
+    });
+  }, 30_000);
+
   it('waits as long as a 503 asks before reconnecting the stream', async () => {
     const realm = await setup();
     realm.intercept((req, res) => isWatch(req) && answer(res, 503, '{"errors":["busy"]}', { 'Retry-After': '2' }));

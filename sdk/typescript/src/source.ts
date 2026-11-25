@@ -7,7 +7,7 @@
 import { isRecord, Snapshot } from './snapshot.js';
 import { Subtree } from './subtree.js';
 import { resolvePath, type PathTemplate } from './template.js';
-import { RealmError, sinkFeed, type Feed } from './transport.js';
+import { eventFeed, RealmError, type Feed } from './transport.js';
 import type { Chamber, EvaluationContext } from './types.js';
 
 /** The chamber a context is evaluated against. */
@@ -41,7 +41,11 @@ export interface Source {
 export class ChamberSource implements Source {
   readonly readPath: string;
   readonly #chamber = new Snapshot<Chamber>({ rules: {} }, asChamber);
-  readonly feed: Feed = sinkFeed('chamber', this.#chamber);
+  readonly feed: Feed = eventFeed(
+    'chamber',
+    (data, revision) => this.#chamber.set(data, revision),
+    (raw, revision) => this.#chamber.setRaw(raw, revision),
+  );
 
   /** path is the chamber's, as given to the client; it is made canonical. */
   constructor(path: string | undefined) {
