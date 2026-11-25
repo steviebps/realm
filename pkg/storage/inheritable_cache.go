@@ -65,7 +65,7 @@ func newViewCache(maxParsed, maxViews int) *viewCache {
 }
 
 // parseLayer returns entry, stored at the canonical path p, as a Layer, as
-// parseLayer does, reusing the chamber last parsed at p when entry holds the
+// ParseLayer does, reusing the chamber last parsed at p when entry holds the
 // same bytes.
 func (c *viewCache) parseLayer(p string, entry *StorageEntry) Layer {
 	c.mu.RLock()
@@ -75,7 +75,7 @@ func (c *viewCache) parseLayer(p string, entry *StorageEntry) Layer {
 		return Layer{Path: p, Chamber: last.chamber, Version: entry.Version}
 	}
 
-	layer := parseLayer(p, entry)
+	layer := ParseLayer(p, entry)
 	size := len(entry.Value)
 	if layer.Err != nil || size > c.maxParsed {
 		return layer

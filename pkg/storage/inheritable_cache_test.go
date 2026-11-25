@@ -205,7 +205,7 @@ func TestViewCacheBounds(t *testing.T) {
 		p := fmt.Sprintf("/c%d/", i)
 		layer := c.parseLayer(p, &StorageEntry{Key: p, Value: chamber(i)})
 		if layer.Err != nil || layer.Chamber.Rules[fmt.Sprintf("f%d", i)] == nil {
-			t.Fatalf("parseLayer(%s) = %+v", p, layer)
+			t.Fatalf("ParseLayer(%s) = %+v", p, layer)
 		}
 		lin := &Lineage{Inheritable: true, Layers: []Layer{layer}}
 		c.storeView(lin, chamber(i))
@@ -228,7 +228,7 @@ func TestViewCacheBounds(t *testing.T) {
 	big := []byte(`{"rules":{"big":{"type":"string","value":"` + strings.Repeat("x", limit) + `"}}}`)
 	layer := c.parseLayer("/big/", &StorageEntry{Key: "/big/", Value: big})
 	if layer.Err != nil || layer.Chamber.Rules["big"] == nil {
-		t.Fatalf("parseLayer(/big/) = %+v", layer)
+		t.Fatalf("ParseLayer(/big/) = %+v", layer)
 	}
 	if _, ok := c.parsed["/big/"]; ok {
 		t.Error("a chamber larger than the cache was kept")
@@ -237,7 +237,7 @@ func TestViewCacheBounds(t *testing.T) {
 	bad := c.parseLayer("/bad/", &StorageEntry{Key: "/bad/", Value: []byte(`{`)})
 	var ce *ChamberError
 	if !errors.As(bad.Err, &ce) {
-		t.Errorf("parseLayer(/bad/) error = %v, want a ChamberError", bad.Err)
+		t.Errorf("ParseLayer(/bad/) error = %v, want a ChamberError", bad.Err)
 	}
 	if _, ok := c.parsed["/bad/"]; ok {
 		t.Error("a chamber that cannot be parsed was kept")

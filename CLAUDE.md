@@ -94,7 +94,7 @@ model.
   `items`. `ParseSchema` refuses any other keyword and inconsistent schemas;
   `Validate` returns a `*ValueError` with the path of the refused part. The
   server (`http/constraints.go`) holds every definition to the constraints of
-  each parent that defines the flag (`storage.ReadAncestry`), and refuses a
+  each parent that defines the flag (`Lineage.Ancestry`), and refuses a
   change of constraints that a definition below breaks (`checkBelow`).
 - **TargetingRule** — `Clauses` (ANDed), a `Value`, an optional `Rollout`, and
   an optional `Schedule`.
@@ -159,7 +159,7 @@ model.
 | `auth/` | API keys, sessions, OIDC / GitHub providers, roles; `authtest/` is a fake OIDC issuer for tests |
 | `sdk/typescript/` | TypeScript SDK: `ServerClient` (local evaluation, a port of `pkg/targeting.go`; `pathTemplate` via `src/template.ts` and `src/subtree.ts`), `BrowserClient` (server evaluation; `src/storage.ts` caches evaluated values per context for offline start), and `@steviebps/realm-sdk/react` (`src/react.ts`: provider + hooks over a `BrowserClient`; server rendering and hydration read the client's construction-time `initialState` / `bootstrap`, made by `ServerClient.initialState`) |
 | `sdk/conformance/` | Cases the Go and TypeScript tests both run: `evaluation.json` (evaluation; `pkg/conformance_test.go`), `subtree.json` (path-template resolution; `pkg/template_test.go`, `test/subtree.test.ts`), `constraints.json` (constraint schemas and values; `pkg/schema_test.go`, `http/realm-ui/src/utils/constraints.test.ts`) |
-| `http/` | Server handler (`handler.go`), constraints across chambers (`constraints.go`), request lifecycle: per-request deadlines, request IDs, access log, panic recovery (`lifecycle.go`), evaluation endpoint and CORS (`evaluate.go`), subtree reads and watches with the per-change shared view cache (`subtree.go`) and their gzip (`compress.go`: `Accept-Encoding` parsing, a pooled per-batch deflate writer with sync flushes), stream broker (`broker.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI serving (`ui.go`; files embedded by `assets.go` behind the `ui` build tag, `assets_stub.go` fallback), `realm-ui/` React app |
+| `http/` | Server handler (`handler.go`), the chamber write module every PUT/PATCH/DELETE goes through (`write.go`: `chamberWriter.Write`, no HTTP in its interface), constraints across chambers (`constraints.go`), request lifecycle: per-request deadlines, request IDs, access log, panic recovery (`lifecycle.go`), evaluation endpoint and CORS (`evaluate.go`), subtree reads and watches with the per-change shared view cache (`subtree.go`) and their gzip (`compress.go`: `Accept-Encoding` parsing, a pooled per-batch deflate writer with sync flushes), stream broker (`broker.go`), auth middleware and `/v1/keys` (`auth.go`), request mapping (`agent.go`), UI serving (`ui.go`; files embedded by `assets.go` behind the `ui` build tag, `assets_stub.go` fallback), `realm-ui/` React app |
 | `api/response.go` | Shared HTTP response envelope |
 | `trace/otel.go` | OpenTelemetry setup |
 | `helper/logging/` | zerolog `TracedLogger` (context-aware, trace-correlated) |
@@ -212,6 +212,12 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   flag's type (like `TargetingRule.Value`) are type-checked by the owning
   `Flag` via `Rule.assertType`; other types validate their own invariants. Give them json tags so they round-trip through the server
   (the handler just unmarshals → re-marshals; see below).
+- **Lineages are built in one place.** `storage.BuildLineage` reads a
+  chamber and the ancestors it consults; the inherited view (`Merge`),
+  `Ancestry` (seals and constraints above), and `Resolve` all come from a
+  `Lineage`, so never walk parent paths by hand.
+- **Chamber writes go through `chamberWriter.Write`** (`http/write.go`),
+  never `storage.Update` on a chamber directly from a handler.
 - **Read-modify-write goes through `storage.Update` / `UpdateJSON`** (never a
   `Get` then `Put`, or a mutex): it version-checks on `Transactional` backends,
   so it stays correct across replicas.

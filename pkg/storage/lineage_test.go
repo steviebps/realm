@@ -605,7 +605,11 @@ func TestMergeSeals(t *testing.T) {
 			}
 
 			// Ancestry agrees with the lineage
-			a, err := inh.(Layered).Ancestry(ctx, tt.path)
+			lin, err = inh.(Layered).Layers(ctx, tt.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a, err := lin.Ancestry()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -622,8 +626,17 @@ func TestAncestry(t *testing.T) {
 	entries["/broken/"] = `{"rules":{"entitlement":{"type":"boolean","value":"nope"},"x":{"type":"number","value":1,"sealed":true}}}`
 	entries["/c/"] = `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":72}}}}`
 	entries["/c/d/"] = `{"rules":{"hold":{"type":"number","value":24,"constraints":{"maximum":48}},"plain":{"type":"number","value":1}}}`
+	entries["/c/d/bad/"] = `{"rules":{"hold":{"type":"number","value":"nope"}}}`
+	entries["/broken/child/"] = `{"rules":{}}`
 	src := &mapStorage{entries: entries}
-	inh, _ := NewInheritableStorage(src)
+
+	ancestry := func(s Storage, inheritable bool, p string) (*Ancestry, error) {
+		lin, err := BuildLineage(ctx, RawLayers(s), p, inheritable)
+		if err != nil {
+			return nil, err
+		}
+		return lin.Ancestry()
+	}
 
 	tests := []struct {
 		name            string
@@ -633,12 +646,12 @@ func TestAncestry(t *testing.T) {
 	}{
 		{"no chamber at the path", "/t/a/new/", map[string]string{"entitlement": "/", "limit": "/t/", "own": "/t/"}, nil},
 		{"missing parents", "/nope/deeper/", map[string]string{"entitlement": "/"}, nil},
-		{"a parent that cannot be parsed seals nothing", "/broken/child/", map[string]string{"entitlement": "/"}, nil},
 		{"constraints, farthest first", "/c/d/e/", map[string]string{"entitlement": "/"}, map[string][]string{"hold": {"/c/", "/c/d/"}}},
+		{"the chamber's own error does not matter", "/c/d/bad/", map[string]string{"entitlement": "/"}, map[string][]string{"hold": {"/c/", "/c/d/"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ReadAncestry(ctx, inh, tt.path)
+			got, err := ancestry(src, true, tt.path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -657,14 +670,70 @@ func TestAncestry(t *testing.T) {
 		})
 	}
 
-	if got, err := ReadAncestry(ctx, src, "/t/a/"); err != nil || len(got.Seals) != 0 || len(got.Constraints) != 0 {
+	// a parent that cannot be parsed fails the ancestry, as it fails reads
+	var ce *ChamberError
+	if _, err := ancestry(src, true, "/broken/child/"); !errors.As(err, &ce) || ce.Path != "/broken/" {
+		t.Errorf("below a broken parent: %v, want its ChamberError", err)
+	}
+	inh, _ := NewInheritableStorage(src)
+	if _, err := inh.Get(ctx, "/broken/child/"); !errors.As(err, &ce) || ce.Path != "/broken/" {
+		t.Errorf("a read below the broken parent: %v, want the same ChamberError", err)
+	}
+
+	if got, err := ancestry(src, false, "/t/a/"); err != nil || len(got.Seals) != 0 || len(got.Constraints) != 0 {
 		t.Errorf("without inheritance: %+v, %v; want nothing sealed or constrained", got, err)
 	}
-	if _, err := ReadAncestry(ctx, inh, "/t/../x/"); err == nil {
+	if _, err := ancestry(src, true, "/t/../x/"); err == nil {
 		t.Error("a path with .. was accepted")
 	}
 	src.failing = map[string]error{"/t/": errors.New("boom")}
-	if _, err := ReadAncestry(ctx, inh, "/t/a/"); err == nil {
+	if _, err := ancestry(src, true, "/t/a/"); err == nil {
 		t.Error("a failed read of a parent was ignored")
+	}
+}
+
+func TestBuildLineage(t *testing.T) {
+	ctx := context.Background()
+	src := &mapStorage{entries: map[string]string{
+		"/":     `{"rules":{"a":{"type":"boolean","value":true}}}`,
+		"/x/y/": `{"rules":{"b":{"type":"boolean","value":true}}}`,
+		"/bad/": `{"rules":{"a":{"type":"boolean","value":"no"}}}`,
+	}}
+	summary := func(lin *Lineage) []string {
+		var ls []string
+		for _, l := range lin.Layers {
+			ls = append(ls, layerSummary(l))
+		}
+		return ls
+	}
+
+	lin, err := BuildLineage(ctx, RawLayers(src), "/x/y/z/", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/x/y/z/=missing", "/x/y/=ok[b]", "/x/=missing", "/=ok[a]"}; !slices.Equal(summary(lin), want) {
+		t.Errorf("layers = %v, want %v, nearest first", summary(lin), want)
+	}
+	if lin.Stored() {
+		t.Error("a path without a chamber is Stored")
+	}
+
+	lin, err = BuildLineage(ctx, RawLayers(src), "/x/y/", false)
+	if err != nil || !lin.Stored() || !slices.Equal(summary(lin), []string{"/x/y/=ok[b]"}) {
+		t.Errorf("without inheritance: %v, %v; want the chamber alone", lin, err)
+	}
+
+	lin, err = BuildLineage(ctx, RawLayers(src), "/bad/c/", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lin.Merge(); err == nil || !strings.Contains(err.Error(), "could not parse parent chamber /bad/") {
+		t.Errorf("Merge below a broken parent: %v, want it named", err)
+	}
+
+	// reads go farthest first, so a failed read reports the farthest
+	src.failing = map[string]error{"/": errors.New("root"), "/x/": errors.New("x")}
+	if _, err := BuildLineage(ctx, RawLayers(src), "/x/y/", true); err == nil || err.Error() != "root" {
+		t.Errorf("failed reads: %v, want the farthest's", err)
 	}
 }

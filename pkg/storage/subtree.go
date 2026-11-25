@@ -144,6 +144,11 @@ type LayerReader func(ctx context.Context, p string) (Layer, error)
 // the layer has neither Chamber nor Err; when it cannot be parsed, Err is a
 // ChamberError. A failed read is returned as an error.
 func ReadLayer(ctx context.Context, s Storage, p string) (Layer, error) {
+	return readLayerWith(ctx, s, p, ParseLayer)
+}
+
+// readLayerWith is ReadLayer, parsing what it reads with parse.
+func readLayerWith(ctx context.Context, s Storage, p string, parse func(string, *StorageEntry) Layer) (Layer, error) {
 	entry, err := s.Get(ctx, p)
 	if err != nil {
 		if isNotFoundErr(err) {
@@ -151,7 +156,7 @@ func ReadLayer(ctx context.Context, s Storage, p string) (Layer, error) {
 		}
 		return Layer{}, err
 	}
-	return parseLayer(p, entry), nil
+	return parse(p, entry), nil
 }
 
 // ScanLayers reads the chamber stored at each of paths, which ListTree
@@ -181,7 +186,7 @@ func ScanLayers(ctx context.Context, s Storage, paths []string) (layers map[stri
 			return nil, true, err
 		}
 		if _, listed := layers[entry.Key]; listed {
-			layers[entry.Key] = parseLayer(entry.Key, entry)
+			layers[entry.Key] = ParseLayer(entry.Key, entry)
 		}
 	}
 	return layers, true, nil
@@ -251,30 +256,11 @@ type View struct {
 // A chamber that cannot be parsed sets the view's Err; a failed read, or a
 // path storage refuses (see ValidatePath), is returned as an error.
 func BuildView(ctx context.Context, read LayerReader, p string, inheritable bool) (View, error) {
-	if err := ValidatePath(p); err != nil {
-		return View{}, err
-	}
-	own, err := read(ctx, p)
+	lin, err := BuildLineage(ctx, read, p, inheritable)
 	if err != nil {
 		return View{}, err
 	}
-	lin := Lineage{Inheritable: inheritable, Layers: []Layer{own}}
-	if inheritable {
-		// read farthest first, as InheritableStorage.Get does, so a failed
-		// read reports the same ancestor
-		for _, a := range consultedAncestors(p) {
-			layer, err := read(ctx, a)
-			if err != nil {
-				return View{}, err
-			}
-			if layer.Err != nil {
-				layer.Err = fmt.Errorf("could not parse parent chamber %s: %w", a, layer.Err)
-			}
-			lin.Layers = append(lin.Layers, layer)
-		}
-		slices.Reverse(lin.Layers[1:])
-	}
-	v := View{Path: p, Stored: own.Chamber != nil || own.Err != nil, Revision: lin.Revision()}
+	v := View{Path: p, Stored: lin.Stored(), Revision: lin.Revision()}
 	v.Chamber, v.Err = lin.Merge()
 	return v, nil
 }
@@ -378,7 +364,7 @@ func walkTree(ctx context.Context, read LayerReader, inheritable bool, paths []s
 					}
 				}
 				if cur != nil && cur.Key == p {
-					return parseLayer(p, cur), nil
+					return ParseLayer(p, cur), nil
 				}
 				return Layer{Path: p}, nil
 			}

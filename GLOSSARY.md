@@ -111,6 +111,24 @@ A chamber's own definition of a flag that an ancestor also defines, which replac
 A mark on a definition that stops chambers below it from overriding the flag.
 _Avoid_: Lock, freeze, pin
 
+**Hidden definition**:
+A definition in a chamber below a seal, written before the seal; never served.
+
+**Broken chamber**:
+A stored chamber that cannot be parsed. Every read at or below it fails, and nothing below it can be written, until it is fixed.
+_Avoid_: Corrupt chamber, invalid chamber
+
+**Lineage**:
+A path's own chamber (if one is stored there) and each of its ancestors, nearest first: everything its inherited view and ancestry are built from.
+_Avoid_: Parent chain, hierarchy (that is the whole tree)
+
+**Inherited view**:
+What a read of a chamber serves: its own definitions plus those it inherits, with seals applied.
+_Avoid_: Merged chamber, effective config
+
+**Ancestry**:
+What a path's ancestors say about the flags a chamber there may define: which they seal, and which they constrain.
+
 **Subtree**:
 A chamber together with every chamber below it.
 
@@ -165,6 +183,15 @@ What a signed-in user may do: viewer, editor, or admin.
 **Grant**:
 A role given to users, either on every chamber or only beneath certain paths.
 _Avoid_: Permission, policy, binding
+
+### Writes
+
+**Chamber write**:
+Adding, replacing, patching, or deleting a chamber (with or without the chambers below it), checked against its lineage and the chambers below, recorded in its history, and announced to streams.
+_Avoid_: Save, update (for the concept)
+
+**Precondition**:
+A write's condition on the chamber as currently stored, so that an editor does not overwrite a change it has not seen.
 
 ### History
 

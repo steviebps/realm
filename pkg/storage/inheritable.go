@@ -3,10 +3,7 @@ package storage
 import (
 	"bytes"
 	"context"
-	"errors"
-	"fmt"
 	"path"
-	"slices"
 	"strings"
 
 	"github.com/steviebps/realm/helper/logging"
@@ -94,34 +91,6 @@ func (s *InheritableStorage) Layers(ctx context.Context, logicalPath string) (*L
 	return lin, nil
 }
 
-// Ancestry returns what the ancestors of logicalPath say about the flags a
-// chamber there may define: which they seal and which they constrain (see
-// Ancestry). A failed read is returned.
-func (s *InheritableStorage) Ancestry(ctx context.Context, logicalPath string) (*Ancestry, error) {
-	ctx, span := s.tracer.Start(ctx, "InheritableStorage Ancestry", trace.WithAttributes(attribute.String("realm.inheritable.logicalPath", logicalPath)))
-	defer span.End()
-
-	if err := ValidatePath(logicalPath); err != nil {
-		recordError(span, err)
-		return nil, err
-	}
-	// farthest first, so the first ancestor to seal a flag is the farthest
-	var layers []Layer
-	for _, p := range consultedAncestors(logicalPath) {
-		entry, err := s.source.Get(ctx, p)
-		if err != nil {
-			var nfError *NotFoundError
-			if errors.As(err, &nfError) {
-				continue
-			}
-			recordError(span, err)
-			return nil, err
-		}
-		layers = append(layers, s.cache.parseLayer(p, entry))
-	}
-	return ancestryOf(layers), nil
-}
-
 // consultedAncestors returns the ancestors of logicalPath whose flags its
 // inherited view includes, farthest first: the root chamber "/", then each
 // chamber along the path. The root chamber itself has none.
@@ -144,50 +113,17 @@ func consultedAncestors(logicalPath string) []string {
 }
 
 // lineage reads the chamber at logicalPath and each ancestor its inherited
-// view consults. Ancestors are read farthest first; one that does not exist
-// is recorded without a chamber, and one that fails to read aborts the read
-// so that its flags are never silently dropped. A chamber that cannot be
-// parsed is recorded with its error, which Lineage.Merge reports.
+// view consults (see BuildLineage), reusing the chambers it parsed before. It
+// returns a NotFoundError, without reading the ancestors, when there is no
+// chamber at logicalPath.
 func (s *InheritableStorage) lineage(ctx context.Context, logicalPath string) (*Lineage, error) {
-	if err := ValidatePath(logicalPath); err != nil {
-		return nil, err
-	}
+	return buildLineage(ctx, s.readLayer, logicalPath, true, true)
+}
 
-	// ensure the last entry of the path exists before retrieving its parents
-	leafEntry, err := s.source.Get(ctx, logicalPath)
-	if err != nil {
-		return nil, err
-	}
-
-	layers := []Layer{s.cache.parseLayer(canonicalChamberPath(logicalPath), leafEntry)}
-	for _, p := range consultedAncestors(logicalPath) {
-		entry, err := s.source.Get(ctx, p)
-		if err != nil {
-			// an ancestor that does not exist contributes nothing, but a
-			// failed read must not silently drop the rules it holds
-			var nfError *NotFoundError
-			if errors.As(err, &nfError) {
-				layers = append(layers, Layer{Path: p})
-				continue
-			}
-			return nil, err
-		}
-		layer := s.cache.parseLayer(p, entry)
-		if layer.Err != nil {
-			// skipping it would silently drop its flags (kill switches
-			// included) from every chamber below it
-			layer.Err = fmt.Errorf("could not parse parent chamber %s: %w", p, layer.Err)
-		}
-		layers = append(layers, layer)
-	}
-	// read farthest first, as the walk always has; lineages are nearest first
-	slices.Reverse(layers[1:])
-
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	return &Lineage{Inheritable: true, Layers: layers}, nil
+// readLayer reads the chamber at p from the source as ReadLayer does,
+// reusing the chamber last parsed at p when it is unchanged.
+func (s *InheritableStorage) readLayer(ctx context.Context, p string) (Layer, error) {
+	return readLayerWith(ctx, s.source, p, s.cache.parseLayer)
 }
 
 // Put puts the entry at the specified logical path, creating or overwriting it
