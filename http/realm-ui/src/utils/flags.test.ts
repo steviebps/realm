@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Flag } from '../models/response.ts';
 import {
+  newRuleId,
   rulesOf,
   targetingPaused,
   validateFlag,
@@ -83,4 +84,14 @@ void test('withoutNullFlags drops flags written as null, which serve nothing', (
   assert.deepEqual(withoutNullFlags({ rules: { on, gone: null } }), { rules: { on } });
   assert.equal(withoutNullFlags(null), null);
   assert.equal(withoutNullFlags(undefined), null);
+});
+
+void test('newRuleId gives a new rule an id no other rule of the flag has', () => {
+  const draws = [0, 0, 0.5];
+  const random = () => draws.shift()!;
+  // 0 draws r-000000, which the paused rule has; 0.5 draws the next one
+  const flag: Flag = { type: 'boolean', value: false, pausedTargeting: [{ id: 'r-000000', value: true }] };
+  assert.equal(newRuleId(flag, random), 'r-i00000');
+  assert.equal(draws.length, 0);
+  assert.match(newRuleId(flag), /^r-[0-9a-z]{6}$/);
 });

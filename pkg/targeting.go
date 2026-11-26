@@ -326,7 +326,9 @@ func (tr *TargetingRule) hasUnknownOperator() bool {
 	return slices.ContainsFunc(tr.Clauses, func(c *Clause) bool { return !c.Op.known() })
 }
 
-// ruleName names the targeting rule at index i, with the given id, in errors.
+// ruleName names the targeting rule at index i, with the given id, in errors
+// and in realm.flag.evaluations: by its id, or by its position ("#2") when it
+// has none.
 func ruleName(id string, i int) string {
 	if id != "" {
 		return id

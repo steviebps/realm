@@ -15,7 +15,15 @@ import {
 import { HiPause, HiPlus } from 'react-icons/hi';
 import { Catalog, Flag, Lifecycle, TargetingRule } from '../../models/response';
 import { Bound, constraintProblems, describeConstraints, parseConstraints } from '../../utils/constraints';
-import { rulesOf, targetingPaused, validateFlag, withFields, withRules, withSealed } from '../../utils/flags';
+import {
+  newRuleId,
+  rulesOf,
+  targetingPaused,
+  validateFlag,
+  withFields,
+  withRules,
+  withSealed,
+} from '../../utils/flags';
 import { ConstraintsEditor } from './ConstraintsEditor';
 import { RuleEditor } from './RuleEditor';
 import { ValueInput } from './ValueInput';
@@ -176,7 +184,12 @@ export const FlagEditor = ({ name, flag, catalog, attributes, seeds, parentBound
             <Button
               size="sm"
               color="light"
-              onClick={() => setRules([...rules, { clauses: [], value: draft.value }], [...ruleKeys, newRuleKey()])}
+              onClick={() =>
+                setRules(
+                  [...rules, { id: newRuleId(draft), clauses: [], value: draft.value }],
+                  [...ruleKeys, newRuleKey()]
+                )
+              }
             >
               <HiPlus className="mr-1" /> Add rule
             </Button>

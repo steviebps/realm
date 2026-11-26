@@ -25,6 +25,21 @@ export const targetingPaused = (flag: Flag): boolean => !flag.targeting?.length 
 export const rulesOf = (flag: Flag): TargetingRule[] =>
   (targetingPaused(flag) ? flag.pausedTargeting : flag.targeting) ?? [];
 
+/**
+ * An id for a new targeting rule of flag, such as `r-k3x9q2`, that none of its rules (paused or not) has. SDKs and the
+ * evaluation endpoint report which rule served each value by its id (realm.flag.evaluations), and a rule without one
+ * by its position, which changes when rules are reordered.
+ */
+export const newRuleId = (flag: Flag, random: () => number = Math.random): string => {
+  const taken = new Set([...(flag.targeting ?? []), ...(flag.pausedTargeting ?? [])].map((rule) => rule.id));
+  for (;;) {
+    const id = `r-${Math.floor(random() * 36 ** 6)
+      .toString(36)
+      .padStart(6, '0')}`;
+    if (!taken.has(id)) return id;
+  }
+};
+
 /** Returns flag with the given fields set, or removed entirely when undefined. */
 export const withFields = (flag: Flag, fields: Partial<Flag>): Flag =>
   Object.fromEntries(Object.entries({ ...flag, ...fields }).filter(([, v]) => v !== undefined)) as unknown as Flag;

@@ -2,12 +2,14 @@ import {
   attributeValue,
   copyValue,
   evaluateChamber,
-  flagValue,
+  hasType,
   normalizeContext,
+  ruleValue,
+  servingRule,
   stringAttributes,
-  typedValue,
   VERSION_ATTRIBUTE,
 } from './evaluate.js';
+import { Evaluations, type Meter } from './metrics.js';
 import { ChamberSource, SubtreeSource, type Source } from './source.js';
 import { parseTemplate } from './template.js';
 import { pollingInterval, Transport, type ClientOptions, type Following } from './transport.js';
@@ -38,6 +40,17 @@ export interface ServerClientOptions extends ClientOptions {
    * with `path`.
    */
   pathTemplate?: string;
+  /**
+   * An OpenTelemetry meter, such as `metrics.getMeter('my-service')` from
+   * `@opentelemetry/api`, to report the values the client serves on, as the
+   * observable counter `realm.flag.evaluations`: one count for each value a
+   * getter returns (not its fallback), with the attributes `flag`, `path`
+   * (the chamber's, see chamberPath), and `rule`, the targeting rule that
+   * served it: its id, its position (`#2`) when it has none, or `default`.
+   * allFlags and initialState count nothing: a page's values are counted
+   * where its browser is served them. Without a meter, nothing is counted.
+   */
+  meter?: Meter;
 }
 
 const defaultPollingInterval = 15 * 60_000;
@@ -55,6 +68,8 @@ export class ServerClient {
   // What the client follows: one chamber at a path, or with a template, the
   // subtree below its root. Nothing else depends on which (see Source).
   readonly #source: Source;
+  // What counts the values served, with the meter option.
+  readonly #evaluations: Evaluations | undefined;
   // The background refresh, while started.
   #running: { controller: AbortController; following: Following } | undefined;
 
@@ -71,6 +86,7 @@ export class ServerClient {
     this.#defaults = { ...stringAttributes(options.attributes) };
     const version = attributeValue(options.version);
     if (version) this.#defaults[VERSION_ATTRIBUTE] = version;
+    if (options.meter) this.#evaluations = new Evaluations(options.meter);
   }
 
   /**
@@ -228,7 +244,9 @@ export class ServerClient {
 
   // evaluate returns every flag's value in chamber for context, with defaults
   // filling in for the attributes it does not set. Custom values are copies.
-  // It throws for a chamber of a shape this SDK does not expect.
+  // It throws for a chamber of a shape this SDK does not expect. It counts
+  // nothing: a page gets these values, and a browser's are counted where
+  // they are served (the server's evaluation endpoint).
   #evaluate(chamber: Chamber | undefined, context: EvaluationContext, defaults: Record<string, string>): EvaluatedFlags {
     if (!chamber) return {};
     const flags = evaluateChamber(chamber, context, defaults);
@@ -237,15 +255,19 @@ export class ServerClient {
   }
 
   // typed returns the value of flag for context when it has type want (a
-  // copy, with copy), and otherwise fallback. It never throws: a flag of a
-  // shape this SDK does not expect returns fallback too.
+  // copy, with copy), counting it, and otherwise fallback. It never throws:
+  // a flag of a shape this SDK does not expect returns fallback too.
   #typed<T>(key: string, context: EvaluationContext | undefined, want: FlagType, fallback: T, copy = false): T {
     try {
-      const rules = this.#target(context)?.chamber.rules;
+      const target = this.#target(context);
+      const rules = target?.chamber.rules;
       const flag = rules && Object.hasOwn(rules, key) ? rules[key] : undefined;
-      if (!flag) return fallback;
-      const value = typedValue(flag.type, flagValue(key, flag, context ?? {}, this.#defaults), want, fallback);
-      return copy && value !== fallback ? copyValue(value) : value;
+      if (!target || !flag) return fallback;
+      const rule = servingRule(key, flag, context ?? {}, this.#defaults);
+      const value = ruleValue(flag, rule);
+      if (!hasType(flag.type, value, want)) return fallback;
+      this.#evaluations?.count(target.path, key, flag, rule);
+      return (copy ? copyValue(value) : value) as T;
     } catch {
       return fallback;
     }

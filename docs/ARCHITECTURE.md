@@ -477,7 +477,12 @@ goes through `helper/logging` — a zerolog `TracedLogger` accessed as
 correlated with the active span. Handlers and commands wrap work in
 `tracer.Start(ctx, "…")`; storage spans mark failures with an error status
 (`recordError`). The SDK never installs providers or touches zerolog globals;
-`WithLogger` routes its logs. By default it logs at `info` and above, with a
+`WithLogger` routes its logs. It counts each value a getter serves in
+`realm.flag.evaluations` (by flag, path, and serving rule), as the evaluation
+endpoint and the TypeScript `ServerClient`'s `meter` option do: process-wide
+atomic counters in `internal/evaluations`, observed when the provider
+collects, which each view finds on a flag's first read (`pkg/evaluations.go`),
+so later reads never allocate. By default it logs at `info` and above, with a
 `component=realm` field, and rate-limits failures: the first, the recovery,
 and repeats at most every 5 minutes.
 

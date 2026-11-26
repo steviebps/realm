@@ -35,6 +35,8 @@ type conformance struct {
 				Attributes map[string]string `json:"attributes"`
 			} `json:"context"`
 			Expect map[string]json.RawMessage `json:"expect"`
+			// Rules, when present, names the rule that serves each flag.
+			Rules map[string]string `json:"rules"`
 		} `json:"contexts"`
 	} `json:"cases"`
 }
@@ -86,6 +88,11 @@ func TestConformance(t *testing.T) {
 					_ = json.Unmarshal(value, &have)
 					if !reflect.DeepEqual(have, want) {
 						t.Errorf("context %d: %s = %s, want %s", i, key, value, raw)
+					}
+				}
+				for key, want := range cc.Rules {
+					if have := got[key].Rule; have != want {
+						t.Errorf("context %d: %s is served by rule %q, want %q", i, key, have, want)
 					}
 				}
 			}
