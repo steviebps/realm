@@ -11,6 +11,9 @@ import (
 	realm "github.com/steviebps/realm/pkg"
 )
 
+// emptyChamber is the JSON of a chamber with no flags.
+var emptyChamber = []byte(`{"rules":{}}`)
+
 // clientPut represents the client put command
 var clientPut = &cobra.Command{
 	Use:   "put [path]",
