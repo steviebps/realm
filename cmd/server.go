@@ -295,18 +295,53 @@ func init() {
 	rootCmd.AddCommand(serverCmd)
 }
 
-// redactOptions returns storage options safe to log: credentials inside
-// connection URLs (such as a Postgres url's password) are masked.
+// redactOptions returns storage options safe to log. Only the options
+// loggableOption names are logged, so any other, such as etcd's password, is
+// masked, as is a value that mentions a password (a Postgres url's password
+// or sslpassword, whether URL or keywords). A URL keeps its user but not its
+// password, and a value whose user info does not parse is masked.
 func redactOptions(options map[string]string) map[string]string {
 	out := make(map[string]string, len(options))
 	for k, v := range options {
-		if u, err := url.Parse(v); err == nil && u.User != nil {
-			v = u.Redacted()
-		} else if strings.Contains(v, "password=") {
-			// a keyword/value connection string
-			v = "xxxxx"
-		}
-		out[k] = v
+		out[k] = redactOption(k, v)
 	}
 	return out
+}
+
+// redactOption returns the value of the storage option name as it may be
+// logged.
+func redactOption(name, value string) string {
+	switch {
+	case value == "":
+		return value
+	case !loggableOption(name), strings.Contains(strings.ToLower(value), "password"):
+		return "xxxxx"
+	case !strings.Contains(value, "@"):
+		// no user info
+		return value
+	}
+	if u, err := url.Parse(value); err == nil && u.User != nil {
+		return u.Redacted()
+	}
+	// user info that did not parse, such as a password holding an
+	// unescaped "/" or "#"
+	return "xxxxx"
+}
+
+// loggableOption reports whether the storage option name never holds a
+// secret. Every other option is masked in the log, so a backend that adds a
+// secret option keeps it out of the log without being listed here; list its
+// other options here to see them.
+func loggableOption(name string) bool {
+	switch name {
+	case "shards", "life_window", "clean_window", // bigcache
+		"cache", "source", // cacheable
+		"endpoints", "prefix", "username", // etcd (and s3's prefix)
+		"ca_file", "cert_file", "key_file", // etcd
+		"path",                                             // file, boltdb
+		"bucket", "region", "endpoint", "force_path_style", // gcs, s3
+		"url", "max_conns": // postgres
+		return true
+	}
+	return false
 }
