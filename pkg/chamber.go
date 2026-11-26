@@ -52,11 +52,18 @@ func (c *Chamber) OverwriteFrom(overwrittenFrom *Chamber) {
 type EvaluatedFlag struct {
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
-	// Rule names the targeting rule that served Value, as
-	// realm.flag.evaluations reports it: its id, its position ("#2") when it
-	// has none, or DefaultRuleName. It is not part of the JSON, so an
-	// evaluation sent to a browser never reveals a rule.
-	Rule string `json:"-"`
+
+	// rule is unexported, so no encoding of an evaluation sent to a browser
+	// can reveal it.
+	rule string
+}
+
+// Rule names the targeting rule that served the flag's value, as
+// realm.flag.evaluations reports it: its id, its position ("#2") when it has
+// none, or DefaultRuleName. It is "" for an EvaluatedFlag that
+// Chamber.Evaluate did not make.
+func (e EvaluatedFlag) Rule() string {
+	return e.rule
 }
 
 // Evaluate resolves every flag in the chamber for ec, evaluating every
@@ -74,7 +81,7 @@ func (c *Chamber) Evaluate(ec EvaluationContext) (map[string]EvaluatedFlag, time
 			continue
 		}
 		value, rule := f.resolve(key, ec)
-		flags[key] = EvaluatedFlag{Type: f.Type, Value: value, Rule: f.ruleNameAt(rule)}
+		flags[key] = EvaluatedFlag{Type: f.Type, Value: value, rule: f.ruleNameAt(rule)}
 	}
 	return flags, c.nextScheduleChange(ec.at)
 }
@@ -158,7 +165,8 @@ func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, de
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, rule, ok := resolveAs(t, ruleKey, c.context(ec), defaultValue)
+	value, rule := t.resolve(ruleKey, c.context(ec))
+	v, ok := value.(T)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
@@ -258,9 +266,6 @@ func ParseChamber(b []byte) (*Chamber, error) {
 	if err := c.checkPaused(); err != nil {
 		return nil, err
 	}
-	if err := c.checkRuleIDs(); err != nil {
-		return nil, err
-	}
 	if err := c.checkConstraints(); err != nil {
 		return nil, err
 	}
@@ -303,7 +308,10 @@ func (c *Chamber) checkConstraints() error {
 }
 
 // checkSupported reports the first flag, in key order, of a type or with an
-// operator this version of realm does not know.
+// operator this version of realm does not know, or with a targeting rule,
+// paused or not, whose id realm.flag.evaluations reserves: DefaultRuleName,
+// or one starting with "#", which names a rule without an id by its
+// position.
 func (c *Chamber) checkSupported() error {
 	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
 		f := c.Rules[key]
@@ -318,37 +326,16 @@ func (c *Chamber) checkSupported() error {
 			rules []*TargetingRule
 		}{{"targeting rule", f.Targeting}, {"paused targeting rule", f.PausedTargeting}} {
 			for i, tr := range rules.rules {
-				for _, cl := range tr.Clauses {
-					if !cl.Op.known() {
-						return fmt.Errorf("flag %q: %s %s: clause on %q: unsupported operator %q", key, rules.name, ruleName(tr.ID, i), cl.Attribute, cl.Op)
-					}
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// checkRuleIDs reports the first flag, in key order, with a targeting rule,
-// paused or not, whose id realm.flag.evaluations reserves: "default", which
-// names a flag's default value, or one starting with "#", which names a rule
-// without an id by its position.
-func (c *Chamber) checkRuleIDs() error {
-	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
-		f := c.Rules[key]
-		if f == nil {
-			continue
-		}
-		for _, rules := range []struct {
-			name  string
-			rules []*TargetingRule
-		}{{"targeting rule", f.Targeting}, {"paused targeting rule", f.PausedTargeting}} {
-			for _, tr := range rules.rules {
 				switch {
 				case tr.ID == DefaultRuleName:
 					return fmt.Errorf("flag %q: %s id %q is reserved: it names the default value in realm.flag.evaluations", key, rules.name, tr.ID)
 				case strings.HasPrefix(tr.ID, "#"):
 					return fmt.Errorf("flag %q: %s id %q is reserved: ids starting with \"#\" name rules without one in realm.flag.evaluations", key, rules.name, tr.ID)
+				}
+				for _, cl := range tr.Clauses {
+					if !cl.Op.known() {
+						return fmt.Errorf("flag %q: %s %s: clause on %q: unsupported operator %q", key, rules.name, ruleName(tr.ID, i), cl.Attribute, cl.Op)
+					}
 				}
 			}
 		}

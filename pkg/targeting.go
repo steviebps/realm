@@ -333,8 +333,21 @@ func ruleName(id string, i int) string {
 	if id != "" {
 		return id
 	}
+	if i < len(positionNames) {
+		return positionNames[i]
+	}
 	return "#" + strconv.Itoa(i+1)
 }
+
+// positionNames holds the names of the first positions ("#1", "#2", …), so
+// that naming a rule without an id by its position, as every evaluation of
+// it by the server does, allocates nothing.
+var positionNames = func() (names [64]string) {
+	for i := range names {
+		names[i] = "#" + strconv.Itoa(i+1)
+	}
+	return names
+}()
 
 type targetingRuleAlias TargetingRule
 

@@ -2,7 +2,6 @@ package realm
 
 import (
 	"context"
-	"maps"
 	"testing"
 
 	"github.com/rs/zerolog"
@@ -53,9 +52,7 @@ func TestEvaluationsCountTheRuleServed(t *testing.T) {
 		{Flag: "checkout", Path: path, Rule: "#2"}:      1,
 		{Flag: "checkout", Path: path, Rule: "default"}: 1,
 	}
-	if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-		t.Errorf("realm.flag.evaluations = %v, want %v", got, want)
-	}
+	evaluationstest.Expect(t, path, want)
 }
 
 // TestEvaluationsCountWithoutAllocating checks that counting adds no
@@ -136,9 +133,7 @@ func TestEvaluationsCountOnlyValuesServed(t *testing.T) {
 		{Flag: "rate", Path: path, Rule: "default"}: 1,
 		{Flag: "cfg", Path: path, Rule: "default"}:  1,
 	}
-	if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-		t.Errorf("realm.flag.evaluations = %v, want %v", got, want)
-	}
+	evaluationstest.Expect(t, path, want)
 }
 
 // TestEvaluationsCountAtTheViewsPath checks that with a path template, an
@@ -152,9 +147,7 @@ func TestEvaluationsCountAtTheViewsPath(t *testing.T) {
 	}
 	for path, n := range map[string]int64{"/evaluations/tenants/acme/": 2, "/evaluations/tenants/": 1} {
 		want := map[series]int64{{Flag: "msg", Path: path, Rule: "default"}: n}
-		if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-			t.Errorf("at %s: realm.flag.evaluations = %v, want %v", path, got, want)
-		}
+		evaluationstest.Expect(t, path, want)
 	}
 }
 
@@ -185,9 +178,7 @@ func TestEvaluationsAccumulateAcrossChanges(t *testing.T) {
 		{Flag: "checkout", Path: path, Rule: "beta"}:  2,
 		{Flag: "checkout", Path: path, Rule: "pilot"}: 1,
 	}
-	if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-		t.Errorf("realm.flag.evaluations = %v, want %v", got, want)
-	}
+	evaluationstest.Expect(t, path, want)
 }
 
 // TestEvaluationsCountPausedTargetingAsDefault checks that a flag whose
@@ -200,7 +191,5 @@ func TestEvaluationsCountPausedTargetingAsDefault(t *testing.T) {
 	}
 	path := "/evaluations/paused/"
 	want := map[series]int64{{Flag: "checkout", Path: path, Rule: "default"}: 1}
-	if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-		t.Errorf("realm.flag.evaluations = %v, want %v", got, want)
-	}
+	evaluationstest.Expect(t, path, want)
 }

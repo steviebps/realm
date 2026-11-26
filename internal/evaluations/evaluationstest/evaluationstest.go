@@ -4,6 +4,7 @@ package evaluationstest
 
 import (
 	"context"
+	"maps"
 	"sync"
 	"testing"
 
@@ -65,4 +66,13 @@ func Collect(t testing.TB, path string) map[Series]int64 {
 		}
 	}
 	return got
+}
+
+// Expect reports an error unless realm.flag.evaluations at path holds
+// exactly want.
+func Expect(t testing.TB, path string, want map[Series]int64) {
+	t.Helper()
+	if got := Collect(t, path); !maps.Equal(got, want) {
+		t.Errorf("realm.flag.evaluations at %s = %v, want %v", path, got, want)
+	}
 }

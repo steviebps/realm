@@ -91,7 +91,7 @@ func TestConformance(t *testing.T) {
 					}
 				}
 				for key, want := range cc.Rules {
-					if have := got[key].Rule; have != want {
+					if have := got[key].Rule(); have != want {
 						t.Errorf("context %d: %s is served by rule %q, want %q", i, key, have, want)
 					}
 				}

@@ -31,7 +31,9 @@ interface Series {
   count: number;
 }
 
-// The series of a flag's rules, then of its default, at a path.
+// The series of a flag's default, then of each of its rules, at a path, so
+// that the series of rule (servingRule's index, -1 for the default) is at
+// rule + 1.
 interface FlagSeries {
   readonly path: string;
   readonly key: string;
@@ -70,17 +72,16 @@ export class Evaluations {
       found = { path, key, series: this.#seriesOf(path, key, flag) };
       this.#flags.set(flag, found);
     }
-    const last = found.series.length - 1;
-    found.series[rule < 0 || rule > last ? last : rule]!.count++;
+    found.series[rule + 1]!.count++;
   }
 
-  // seriesOf returns the series of each of flag's targeting rules, then of
-  // its default, creating those not yet counted.
+  // seriesOf returns the series of flag's default, then of each of its
+  // targeting rules, creating those not yet counted.
   #seriesOf(path: string, key: string, flag: Flag): Series[] {
     const rules = Array.isArray(flag.targeting) ? flag.targeting.length : 0;
     const series: Series[] = [];
-    for (let i = 0; i <= rules; i++) {
-      const rule = ruleName(flag, i < rules ? i : -1);
+    for (let i = -1; i < rules; i++) {
+      const rule = ruleName(flag, i);
       const id = JSON.stringify([path, key, rule]);
       let s = this.#series.get(id);
       if (!s) {

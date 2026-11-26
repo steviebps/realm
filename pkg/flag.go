@@ -259,19 +259,11 @@ func (f *Flag) resolve(flagKey string, ec EvaluationContext) (interface{}, int) 
 // valueAs resolves the flag for ec and asserts the result to T, returning
 // defaultValue and false when it is not a T.
 func valueAs[T any](f *Flag, flagKey string, ec EvaluationContext, defaultValue T) (T, bool) {
-	v, _, ok := resolveAs(f, flagKey, ec, defaultValue)
-	return v, ok
-}
-
-// resolveAs resolves the flag for ec as resolve does, and asserts the value
-// to T, returning defaultValue and false when it is not a T.
-func resolveAs[T any](f *Flag, flagKey string, ec EvaluationContext, defaultValue T) (T, int, bool) {
-	v, rule := f.resolve(flagKey, ec)
-	t, ok := v.(T)
+	v, ok := f.ValueFor(flagKey, ec).(T)
 	if !ok {
-		return defaultValue, rule, false
+		return defaultValue, false
 	}
-	return t, rule, true
+	return v, true
 }
 
 // StringValueFor retrieves a string value of the flag for the given evaluation

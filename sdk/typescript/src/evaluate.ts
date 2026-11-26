@@ -198,15 +198,12 @@ export function servingRule(
   defaults?: Record<string, string>,
   now: number = Date.now(),
 ): number {
-  let i = 0;
-  for (const rule of flag.targeting ?? []) {
-    if (scheduleIncludes(rule.schedule, now)) {
-      const matches = (rule.clauses ?? []).every((c) => clauseMatches(c, context, defaults));
-      if (matches && rolloutIncludes(rule.rollout, flagKey, context, defaults)) return i;
-    }
-    i++;
-  }
-  return -1;
+  return (flag.targeting ?? []).findIndex(
+    (rule) =>
+      scheduleIncludes(rule.schedule, now) &&
+      (rule.clauses ?? []).every((c) => clauseMatches(c, context, defaults)) &&
+      rolloutIncludes(rule.rollout, flagKey, context, defaults),
+  );
 }
 
 /** Returns the value the rule at index (servingRule's) serves: -1 is the flag's default. */
@@ -214,8 +211,8 @@ export function ruleValue(flag: Flag, index: number): unknown {
   return index < 0 ? flag.value : flag.targeting![index]!.value;
 }
 
-/** The rule name realm.flag.evaluations reports when a flag serves its default. */
-export const DEFAULT_RULE = 'default';
+// The rule name realm.flag.evaluations reports when a flag serves its default.
+const DEFAULT_RULE = 'default';
 
 /**
  * Names the targeting rule at index (servingRule's) as realm.flag.evaluations

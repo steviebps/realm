@@ -2,7 +2,6 @@ package http
 
 import (
 	"bufio"
-	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -38,12 +37,8 @@ func TestEvaluateCountsEachFlagServed(t *testing.T) {
 		{Flag: "beta", Path: path, Rule: "default"}:  1,
 		{Flag: "theme", Path: path, Rule: "default"}: 3,
 	}
-	if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-		t.Errorf("realm.flag.evaluations = %v, want %v", got, want)
-	}
-	if got := evaluationstest.Collect(t, "/counted/missing/"); len(got) != 0 {
-		t.Errorf("a missing chamber counted %v", got)
-	}
+	evaluationstest.Expect(t, path, want)
+	evaluationstest.Expect(t, "/counted/missing/", map[series]int64{})
 }
 
 // TestEvaluateStreamCountsChangesOfRule checks that an evaluation stream
@@ -87,7 +82,5 @@ func TestEvaluateStreamCountsChangesOfRule(t *testing.T) {
 		{Flag: "theme", Path: path, Rule: "dark-acme"}: 1,
 		{Flag: "banner", Path: path, Rule: "default"}:  1,
 	}
-	if got := evaluationstest.Collect(t, path); !maps.Equal(got, want) {
-		t.Errorf("realm.flag.evaluations = %v, want %v", got, want)
-	}
+	evaluationstest.Expect(t, path, want)
 }

@@ -31,7 +31,7 @@ export const rulesOf = (flag: Flag): TargetingRule[] =>
  * by its position, which changes when rules are reordered.
  */
 export const newRuleId = (flag: Flag, random: () => number = Math.random): string => {
-  const taken = new Set([...(flag.targeting ?? []), ...(flag.pausedTargeting ?? [])].map((rule) => rule.id));
+  const taken = new Set(rulesOf(flag).map((rule) => rule.id));
   for (;;) {
     const id = `r-${Math.floor(random() * 36 ** 6)
       .toString(36)
