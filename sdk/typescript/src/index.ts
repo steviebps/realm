@@ -3,6 +3,7 @@ export { indexedDbAdapter, localStorageAdapter, type IndexedDbAdapterOptions, ty
 export { serializeInitialState, ServerClient, type ServerClientOptions } from './server.js';
 export { RealmError, type ClientOptions } from './transport.js';
 export { bucket, evaluateChamber, KEY_ATTRIBUTE, VERSION_ATTRIBUTE } from './evaluate.js';
+export { browserVisitorId, serverVisitorId, type Visitor, type VisitorIdOptions } from './visitor.js';
 export type {
   Chamber,
   Clause,

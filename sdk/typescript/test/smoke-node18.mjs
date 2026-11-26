@@ -5,7 +5,7 @@
 //   npm run build && node test/smoke-node18.mjs
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { BrowserClient, ServerClient, bucket, evaluateChamber } from '../dist/index.js';
+import { BrowserClient, ServerClient, bucket, evaluateChamber, serverVisitorId } from '../dist/index.js';
 
 const chamber = {
   rules: {
@@ -23,6 +23,11 @@ assert.equal(evaluateChamber(chamber, { key: 'u1' }).beta.value, false);
 const b = bucket('seed', 'key');
 assert.ok(b >= 0 && b < 100); // a percentage
 assert.equal(bucket('seed', 'key'), b);
+
+// visitor IDs (Node 18's global crypto)
+const visitor = serverVisitorId(undefined);
+assert.match(visitor.id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+assert.deepEqual(serverVisitorId(visitor.setCookie.split(';')[0]), { id: visitor.id });
 
 // both clients against a server that answers like realm (no streaming)
 const server = createServer((req, res) => {
