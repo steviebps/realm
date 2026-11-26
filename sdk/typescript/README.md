@@ -34,6 +34,7 @@ if (realm.bool('new-checkout', { key: user.id, attributes: { tenantId: user.tena
 - [Read flags in a browser: `BrowserClient`](#read-flags-in-a-browser-browserclient)
 - [React](#react)
   - [Server rendering](#server-rendering)
+- [Roll out to visitors who aren't signed in](#roll-out-to-visitors-who-arent-signed-in)
 - [How clients stay current](#how-clients-stay-current)
 - [API reference](#api-reference)
 - [Learn more](#learn-more)
@@ -531,6 +532,114 @@ A client built with `bootstrap` instead also renders those values on the
 server and while hydrating, but as `source: 'bootstrap'`, with `ready`
 `false`. Without either option, hooks render their fallbacks on the server.
 
+## Roll out to visitors who aren't signed in
+
+A percentage rollout keeps each context in the same bucket by hashing one of
+its attributes: its `key`, unless the rule's `bucketBy` names another. A
+context without that attribute is never in a rollout, so a visitor who
+isn't signed in, with no user ID, always gets the next rule or the default.
+Give such a visitor a **visitor ID** instead: a random ID that stays with
+the browser in a first-party cookie (`realm_visitor`), which your server and
+the browser both read.
+
+Make the visitor ID the key of a visitor who isn't signed in, and keep it as
+an attribute once they are:
+
+```ts
+import type { EvaluationContext } from '@steviebps/realm-sdk';
+
+function contextFor(user: User | undefined, visitorId: string): EvaluationContext {
+  return user
+    ? { key: user.id, attributes: { anonymous: 'false', visitorId, tenantId: user.tenantId } }
+    : { key: visitorId, attributes: { anonymous: 'true', visitorId } };
+}
+```
+
+Then each rule decides which 20% it serves:
+
+| To serve 20% of… | Rule | Keep in mind |
+|---|---|---|
+| everyone, by user ID or visitor ID | `"rollout": { "percentage": 20 }` | A visitor's bucket can change when they sign in, as their key becomes their user ID. |
+| visitors who aren't signed in | `"clauses": [{ "attribute": "anonymous", "op": "in", "values": ["true"] }], "rollout": { "percentage": 20 }` | Once signed in, they go on to the next rule. |
+| browsers, kept through sign-in | `"rollout": { "percentage": 20, "bucketBy": "visitorId" }` | One user can get different values on different devices, and a context without a `visitorId` (a backend job, say) is never in it. |
+
+**On a server**, read the ID from the request's cookies with
+`serverVisitorId`. When the request has none, it creates one, with a
+`Set-Cookie` header value for you to send with the response. With
+[Server rendering](#server-rendering):
+
+```ts
+import { serverVisitorId } from '@steviebps/realm-sdk';
+
+app.get('*', (req, res) => {
+  const visitor = serverVisitorId(req.headers.cookie);
+  if (visitor.setCookie) res.append('Set-Cookie', visitor.setCookie);
+  const initialState = realm.initialState(contextFor(req.user, visitor.id));
+  // render and send the page as in Server rendering
+});
+```
+
+With the Fetch API's `Request` and `Response` (edge runtimes, say), pass
+`request.headers.get('cookie')` and append `visitor.setCookie` to the
+response's headers. Call it where the response's headers can still be set:
+where your pages render without access to them (as in React Server
+Components), call it in middleware and pass the ID on to the render, since
+the request's own cookies don't have a new one.
+
+The browser's client starts from the state's context, so it needs no ID of
+its own. When the visitor signs in, `browserVisitorId` reads the same ID:
+
+```ts
+await flags.identify(contextFor(user, browserVisitorId()));
+```
+
+**In an app that renders only in the browser**, `browserVisitorId` reads the
+ID from `document.cookie`, or creates one and writes it there:
+
+```ts
+import { BrowserClient, browserVisitorId } from '@steviebps/realm-sdk';
+
+const flags = new BrowserClient({
+  address: 'https://realm.example.com',
+  token: 'realm_…', // an evaluate key
+  path: '/prod/web/',
+  context: contextFor(currentUser, browserVisitorId()),
+});
+```
+
+It throws where there is no document, as in server rendering: use
+`serverVisitorId` there.
+
+Things to know:
+
+- **A visitor stays in their bucket as long as they keep the cookie.**
+  Clearing cookies, a private window, or another device means a new ID, and
+  perhaps another bucket, so "20% of visitors" is really 20% of visitor IDs.
+  Safari keeps a cookie that script writes for at most seven days, so a
+  browser-only app's Safari visitors who stay away longer get a new ID; a
+  cookie your server sets lasts `maxAge`, and `browserVisitorId` never
+  rewrites it.
+- **Raising a rollout's percentage keeps everyone who was in it**, and adds
+  more. Lowering it moves some out, and changing its `seed` reshuffles who
+  is in. To give several flags the same 20%, give their rollouts the same
+  `seed`.
+- **The ID is not a secret.** It is a cookie the browser can read (not
+  `HttpOnly`), and a visitor can replace it to pick a bucket, as they can
+  with any context a browser sends. Rollouts decide what visitors see, never
+  what they may access. Depending on where your visitors are, a cookie like
+  this may need their consent.
+- Only an ID these functions could have written (a lower-case version 4
+  UUID) is read; a cookie holding anything else is replaced.
+
+Both functions take the same options:
+
+| Option | Default | Description |
+|---|---|---|
+| `cookieName` | `'realm_visitor'` | The cookie's name. |
+| `domain` | none | The cookie's `Domain`, to share one ID with subdomains: `example.com` covers `www.example.com` and `app.example.com`. |
+| `maxAge` | 400 days | How long the cookie lasts, in seconds; browsers keep none longer than 400 days. |
+| `secure` | `true` on a server; in the browser, whether the page is served over HTTPS | Send the cookie only over HTTPS. Pass `false` to a server that serves plain HTTP, as in development: some browsers drop a `Secure` cookie that arrives over HTTP, so every page would get a new ID. |
+
 ## How clients stay current
 
 **Starting.** `start()` resolves once the first load succeeds. If it fails,
@@ -652,6 +761,8 @@ Both clients take these options:
 | Function | Description |
 |---|---|
 | `serializeInitialState(state)` | `state` as JSON that is safe inside an HTML `<script>` element. |
+| `serverVisitorId(cookieHeader, options?)` | A request's visitor ID, from its `Cookie` header, or a new one: `{ id, setCookie }`, where `setCookie`, set only for a new ID, is a `Set-Cookie` header value to send with the response. See [Roll out to visitors who aren't signed in](#roll-out-to-visitors-who-arent-signed-in). |
+| `browserVisitorId(options?)` | This browser's visitor ID, from `document.cookie`, or a new one written there. Throws where there is no document. |
 
 ## Learn more
 

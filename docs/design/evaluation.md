@@ -151,6 +151,13 @@ The React hooks read through `useSyncExternalStore`, whose server snapshot
 the server and the hydrating browser render the same markup, however late a
 `Suspense` boundary hydrates.
 
+A visitor who isn't signed in needs a key for rollouts to bucket them.
+`serverVisitorId(cookieHeader)` and `browserVisitorId()` (`src/visitor.ts`)
+read a random **visitor ID** from a first-party cookie, or create one, so the
+server rendering a page and the browser hydrating it put the same key in the
+context; see
+[Visitors who aren't signed in](targeting.md#visitors-who-arent-signed-in).
+
 Both clients stream by default and reconnect with capped exponential backoff
 (1 s to 30 s), keeping the last known values meanwhile. `streaming: false`
 switches to polling every `pollingInterval` milliseconds. Getters never

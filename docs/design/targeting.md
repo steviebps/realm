@@ -138,6 +138,48 @@ above so the UI's pickers and catalog line up across applications.
 device and user in one location gets the same answer. `seed` defaults to the
 flag key; the bucketing algorithm is unchanged (sticky across releases).
 
+### Visitors who aren't signed in
+
+A context without the `bucketBy` attribute is never in the rollout, so a
+visitor who isn't signed in, with no user ID for a `key`, would always get
+the next rule or the default. Bucketing needs a value that stays the same
+from one evaluation to the next, so such a visitor gets a **visitor ID**: a
+random UUID kept in a first-party cookie, `realm_visitor`, which a server
+rendering the page and the browser running it both read. By convention the
+context carries it as:
+
+| Visitor | `key` | `anonymous` | `visitorId` |
+|---|---|---|---|
+| not signed in | the visitor ID | `"true"` | the visitor ID |
+| signed in | the user ID | `"false"` | the visitor ID |
+
+Which population a rule's rollout counts is then the rule's choice:
+
+- `rollout: {percentage: 20}` (bucketing on `key`): 20% of users and 20% of
+  visitors who aren't signed in. A visitor's bucket can change at sign-in,
+  when their key changes.
+- a clause `anonymous in ["true"]` with that rollout: 20% of visitors who
+  aren't signed in; once signed in they go on to the next rule.
+- `rollout: {percentage: 20, bucketBy: "visitorId"}`: 20% of browsers,
+  kept through sign-in; one user can differ between devices, and contexts
+  without a `visitorId` (backend jobs) are never in it.
+
+Nothing in the server or the evaluation changes: a visitor ID is a key like
+any other. The TypeScript SDK reads or creates the cookie: `serverVisitorId`
+from a request's `Cookie` header (returning a `Set-Cookie` value for a new
+ID), `browserVisitorId` from `document.cookie`. Another language can share
+it: the value is a lower-case version 4 UUID (anything else is replaced),
+written `Path=/; Max-Age=34560000; SameSite=Lax`, plus `Secure` over HTTPS,
+and not `HttpOnly`, so the browser can read it.
+
+- **Sticky as long as the cookie.** Cleared cookies, private windows, and
+  other devices get new IDs, so a percentage of visitors is a percentage of
+  visitor IDs. Safari keeps cookies written by script for at most seven
+  days, so a server should set the cookie where it can.
+- **Not access control.** The browser chooses its context, visitor ID
+  included, so a visitor can pick their bucket; a rollout decides what
+  visitors see, never what they may access.
+
 ### Schedules
 
 `schedule: {start?, end?}` on a rule limits it to a window of time: it applies

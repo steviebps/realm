@@ -288,8 +288,11 @@ In this example:
 | `semverLte` | is a semver version less than or equal to the value (one value only) |
 
 `bucketBy` is `key` by default. To roll out to a full group at once, bucket on a
-larger attribute, for example `locationId`. Refer to
-[docs/design/targeting.md](docs/design/targeting.md) for the full model.
+larger attribute, for example `locationId`. A context without the bucketing
+attribute is never in a rollout, so give visitors who aren't signed in a
+random visitor ID as their key; the TypeScript SDK keeps one in a cookie (see
+[Visitors who aren't signed in](docs/design/targeting.md#visitors-who-arent-signed-in)).
+Refer to [docs/design/targeting.md](docs/design/targeting.md) for the full model.
 
 ### Descriptions and allowed values
 

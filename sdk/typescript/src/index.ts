@@ -4,6 +4,7 @@ export { serializeInitialState, ServerClient, type ServerClientOptions } from '.
 export type { Meter, ObservableCounter, ObservableResult } from './metrics.js';
 export { RealmError, type ClientOptions } from './transport.js';
 export { bucket, evaluateChamber, KEY_ATTRIBUTE, VERSION_ATTRIBUTE } from './evaluate.js';
+export { browserVisitorId, serverVisitorId, type Visitor, type VisitorIdOptions } from './visitor.js';
 export type {
   Chamber,
   Clause,
