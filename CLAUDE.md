@@ -269,6 +269,8 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   `pkg/storage/conformance_test.go`; one that several servers can share
   (`Transactional` and `Watchable`) joins `sharedBackends` there instead, so
   the shared contract tests hold it to what `Update` and the change feed need.
+  List its options that never hold a secret in `loggableOption`
+  (`cmd/server.go`): the server's debug log masks every other option.
 - **Add a CLI subcommand:** add a `*cobra.Command` in `cmd/`, register it in an
   `init()` with `rootCmd.AddCommand(...)`.
 

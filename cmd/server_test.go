@@ -111,3 +111,39 @@ func TestCertReloader(t *testing.T) {
 		t.Fatal("newCertReloader accepted a missing key")
 	}
 }
+
+func TestRedactOptions(t *testing.T) {
+	cases := []struct {
+		name, option, value, want string
+	}{
+		{"etcd password", "password", "hunter2", "xxxxx"},
+		{"etcd password reference", "password", "${REALM_ETCD_PASSWORD}", "xxxxx"},
+		{"empty option", "password", "", ""},
+		{"unknown option", "access_key", "hunter2", "xxxxx"},
+		{"url password", "url", "postgres://realm:hunter2@db:5432/realm?sslmode=verify-full", "postgres://realm:xxxxx@db:5432/realm?sslmode=verify-full"},
+		{"url password parameter", "url", "postgres://realm@db:5432/realm?sslmode=verify-full&password=hunter2", "xxxxx"},
+		{"url sslpassword parameter", "url", "postgres://realm@db:5432/realm?sslpassword=hunter2", "xxxxx"},
+		{"url password with an unescaped #", "url", "postgres://realm:hun#ter2@db:5432/realm", "xxxxx"},
+		{"url password with an unescaped /", "url", "postgres://realm:1234/hunter2@db/realm", "xxxxx"},
+		{"url password with a comma", "url", "postgres://realm:hun,ter2@db/realm", "postgres://realm:xxxxx@db/realm"},
+		{"url user", "url", "postgres://realm@db:5432/realm", "postgres://realm@db:5432/realm"},
+		{"keyword password", "url", "host=db user=realm password=hunter2", "xxxxx"},
+		{"keyword password with spaces", "url", "host=db user=realm password = hunter2", "xxxxx"},
+		{"keyword password in capitals", "url", "host=db user=realm PASSWORD=hunter2", "xxxxx"},
+		{"url without credentials", "url", "postgres://db:5432/realm?sslmode=require", "postgres://db:5432/realm?sslmode=require"},
+		{"keywords without credentials", "url", "host=db user=realm sslmode=require", "host=db user=realm sslmode=require"},
+		{"endpoint password", "endpoint", "https://minio:hunter2@minio.internal:9000", "https://minio:xxxxx@minio.internal:9000"},
+		{"endpoints", "endpoints", "https://etcd-0:2379,https://etcd-1:2379", "https://etcd-0:2379,https://etcd-1:2379"},
+		{"username", "username", "realm", "realm"},
+		{"key file", "key_file", "/etc/realm/etcd-client.key", "/etc/realm/etcd-client.key"},
+		{"path", "path", "./.realm", "./.realm"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := redactOptions(map[string]string{c.option: c.value})
+			if len(got) != 1 || got[c.option] != c.want {
+				t.Fatalf("redactOptions(%s: %q) = %q, want %s: %q", c.option, c.value, got, c.option, c.want)
+			}
+		})
+	}
+}
