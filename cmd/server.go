@@ -41,9 +41,6 @@ var serverCmd = &cobra.Command{
 	},
 }
 
-// emptyChamber is the JSON of a chamber with no flags.
-var emptyChamber = []byte(`{"rules":{}}`)
-
 // runServer serves until a shutdown signal, returning startup and serving
 // errors so deferred cleanup and the telemetry flush in Execute still run.
 func runServer(cmd *cobra.Command) error {
