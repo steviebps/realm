@@ -85,6 +85,33 @@ func revisionKey(chamberPath string, rev int) string {
 	return historyIndexKey(chamberPath) + strconv.Itoa(rev) + "/"
 }
 
+// A change of a chamber is recorded in its history in the same
+// storage.Update as the change itself, so the two land together: the Update
+// reads historyKeys of the chambers it changes, and its function returns the
+// ops recordRevision gives for each, with its own.
+
+// historyKeys returns the keys a storage.Update must read to record changes
+// of the chambers at paths (see recordRevision).
+func historyKeys(paths ...string) []string {
+	keys := make([]string, len(paths))
+	for i, p := range paths {
+		keys[i] = historyIndexKey(p)
+	}
+	return keys
+}
+
+// recordRevision returns the storage changes that record rev in the history
+// of chamberPath, from cur, the entries a storage.Update read, which must
+// include historyKeys(chamberPath): an index left unread would start the
+// history over, so it is refused.
+func recordRevision(cur map[string]*storage.StorageEntry, chamberPath string, rev Revision) ([]storage.Op, error) {
+	index, read := cur[historyIndexKey(chamberPath)]
+	if !read {
+		return nil, fmt.Errorf("the history of %s was not read with the change (see historyKeys)", chamberPath)
+	}
+	return historyOps(index, chamberPath, rev)
+}
+
 // historyOps returns the storage changes that record rev in the history of
 // chamberPath, given its current history index (nil when there is none).
 func historyOps(index *storage.StorageEntry, chamberPath string, rev Revision) ([]storage.Op, error) {
