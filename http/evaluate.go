@@ -11,6 +11,7 @@ import (
 
 	"github.com/steviebps/realm/api"
 	"github.com/steviebps/realm/auth"
+	"github.com/steviebps/realm/internal/evaluations"
 	realm "github.com/steviebps/realm/pkg"
 	"github.com/steviebps/realm/pkg/storage"
 	"go.opentelemetry.io/otel/attribute"
@@ -40,6 +41,10 @@ type evaluateResponse struct {
 //	POST /v1/evaluate/<path>             → {"flags": {"<name>": {"type", "value"}}}
 //	POST /v1/evaluate/<path>?watch=true  → the same as server-sent events, re-sent when the values change
 //	                                       (after a write, or when a targeting rule's schedule starts or ends)
+//
+// Each flag of a response counts in realm.flag.evaluations at path, under
+// the rule that served it; a stream counts each flag of its first event, then
+// a flag again only when an event serves it by another rule.
 func handleEvaluate(reader *chamberReader, brk *broker) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
@@ -94,6 +99,7 @@ func handleEvaluate(reader *chamberReader, brk *broker) http.Handler {
 		ec := realm.EvaluationContext{Key: req.Key, Attributes: req.Attributes}
 
 		if isWatchRequest(r) {
+			streamed := &streamedRules{path: path, rules: map[string]string{}}
 			// evaluate keys are published in web pages, so anyone can open
 			// these streams
 			streamEvents(w, r, brk, path, "flags", true, func(ctx context.Context) (streamPayload, error) {
@@ -102,7 +108,8 @@ func handleEvaluate(reader *chamberReader, brk *broker) http.Handler {
 					return streamPayload{}, err
 				}
 				data, err := json.Marshal(evaluateResponse{Flags: ev.flags})
-				return streamPayload{data: data, revision: ev.revision, changesAt: ev.changesAt}, err
+				return streamPayload{data: data, revision: ev.revision, changesAt: ev.changesAt,
+					sent: func() { streamed.count(ev.flags) }}, err
 			})
 			return
 		}
@@ -112,9 +119,43 @@ func handleEvaluate(reader *chamberReader, brk *broker) http.Handler {
 			failRead(ctx, w, p, err)
 			return
 		}
+		countEvaluations(path, ev.flags)
 		setRevision(w, ev.revision)
 		handleOkJSON(ctx, w, evaluateResponse{Flags: ev.flags})
 	})
+}
+
+// countEvaluations counts each of flags, served at path, in
+// realm.flag.evaluations under the rule that served it.
+func countEvaluations(path string, flags map[string]realm.EvaluatedFlag) {
+	for key, f := range flags {
+		evaluations.Of(path, key, f.Rule()).Add()
+	}
+}
+
+// streamedRules counts in realm.flag.evaluations what an evaluation stream
+// at path sends: each flag of its first event, then a flag again only when
+// an event serves it by another rule.
+type streamedRules struct {
+	path string
+	// rules holds the rule that served each flag in the last event sent.
+	rules map[string]string
+}
+
+// count counts flags, the evaluation of an event the stream sent.
+func (s *streamedRules) count(flags map[string]realm.EvaluatedFlag) {
+	for key := range s.rules {
+		if _, ok := flags[key]; !ok {
+			delete(s.rules, key)
+		}
+	}
+	for key, f := range flags {
+		if rule, ok := s.rules[key]; ok && rule == f.Rule() {
+			continue
+		}
+		s.rules[key] = f.Rule()
+		evaluations.Of(s.path, key, f.Rule()).Add()
+	}
 }
 
 // withCORS lets pages on any origin call the routes under prefix with a

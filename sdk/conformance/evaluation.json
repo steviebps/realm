@@ -1,5 +1,5 @@
 {
-  "description": "Evaluation cases shared by the Go SDK (pkg/conformance_test.go) and the TypeScript SDK. Every implementation must produce exactly these results.",
+  "description": "Evaluation cases shared by the Go SDK (pkg/conformance_test.go) and the TypeScript SDK. Every implementation must produce exactly these results. A context's \"rules\", when present, names the targeting rule that serves each flag, as realm.flag.evaluations reports it.",
   "buckets": [
     {
       "seed": "beta",
@@ -1073,6 +1073,192 @@
           },
           "expect": {
             "known": "served"
+          }
+        }
+      ]
+    },
+    {
+      "name": "the rule that serves each value: its id, its position when it has none, or default",
+      "chamber": {
+        "rules": {
+          "checkout": {
+            "type": "string",
+            "value": "old",
+            "targeting": [
+              {
+                "id": "pilots",
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": "pilot"
+              },
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "globex"
+                    ]
+                  }
+                ],
+                "value": "new"
+              },
+              {
+                "id": "half",
+                "rollout": {
+                  "percentage": 50,
+                  "seed": "beta"
+                },
+                "value": "half"
+              }
+            ]
+          },
+          "future": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "id": "later",
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "matchesFuture",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": true
+              },
+              {
+                "clauses": [
+                  {
+                    "attribute": "tenantId",
+                    "op": "in",
+                    "values": [
+                      "acme"
+                    ]
+                  }
+                ],
+                "value": true
+              }
+            ]
+          },
+          "paused": {
+            "type": "boolean",
+            "value": false,
+            "pausedTargeting": [
+              {
+                "id": "pilots",
+                "value": true
+              }
+            ]
+          },
+          "launch": {
+            "type": "boolean",
+            "value": false,
+            "targeting": [
+              {
+                "id": "launch-day",
+                "schedule": {
+                  "start": "2026-01-01T00:00:00Z"
+                },
+                "value": true
+              }
+            ]
+          }
+        }
+      },
+      "contexts": [
+        {
+          "now": "2025-06-01T00:00:00Z",
+          "context": {
+            "key": "user-1",
+            "attributes": {
+              "tenantId": "acme"
+            }
+          },
+          "expect": {
+            "checkout": "pilot",
+            "future": true,
+            "paused": false,
+            "launch": false
+          },
+          "rules": {
+            "checkout": "pilots",
+            "future": "#2",
+            "paused": "default",
+            "launch": "default"
+          }
+        },
+        {
+          "now": "2026-06-01T00:00:00Z",
+          "context": {
+            "key": "user-1",
+            "attributes": {
+              "tenantId": "globex"
+            }
+          },
+          "expect": {
+            "checkout": "new",
+            "future": false,
+            "paused": false,
+            "launch": true
+          },
+          "rules": {
+            "checkout": "#2",
+            "future": "default",
+            "paused": "default",
+            "launch": "launch-day"
+          }
+        },
+        {
+          "now": "2026-06-01T00:00:00Z",
+          "context": {
+            "key": "user-1",
+            "attributes": {
+              "tenantId": "initech"
+            }
+          },
+          "expect": {
+            "checkout": "half",
+            "future": false,
+            "paused": false,
+            "launch": true
+          },
+          "rules": {
+            "checkout": "half",
+            "future": "default",
+            "paused": "default",
+            "launch": "launch-day"
+          }
+        },
+        {
+          "now": "2026-06-01T00:00:00Z",
+          "context": {
+            "key": "user-5",
+            "attributes": {
+              "tenantId": "initech"
+            }
+          },
+          "expect": {
+            "checkout": "old",
+            "future": false,
+            "paused": false,
+            "launch": true
+          },
+          "rules": {
+            "checkout": "default",
+            "future": "default",
+            "paused": "default",
+            "launch": "launch-day"
           }
         }
       ]

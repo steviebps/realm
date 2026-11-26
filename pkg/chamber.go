@@ -52,6 +52,18 @@ func (c *Chamber) OverwriteFrom(overwrittenFrom *Chamber) {
 type EvaluatedFlag struct {
 	Type  string      `json:"type"`
 	Value interface{} `json:"value"`
+
+	// rule is unexported, so no encoding of an evaluation sent to a browser
+	// can reveal it.
+	rule string
+}
+
+// Rule names the targeting rule that served the flag's value, as
+// realm.flag.evaluations reports it: its id, its position ("#2") when it has
+// none, or DefaultRuleName. It is "" for an EvaluatedFlag that
+// Chamber.Evaluate did not make.
+func (e EvaluatedFlag) Rule() string {
+	return e.rule
 }
 
 // Evaluate resolves every flag in the chamber for ec, evaluating every
@@ -68,7 +80,8 @@ func (c *Chamber) Evaluate(ec EvaluationContext) (map[string]EvaluatedFlag, time
 		if f == nil || f.Rule == nil || !knownType(f.Type) {
 			continue
 		}
-		flags[key] = EvaluatedFlag{Type: f.Type, Value: f.ValueFor(key, ec)}
+		value, rule := f.resolve(key, ec)
+		flags[key] = EvaluatedFlag{Type: f.Type, Value: value, rule: f.ruleNameAt(rule)}
 	}
 	return flags, c.nextScheduleChange(ec.at)
 }
@@ -109,6 +122,9 @@ type ChamberEntry struct {
 	// path is the canonical path of the chamber the view belongs to, in a
 	// subtree snapshot (see WithPathTemplate); empty otherwise.
 	path string
+	// evaluations counts the flags the view serves; nil for a view not made
+	// by a Realm, which counts nothing.
+	evaluations *viewEvaluations
 }
 
 // NewChamberEntry creates a new ChamberEntry. The provided attributes are
@@ -142,17 +158,19 @@ func (c *ChamberEntry) Get(ruleKey string) *Flag {
 }
 
 // entryValue resolves ruleKey for ec (merged over the entry's process-wide
-// attributes) using the typed accessor get, wrapping lookup and conversion
-// failures in the chamber's error types.
-func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, defaultValue T, get func(*Flag, string, EvaluationContext, T) (T, bool)) (T, error) {
+// attributes) as a T, wrapping lookup and conversion failures in the
+// chamber's error types, and counts the value when it serves one.
+func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, defaultValue T) (T, error) {
 	t := c.Get(ruleKey)
 	if t == nil {
 		return defaultValue, &ErrRuleNotFound{Key: ruleKey}
 	}
-	v, ok := get(t, ruleKey, c.context(ec), defaultValue)
+	value, rule := t.resolve(ruleKey, c.context(ec))
+	v, ok := value.(T)
 	if !ok {
 		return defaultValue, &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
+	c.evaluations.count(ruleKey, t, rule)
 	return v, nil
 }
 
@@ -160,7 +178,7 @@ func entryValue[T any](c *ChamberEntry, ruleKey string, ec EvaluationContext, de
 // given evaluation context (applying any targeting rules). It returns the
 // default value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) StringValueFor(ruleKey string, ec EvaluationContext, defaultValue string) (string, error) {
-	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).StringValueFor)
+	return entryValue(c, ruleKey, ec, defaultValue)
 }
 
 // StringValue retrieves a string by the key of the rule
@@ -173,7 +191,7 @@ func (c *ChamberEntry) StringValue(ruleKey string, defaultValue string) (string,
 // evaluation context (applying any targeting rules). It returns the default
 // value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) BoolValueFor(ruleKey string, ec EvaluationContext, defaultValue bool) (bool, error) {
-	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).BoolValueFor)
+	return entryValue(c, ruleKey, ec, defaultValue)
 }
 
 // BoolValue retrieves a bool by the key of the rule
@@ -186,7 +204,7 @@ func (c *ChamberEntry) BoolValue(ruleKey string, defaultValue bool) (bool, error
 // given evaluation context (applying any targeting rules). It returns the
 // default value and an error if the rule is not found or could not be converted.
 func (c *ChamberEntry) Float64ValueFor(ruleKey string, ec EvaluationContext, defaultValue float64) (float64, error) {
-	return entryValue(c, ruleKey, ec, defaultValue, (*Flag).Float64ValueFor)
+	return entryValue(c, ruleKey, ec, defaultValue)
 }
 
 // Float64Value retrieves a float64 by the key of the rule
@@ -204,10 +222,11 @@ func (c *ChamberEntry) CustomValueFor(ruleKey string, ec EvaluationContext, v an
 	if t == nil {
 		return &ErrRuleNotFound{Key: ruleKey}
 	}
-	err := t.CustomValueFor(ruleKey, c.context(ec), v)
+	rule, err := t.customValue(ruleKey, c.context(ec), v)
 	if err != nil {
 		return &ErrCouldNotConvertRule{Key: ruleKey, Type: t.Type}
 	}
+	c.evaluations.count(ruleKey, t, rule)
 	return nil
 }
 
@@ -224,8 +243,10 @@ func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 // would otherwise make its rule apply immediately, a misspelled "rules" would
 // replace the chamber with an empty one, and a misspelled operator would
 // never match. It also refuses a flag with rules in both targeting and
-// pausedTargeting, and a flag whose default value or targeting rule values,
-// paused or not, its constraints refuse. (Reads decode leniently, so a newer
+// pausedTargeting, a targeting rule id that realm.flag.evaluations reserves
+// ("default", or one starting with "#"), and a flag whose default value or
+// targeting rule values, paused or not, its constraints refuse. (Reads
+// decode leniently, so a newer
 // server's additions do not break older SDKs, and a stored value outside its
 // constraints does not stop a chamber from being served.)
 func ParseChamber(b []byte) (*Chamber, error) {
@@ -287,7 +308,10 @@ func (c *Chamber) checkConstraints() error {
 }
 
 // checkSupported reports the first flag, in key order, of a type or with an
-// operator this version of realm does not know.
+// operator this version of realm does not know, or with a targeting rule,
+// paused or not, whose id realm.flag.evaluations reserves: DefaultRuleName,
+// or one starting with "#", which names a rule without an id by its
+// position.
 func (c *Chamber) checkSupported() error {
 	for _, key := range slices.Sorted(maps.Keys(c.Rules)) {
 		f := c.Rules[key]
@@ -302,6 +326,12 @@ func (c *Chamber) checkSupported() error {
 			rules []*TargetingRule
 		}{{"targeting rule", f.Targeting}, {"paused targeting rule", f.PausedTargeting}} {
 			for i, tr := range rules.rules {
+				switch {
+				case tr.ID == DefaultRuleName:
+					return fmt.Errorf("flag %q: %s id %q is reserved: it names the default value in realm.flag.evaluations", key, rules.name, tr.ID)
+				case strings.HasPrefix(tr.ID, "#"):
+					return fmt.Errorf("flag %q: %s id %q is reserved: ids starting with \"#\" name rules without one in realm.flag.evaluations", key, rules.name, tr.ID)
+				}
 				for _, cl := range tr.Clauses {
 					if !cl.Op.known() {
 						return fmt.Errorf("flag %q: %s %s: clause on %q: unsupported operator %q", key, rules.name, ruleName(tr.ID, i), cl.Attribute, cl.Op)

@@ -542,8 +542,11 @@ docker run -p 8080:8080 \
   `OTEL_SERVICE_NAME` (default `realm`), `OTEL_RESOURCE_ATTRIBUTES`,
   `OTEL_TRACES_SAMPLER`; `OTEL_SDK_DISABLED=true` overrides `--traces`. Every
   request except probes and streams gets a span, and the server records
-  `realm.server.streams.active`, `realm.postgres.feed.reconnects`, and
-  `realm.etcd.feed.restarts`.
+  `realm.server.streams.active`, `realm.postgres.feed.reconnects`,
+  `realm.etcd.feed.restarts`, and `realm.flag.evaluations`: each flag the
+  evaluation endpoint serves, by flag, path, and the rule that served it (a
+  stream counts its first event, then a flag only when another rule serves it;
+  see [Measure who got what](#measure-who-got-what)).
 - **Streams.** Each server holds at most 10,000 streams (`maxStreams`);
   beyond that, new streams get 503 and clients retry with backoff. Evaluation
   streams, which anyone holding a published evaluate key can open, may take
@@ -837,6 +840,30 @@ rlm, _ := realm.NewRealm(
 	realm.WithStreaming(true),
 )
 ```
+
+### Measure who got what
+
+During a percentage rollout you will want to compare the contexts that got a
+feature with the rest. The SDK counts every value a getter serves (not your
+default, when a flag is missing or of another type) as the OpenTelemetry
+counter `realm.flag.evaluations`, with three attributes:
+
+- `flag`: the flag's key;
+- `path`: the chamber's canonical path (with `WithPathTemplate`, the one the
+  context resolved to);
+- `rule`: the targeting rule that served the value, by its `id`; by its
+  position (`#2`) when it has none; or `default`.
+
+Recording the rule rather than the value keeps the number of series bounded,
+for string and `custom` flags too; join `rule` to your own metrics by the rule
+id. Give rules ids (the UI gives new ones an id such as `r-k3x9q2`): a rule's
+position changes when rules are reordered. The ids `default` and those starting
+with `#` are reserved.
+
+The SDK uses the global meter provider (`otel.SetMeterProvider`), like its
+traces. Counting adds an atomic increment to a flag read (and, on a flag's
+first read after the chamber changes, finds its counters), never an allocation
+after that; the counts are read when your exporter collects them.
 
 To watch a chamber without the SDK, use curl:
 

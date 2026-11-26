@@ -241,12 +241,19 @@ func (f Flag) MarshalJSON() ([]byte, error) {
 // of the first targeting rule that applies, or the default value. Paused
 // targeting rules never apply.
 func (f *Flag) ValueFor(flagKey string, ec EvaluationContext) interface{} {
-	for _, tr := range f.Targeting {
+	v, _ := f.resolve(flagKey, ec)
+	return v
+}
+
+// resolve returns the value of the first targeting rule that applies to ec
+// and the rule's index in Targeting, or the default value and -1.
+func (f *Flag) resolve(flagKey string, ec EvaluationContext) (interface{}, int) {
+	for i, tr := range f.Targeting {
 		if tr.Applies(flagKey, ec) {
-			return tr.Value
+			return tr.Value, i
 		}
 	}
-	return f.Value
+	return f.Value, -1
 }
 
 // valueAs resolves the flag for ec and asserts the result to T, returning
@@ -283,12 +290,21 @@ func (f *Flag) Float64ValueFor(flagKey string, ec EvaluationContext, defaultValu
 // CustomValueFor unmarshals the flag value for the given evaluation context
 // into v. Only a flag of type "custom" has one.
 func (f *Flag) CustomValueFor(flagKey string, ec EvaluationContext, v any) error {
+	_, err := f.customValue(flagKey, ec, v)
+	return err
+}
+
+// customValue unmarshals the flag value for ec into v, as CustomValueFor
+// does, and returns the index of the targeting rule that served it, or -1
+// for the default.
+func (f *Flag) customValue(flagKey string, ec EvaluationContext, v any) (int, error) {
 	if f.Type != "custom" {
-		return fmt.Errorf("flag with type %q could not be converted for unmarshalling", f.Type)
+		return -1, fmt.Errorf("flag with type %q could not be converted for unmarshalling", f.Type)
 	}
-	raw, ok := f.ValueFor(flagKey, ec).(*json.RawMessage)
+	value, rule := f.resolve(flagKey, ec)
+	raw, ok := value.(*json.RawMessage)
 	if !ok || raw == nil {
-		return fmt.Errorf("flag with type %q could not be converted for unmarshalling", f.Type)
+		return rule, fmt.Errorf("flag with type %q could not be converted for unmarshalling", f.Type)
 	}
-	return json.Unmarshal(*raw, v)
+	return rule, json.Unmarshal(*raw, v)
 }

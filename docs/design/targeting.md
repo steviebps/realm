@@ -77,6 +77,34 @@ return flag.value                                  # fallthrough
 - Every value (`flag.value`, `rule.value`) is type-checked against
   `flag.type` in `UnmarshalJSON`, as today.
 
+### Rule ids and exposure
+
+A rule's `id` is optional and unique within its flag. The Go SDK and the
+TypeScript `ServerClient` (given a `meter`) count each value a getter returns,
+and the evaluation endpoint each flag it serves, as the OpenTelemetry counter
+`realm.flag.evaluations`, with the attributes `flag`, `path`, and `rule`: the id of the rule that served
+it, its position (`#2`) when it has none, or `default` when no rule applied
+(or targeting is turned off). Recording the rule rather than the value keeps
+the number of series bounded for string and `custom` flags, and lets an
+application compare a rollout's cohort with the rest by joining on the rule
+id. A position changes when rules are reordered, so the UI gives each rule it
+adds a generated id (`r-k3x9q2`), and writes refuse the ids `default` and
+those starting with `#`, which would collide with those names. Reads accept
+them, as they accept every stored chamber.
+
+The counts are process-wide atomic counters (`internal/evaluations`), read
+when the meter provider collects. Each view the Go SDK holds finds a flag's
+counters on the flag's first read from it (`pkg/evaluations.go`), so every
+read after that adds one atomic increment and no allocation. Only a value
+served counts: a getter returning the caller's default (a missing flag, or one
+of another type) counts nothing, and so do the TypeScript `allFlags` and
+`initialState`, whose values reach browsers that the evaluation endpoint
+counts. An evaluation stream counts each flag of its first event, then a flag
+again only when an event serves it by another rule, so a tab held open counts
+by the cohorts it joins rather than by how often chambers are written.
+`sdk/conformance/evaluation.json` names the rule that serves each flag, so
+every implementation reports the same rule.
+
 ### Operators
 
 | op | Meaning | Typical use |
