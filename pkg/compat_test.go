@@ -100,6 +100,9 @@ func TestParseChamberRejectsUnknownTypesAndOperators(t *testing.T) {
 		{"unknown operator in a paused rule", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"id":"p","clauses":[{"attribute":"a","op":"matchesFuture","values":["x"]}],"value":false}]}}}`, `flag "a": paused targeting rule p: clause on "a": unsupported operator "matchesFuture"`},
 		{"rules in targeting and pausedTargeting", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false}],"pausedTargeting":[{"value":false}]}}}`, `flag "a" has rules in both targeting and pausedTargeting: its targeting is either on (rules in targeting) or off (rules in pausedTargeting)`},
 		{"no rules in pausedTargeting", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false}],"pausedTargeting":[]}}}`, ""},
+		{"rule id default", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"id":"default","value":false}]}}}`, `flag "a": targeting rule id "default" is reserved: it names the default value in realm.flag.evaluations`},
+		{"rule id of a position", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"id":"#2","value":false}]}}}`, `flag "a": paused targeting rule id "#2" is reserved: ids starting with "#" name rules without one in realm.flag.evaluations`},
+		{"rule id containing #", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"id":"beta#2","value":false}]}}}`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

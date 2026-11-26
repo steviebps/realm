@@ -191,6 +191,21 @@ realm.initialState(context); // the same, for a page rendered on the server (see
 Attributes in the context win over the process-wide `attributes` and
 `version`, which fill in for the ones a context doesn't set.
 
+To compare the contexts a rollout reached with the rest, pass an
+OpenTelemetry meter. The client then counts each value a getter returns (not
+its fallback) as the counter `realm.flag.evaluations`, with the attributes
+`flag`, `path`, and `rule`: the id of the targeting rule that served it, its
+position (`#2`) when it has none, or `default`. `allFlags` and `initialState`
+count nothing: the server's evaluation endpoint counts what a browser is
+served. This package depends on no OpenTelemetry package; the option takes any
+`Meter` from `@opentelemetry/api`.
+
+```ts
+import { metrics } from '@opentelemetry/api';
+
+const realm = new ServerClient({ address, token, path: '/prod/checkout/', meter: metrics.getMeter('checkout') });
+```
+
 When your service shuts down, call `realm.stop()` to close the stream.
 
 ### Serve many tenants from one client: `pathTemplate`
@@ -584,6 +599,7 @@ Both clients take these options:
 | `attributes` | none | Process-wide attributes, such as `environment`, used when a context doesn't set them. |
 | `version` | none | Your application's version, as the `version` attribute. |
 | `pathTemplate` | none | Instead of `path`: picks a chamber below a path for each context. See [`pathTemplate`](#serve-many-tenants-from-one-client-pathtemplate). |
+| `meter` | none | An OpenTelemetry `Meter` to count the values the client serves on, as `realm.flag.evaluations` (by `flag`, `path`, and `rule`). |
 
 `BrowserClient` only:
 

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { bucket, clauseMatches, evaluateChamber } from '../src/evaluate.js';
+import { bucket, clauseMatches, evaluateChamber, ruleName, servingRule } from '../src/evaluate.js';
 import type { Chamber, EvaluationContext, Operator } from '../src/types.js';
 
 // The cases the Go SDK runs too (pkg/conformance_test.go).
@@ -11,7 +11,13 @@ const conformance = JSON.parse(readFileSync(new URL('../../conformance/evaluatio
     name: string;
     defaults?: Record<string, string>;
     chamber: Chamber;
-    contexts: { now?: string; context: EvaluationContext; expect: Record<string, unknown> }[];
+    contexts: {
+      now?: string;
+      context: EvaluationContext;
+      expect: Record<string, unknown>;
+      // the rule that serves each flag, when present
+      rules?: Record<string, string>;
+    }[];
   }[];
 };
 
@@ -33,6 +39,15 @@ describe('conformance', () => {
         ).map(([k, f]) => [k, f.value]),
       );
       expect(values).toEqual(cc.expect);
+
+      const now = cc.now === undefined ? undefined : Date.parse(cc.now);
+      const rules = Object.fromEntries(
+        Object.keys(cc.rules ?? {}).map((key) => {
+          const flag = c.chamber.rules[key]!;
+          return [key, ruleName(flag, servingRule(key, flag, cc.context, c.defaults, now))];
+        }),
+      );
+      expect(rules).toEqual(cc.rules ?? {});
     });
   });
 });

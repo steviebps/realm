@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/steviebps/realm/utils"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
@@ -269,9 +270,11 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 
 // newView returns the read view of the chamber c at path, at the server's
 // revision rev. It shares c's rules and realm's process-wide attributes,
-// which nothing changes afterwards.
+// which nothing changes afterwards, and counts the values it serves at the
+// canonical form of path.
 func (rlm *Realm) newView(path string, c *Chamber, rev uint64) *ChamberEntry {
-	return &ChamberEntry{rules: c.Rules, attributes: rlm.attributes, version: rlm.semver, revision: rev, path: path}
+	return &ChamberEntry{rules: c.Rules, attributes: rlm.attributes, version: rlm.semver, revision: rev, path: path,
+		evaluations: &viewEvaluations{path: utils.CanonicalPath(path)}}
 }
 
 // noteUnsupported logs, once each, the flags of views that this SDK cannot

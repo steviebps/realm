@@ -183,12 +183,46 @@ export function flagValue(
   defaults?: Record<string, string>,
   now: number = Date.now(),
 ): unknown {
-  for (const rule of flag.targeting ?? []) {
-    if (!scheduleIncludes(rule.schedule, now)) continue;
-    const matches = (rule.clauses ?? []).every((c) => clauseMatches(c, context, defaults));
-    if (matches && rolloutIncludes(rule.rollout, flagKey, context, defaults)) return rule.value;
-  }
-  return flag.value;
+  return ruleValue(flag, servingRule(flagKey, flag, context, defaults, now));
+}
+
+/**
+ * Returns the index in `flag.targeting` of the first targeting rule that
+ * applies, as flagValue picks it, or -1 when none does and the flag serves
+ * its default.
+ */
+export function servingRule(
+  flagKey: string,
+  flag: Flag,
+  context: EvaluationContext,
+  defaults?: Record<string, string>,
+  now: number = Date.now(),
+): number {
+  return (flag.targeting ?? []).findIndex(
+    (rule) =>
+      scheduleIncludes(rule.schedule, now) &&
+      (rule.clauses ?? []).every((c) => clauseMatches(c, context, defaults)) &&
+      rolloutIncludes(rule.rollout, flagKey, context, defaults),
+  );
+}
+
+/** Returns the value the rule at index (servingRule's) serves: -1 is the flag's default. */
+export function ruleValue(flag: Flag, index: number): unknown {
+  return index < 0 ? flag.value : flag.targeting![index]!.value;
+}
+
+// The rule name realm.flag.evaluations reports when a flag serves its default.
+const DEFAULT_RULE = 'default';
+
+/**
+ * Names the targeting rule at index (servingRule's) as realm.flag.evaluations
+ * reports it: its id, or its position (`#2`) when it has none; -1 names the
+ * default, `default`.
+ */
+export function ruleName(flag: Flag, index: number): string {
+  const rule = index < 0 ? undefined : flag.targeting?.[index];
+  if (!rule) return DEFAULT_RULE;
+  return typeof rule.id === 'string' && rule.id !== '' ? rule.id : `#${index + 1}`;
 }
 
 /**
@@ -225,8 +259,12 @@ export function isFlagType(type: unknown): type is FlagType {
 
 /** Returns value when the flag has the wanted type, otherwise fallback. */
 export function typedValue<T>(type: FlagType | undefined, value: unknown, want: FlagType, fallback: T): T {
-  if (type !== want || (want !== 'custom' && typeof value !== want)) return fallback;
-  return value as T;
+  return hasType(type, value, want) ? (value as T) : fallback;
+}
+
+/** Reports whether a flag of type, serving value, serves the wanted type. */
+export function hasType(type: FlagType | undefined, value: unknown, want: FlagType): boolean {
+  return type === want && (want === 'custom' || typeof value === want);
 }
 
 /**

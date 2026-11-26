@@ -28,13 +28,20 @@ context with the same code the Go SDK uses (`Chamber.Evaluate`). The response ho
 `key` and `attributes` are both optional. The body is limited to 64 KiB. A
 chamber that does not exist returns `404`.
 
+Each flag of a response counts in the OpenTelemetry counter
+`realm.flag.evaluations`, by flag, path, and the rule that served it (see
+[Rule ids and exposure](targeting.md#rule-ids-and-exposure)). The rule is
+never sent: an evaluation reveals values, not rules.
+
 ### Streaming
 
 `POST /v1/evaluate/<path>?watch=true` with the same body opens a server-sent
 event stream. The server sends an `event: flags` with the current results at
 once, then again whenever a write changes the results for that context, or a
 targeting rule's schedule starts or ends. Writes and schedule bounds that do
-not change this context's values send nothing. Comment
+not change this context's values send nothing. In `realm.flag.evaluations`,
+the first event counts each flag, and a later one only the flags it serves by
+another rule than the event before. Comment
 heartbeats (`: ping`) arrive every 30 seconds.
 
 The stream is a `POST` because the context travels in the body. Browsers'

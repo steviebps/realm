@@ -36,6 +36,9 @@ type streamPayload struct {
 	// changesAt is when data changes by itself (a schedule boundary of an
 	// evaluated flag); zero when it changes only with writes.
 	changesAt time.Time
+	// sent, when set, is called once the stream has sent data, and not for
+	// data it leaves unsent because it is unchanged.
+	sent func()
 }
 
 // streamEvents holds an SSE connection open and sends the payload produced by
@@ -120,6 +123,9 @@ func streamEvents(w http.ResponseWriter, r *http.Request, brk *broker, path, eve
 		}
 		if !st.conn.write(eventText(event, payload.revision, payload.data)) {
 			return false
+		}
+		if payload.sent != nil {
+			payload.sent()
 		}
 		last = payload.data
 		return true
