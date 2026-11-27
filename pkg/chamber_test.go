@@ -2,8 +2,10 @@ package realm
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +95,70 @@ func BenchmarkChamberCustomValue(b *testing.B) {
 			}
 		}
 	})
+}
+
+// benchChamber returns a chamber of n flags shaped like a real one: each
+// type, most with targeting rules (clauses, a rollout, a schedule), some
+// with constraints and labels.
+func benchChamber(n int) []byte {
+	const rules = `[{"id":"beta","clauses":[{"attribute":"tenant","op":"in","values":["t1","t2","t3","t4"]},{"attribute":"version","op":"semverGte","values":["2.3.0"]}],"value":%s,"rollout":{"percentage":25,"bucketBy":"key","seed":"s1"}},` +
+		`{"clauses":[{"attribute":"location","op":"startsWith","values":["us-","eu-"]}],"value":%s,"schedule":{"start":"2026-01-01T00:00:00Z","end":"2027-01-01T00:00:00Z"}}]`
+	const labels = `"description":"Controls an example behavior for a service","owner":"team-a","lifecycle":"temporary"`
+	var b strings.Builder
+	b.WriteString(`{"rules":{`)
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `"flag-%04d":`, i)
+		switch i % 4 {
+		case 0:
+			fmt.Fprintf(&b, `{"type":"boolean","value":false,%s,"targeting":%s}`, labels, fmt.Sprintf(rules, "true", "true"))
+		case 1:
+			fmt.Fprintf(&b, `{"type":"string","value":"control",%s,"constraints":{"type":"string","enum":["control","a","b"]},"targeting":%s}`, labels, fmt.Sprintf(rules, `"a"`, `"b"`))
+		case 2:
+			fmt.Fprintf(&b, `{"type":"number","value":10,"constraints":{"type":"number","minimum":0,"maximum":100},"targeting":%s}`, fmt.Sprintf(rules, "50", "75"))
+		case 3:
+			fmt.Fprintf(&b, `{"type":"custom","value":{"limits":{"rps":100,"burst":20},"regions":["us-east","eu-west"],"enabled":true},%s}`, labels)
+		}
+	}
+	b.WriteString(`}}`)
+	return []byte(b.String())
+}
+
+// BenchmarkChamberUnmarshal measures the lenient decode SDKs and the
+// server's reads make of a chamber.
+func BenchmarkChamberUnmarshal(b *testing.B) {
+	for _, n := range []int{20, 500} {
+		data := benchChamber(n)
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				var c Chamber
+				if err := json.Unmarshal(data, &c); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+// BenchmarkParseChamber measures the strict decode the server makes of a
+// chamber written to it.
+func BenchmarkParseChamber(b *testing.B) {
+	for _, n := range []int{20, 500} {
+		data := benchChamber(n)
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
+			b.SetBytes(int64(len(data)))
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, err := ParseChamber(data); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func TestInheritWith(t *testing.T) {

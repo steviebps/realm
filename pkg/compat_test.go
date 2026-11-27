@@ -3,6 +3,7 @@ package realm
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -97,6 +98,27 @@ func TestParseChamberRejectsUnknownTypesAndOperators(t *testing.T) {
 		{"sealed", `{"rules":{"a":{"type":"boolean","value":true,"sealed":true}}}`, ""},
 		{"paused targeting", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"clauses":[{"attribute":"a","op":"in","values":["x"]}],"value":false}]}}}`, ""},
 		{"unknown field in a paused rule", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"value":false,"schedul":{}}]}}}`, `unknown field "rules.a.pausedTargeting[0].schedul"`},
+		{"unknown field in a clause", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false},{"value":false,"clauses":[{"attribute":"a","op":"in","values":["x"]},{"attribute":"a","op":"in","values":["x"],"vals":[]}]}]}}}`, `unknown field "rules.a.targeting[1].clauses[1].vals"`},
+		{"unknown field in a rollout", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false,"rollout":{"percentage":5,"bucket":"key"}}]}}}`, `unknown field "rules.a.targeting[0].rollout.bucket"`},
+		{"unknown field at the top", `{"rules":{},"rule":{}}`, `unknown field "rule"`},
+		{"empty field name", `{"rules":{"a":{"type":"boolean","value":true,"":1}}}`, `unknown field "rules.a."`},
+		{"the first of two unknown fields", `{"rules":{"b":{"type":"boolean","value":true,"zz":1},"a":{"type":"boolean","value":true,"aa":1}}}`, `unknown field "rules.b.zz"`},
+		{"removed field in another case", `{"rules":{"a":{"type":"boolean","value":true,"Overrides":[]}}}`, `unknown field "rules.a.Overrides"`},
+		{"fields in another case", `{"RULES":{"a":{"Type":"boolean","VALUE":true,"Targeting":[{"Value":false,"Clauses":[{"Attribute":"a","OP":"in","Values":["x"]}]}]}}}`, ""},
+		{"duplicate field", `{"rules":{"a":{"type":"boolean","value":true,"value":false}}}`, `duplicate field "rules.a.value"`},
+		{"duplicate field in another case", `{"rules":{"a":{"type":"boolean","Type":"string","value":"x"}}}`, `duplicate field "rules.a.Type"`},
+		{"duplicate rules", `{"rules":{},"RULES":{}}`, `duplicate field "RULES"`},
+		{"duplicate flag", `{"rules":{"a":{"type":"boolean","value":true},"b":{"type":"boolean","value":true},"a":{"type":"string","value":"x"}}}`, `duplicate field "rules.a"`},
+		{"flags differing in case", `{"rules":{"a":{"type":"boolean","value":true},"A":{"type":"boolean","value":true}}}`, ""},
+		{"duplicate schedule", `{"rules":{"a":{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-01-01T00:00:00Z"},"schedule":{"end":"2027-01-01T00:00:00Z"}}]}}}`, `duplicate field "rules.a.targeting[0].schedule"`},
+		{"duplicate in a schedule", `{"rules":{"a":{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2026-01-01T00:00:00Z","START":"2025-01-01T00:00:00Z"}}]}}}`, `duplicate field "rules.a.targeting[0].schedule.START"`},
+		{"duplicate in a clause", `{"rules":{"a":{"type":"boolean","value":false,"pausedTargeting":[{"value":true,"clauses":[{"attribute":"a","op":"in","values":["x"],"op":"notIn"}]}]}}}`, `duplicate field "rules.a.pausedTargeting[0].clauses[0].op"`},
+		{"duplicate in a custom value", `{"rules":{"a":{"type":"custom","value":{"list":[{"k":1,"j":2,"k":3}]}}}}`, `duplicate field "rules.a.value.list[0].k"`},
+		{"duplicate escaped in a custom value", `{"rules":{"a":{"type":"custom","value":{"x":1,"\u0078":2}}}}`, `duplicate field "rules.a.value.x"`},
+		{"custom value names differing in case", `{"rules":{"a":{"type":"custom","value":{"x":1,"X":2}}}}`, ""},
+		{"duplicate in a rule's custom value", `{"rules":{"a":{"type":"custom","value":{},"targeting":[{"value":{"x":1,"x":2}}]}}}`, `duplicate field "rules.a.targeting[0].value.x"`},
+		{"duplicate in constraints", `{"rules":{"a":{"type":"number","value":1,"constraints":{"maximum":10,"maximum":0}}}}`, `duplicate field "rules.a.constraints.maximum"`},
+		{"invalid UTF-8 in a flag key", "{\"rules\":{\"a\xff\":{\"type\":\"boolean\",\"value\":true}}}", ""},
 		{"unknown operator in a paused rule", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"id":"p","clauses":[{"attribute":"a","op":"matchesFuture","values":["x"]}],"value":false}]}}}`, `flag "a": paused targeting rule p: clause on "a": unsupported operator "matchesFuture"`},
 		{"rules in targeting and pausedTargeting", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false}],"pausedTargeting":[{"value":false}]}}}`, `flag "a" has rules in both targeting and pausedTargeting: its targeting is either on (rules in targeting) or off (rules in pausedTargeting)`},
 		{"no rules in pausedTargeting", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"value":false}],"pausedTargeting":[]}}}`, ""},
@@ -104,6 +126,14 @@ func TestParseChamberRejectsUnknownTypesAndOperators(t *testing.T) {
 		{"rule id of a position", `{"rules":{"a":{"type":"boolean","value":true,"pausedTargeting":[{"id":"#2","value":false}]}}}`, `flag "a": paused targeting rule id "#2" is reserved: ids starting with "#" name rules without one in realm.flag.evaluations`},
 		{"rule id containing #", `{"rules":{"a":{"type":"boolean","value":true,"targeting":[{"id":"beta#2","value":false}]}}}`, ""},
 	}
+	var many strings.Builder
+	for i := range 40 {
+		fmt.Fprintf(&many, `"f%d":{"type":"boolean","value":true},`, i)
+	}
+	tests = append(tests,
+		struct{ name, chamber, wantErr string }{"many flags", `{"rules":{` + many.String() + `"g":{"type":"boolean","value":true}}}`, ""},
+		struct{ name, chamber, wantErr string }{"duplicate among many flags", `{"rules":{` + many.String() + `"f3":{"type":"boolean","value":true}}}`, `duplicate field "rules.f3"`},
+	)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := ParseChamber([]byte(tt.chamber))

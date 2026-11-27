@@ -28,7 +28,12 @@ func (t *Rule) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*t = Rule(alias)
+	return t.check(raw)
+}
 
+// check validates the rule just decoded, its value read into raw: a known
+// type's value is asserted to it; an unknown type's is kept unread.
+func (t *Rule) check(raw json.RawMessage) error {
 	if !knownType(t.Type) {
 		t.Value = nil
 		if len(raw) > 0 {

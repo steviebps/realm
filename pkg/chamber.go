@@ -3,9 +3,11 @@ package realm
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -242,19 +244,22 @@ func (c *ChamberEntry) CustomValue(ruleKey string, v any) error {
 // at any level, is an error instead of being ignored: a misspelled "schedule"
 // would otherwise make its rule apply immediately, a misspelled "rules" would
 // replace the chamber with an empty one, and a misspelled operator would
-// never match. It also refuses a flag with rules in both targeting and
-// pausedTargeting, a targeting rule id that realm.flag.evaluations reserves
-// ("default", or one starting with "#"), and a flag whose default value or
-// targeting rule values, paused or not, its constraints refuse. (Reads
-// decode leniently, so a newer
-// server's additions do not break older SDKs, and a stored value outside its
-// constraints does not stop a chamber from being served.)
+// never match. So is a name repeated within an object, anywhere, which
+// json.Unmarshal resolves by keeping the last: a flag key written twice would
+// otherwise drop the first definition, and a second "schedule" the first's
+// bounds. Realm's own fields repeat in any case ("type" and "Type"). It also
+// refuses a flag with rules in both targeting and pausedTargeting, a
+// targeting rule id that realm.flag.evaluations reserves ("default", or one
+// starting with "#"), and a flag whose default value or targeting rule
+// values, paused or not, its constraints refuse. (Reads decode leniently, so
+// a newer server's additions do not break older SDKs, and a stored value
+// outside its constraints does not stop a chamber from being served.)
 func ParseChamber(b []byte) (*Chamber, error) {
 	var c Chamber
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, err
 	}
-	if err := checkFields(b, chamberShape, ""); err != nil {
+	if err := checkFields(b, chamberShape); err != nil {
 		return nil, err
 	}
 	if err := c.checkDefined(); err != nil {
@@ -396,53 +401,140 @@ var (
 	chamberShape = &shape{fields: []string{"rules"}, nested: map[string]*shape{"rules": {each: flagShape}}}
 )
 
-// checkFields reports the first field of the JSON value b that s does not
-// allow. b has already been decoded successfully, so it is well formed. Field
-// names match case-insensitively, as encoding/json matches them.
-func checkFields(b []byte, s *shape, at string) error {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
-		return nil
-	}
-	if b[0] == '[' {
-		var items []json.RawMessage
-		if err := json.Unmarshal(b, &items); err != nil {
+// checkFields reports the first field, in document order, of the JSON value
+// b that s does not allow, or that repeats a name in its object. b has
+// already been decoded successfully, so it is well formed. Field names match
+// case-insensitively, as encoding/json matches them, so "type" and "Type"
+// in a flag repeat a name; other names (flag keys, and those in custom
+// values and constraints, which s does not describe) repeat only when equal.
+// It reads b once, as a stream of tokens, copying no part of it.
+func checkFields(b []byte, s *shape) error {
+	// read as json.Unmarshal reads, with duplicate names (which checkValueFields
+	// reports itself, with their path) and invalid UTF-8 allowed
+	dec := jsontext.NewDecoder(bytes.NewReader(b), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	return checkValueFields(dec, s)
+}
+
+// checkValueFields checks the next value dec holds against s, and consumes
+// it. A nil s allows any field, and only names repeated exactly are refused.
+func checkValueFields(dec *jsontext.Decoder, s *shape) error {
+	switch dec.PeekKind() {
+	case '[':
+		if _, err := dec.ReadToken(); err != nil {
 			return err
 		}
-		for i, item := range items {
-			if err := checkFields(item, s, fmt.Sprintf("%s[%d]", at, i)); err != nil {
-				return err
+		for i := 0; dec.PeekKind() != ']'; i++ {
+			if err := checkValueFields(dec, s); err != nil {
+				return within(err, pathStep{index: i})
 			}
 		}
-		return nil
-	}
-	if b[0] != '{' {
-		return nil
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
+		_, err := dec.ReadToken()
+		return err
+	case '{':
+		if _, err := dec.ReadToken(); err != nil {
+			return err
+		}
+		var seen names
+		for dec.PeekKind() != '}' {
+			tok, err := dec.ReadToken()
+			if err != nil {
+				return err
+			}
+			name := tok.String()
+			// key is the name as encoding/json resolves it: a field of s
+			// whatever its case, else the name itself
+			key, next := name, (*shape)(nil)
+			switch {
+			case s == nil:
+			case s.each != nil:
+				next = s.each
+			default:
+				i := slices.IndexFunc(s.fields, func(f string) bool { return strings.EqualFold(f, name) })
+				if i < 0 {
+					return &fieldError{problem: "unknown", path: []pathStep{{name: name, index: -1}}}
+				}
+				key, next = s.fields[i], s.nested[s.fields[i]]
+			}
+			if !seen.add(key) {
+				return &fieldError{problem: "duplicate", path: []pathStep{{name: name, index: -1}}}
+			}
+			if err := checkValueFields(dec, next); err != nil {
+				return within(err, pathStep{name: name, index: -1})
+			}
+		}
+		_, err := dec.ReadToken()
 		return err
 	}
-	for name, v := range m {
-		where := name
-		if at != "" {
-			where = at + "." + name
+	return dec.SkipValue()
+}
+
+// names records the member names of one object, to find a repeated one: in
+// a fixed list while there are few, as there are in most objects, then in a
+// set.
+type names struct {
+	few [16]string
+	n   int
+	set map[string]struct{}
+}
+
+// add records name, and reports whether it was new.
+func (n *names) add(name string) bool {
+	if n.set == nil {
+		if slices.Contains(n.few[:n.n], name) {
+			return false
 		}
-		if s.each != nil {
-			if err := checkFields(v, s.each, where); err != nil {
-				return err
-			}
-			continue
+		if n.n < len(n.few) {
+			n.few[n.n] = name
+			n.n++
+			return true
 		}
-		i := slices.IndexFunc(s.fields, func(f string) bool { return strings.EqualFold(f, name) })
-		if i < 0 {
-			return fmt.Errorf("unknown field %q", where)
-		}
-		if n := s.nested[s.fields[i]]; n != nil {
-			if err := checkFields(v, n, where); err != nil {
-				return err
-			}
+		n.set = make(map[string]struct{}, 2*len(n.few))
+		for _, f := range n.few {
+			n.set[f] = struct{}{}
 		}
 	}
-	return nil
+	if _, ok := n.set[name]; ok {
+		return false
+	}
+	n.set[name] = struct{}{}
+	return true
+}
+
+// fieldError is a field checkFields refuses.
+type fieldError struct {
+	// problem says what is wrong with it: "unknown" or "duplicate".
+	problem string
+	// path leads to the field, innermost step first, as it is built while
+	// the walk unwinds.
+	path []pathStep
+}
+
+// pathStep is a step of a fieldError's path: an array index when index >= 0,
+// else an object member's name (which may be empty).
+type pathStep struct {
+	name  string
+	index int
+}
+
+// within adds step to the path of err when err is a fieldError.
+func within(err error, step pathStep) error {
+	if e, ok := err.(*fieldError); ok {
+		e.path = append(e.path, step)
+	}
+	return err
+}
+
+func (e *fieldError) Error() string {
+	var where strings.Builder
+	for _, step := range slices.Backward(e.path) {
+		switch {
+		case step.index >= 0:
+			where.WriteString("[" + strconv.Itoa(step.index) + "]")
+		case where.Len() > 0:
+			where.WriteString("." + step.name)
+		default:
+			where.WriteString(step.name)
+		}
+	}
+	return fmt.Sprintf("%s field %q", e.problem, where.String())
 }

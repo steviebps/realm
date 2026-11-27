@@ -212,8 +212,9 @@ flowchart LR
 ```
 
 - **Writes are checked.** The server refuses a write with an unknown field, a
-  value of the wrong type, or a value outside the flag's constraints. Send
-  `If-Match` and it also refuses a write based on a stale read.
+  name repeated within an object, a value of the wrong type, or a value
+  outside the flag's constraints. Send `If-Match` and it also refuses a write
+  based on a stale read.
 - **Services evaluate locally.** Server SDKs hold a snapshot of their chambers
   and evaluate flags in memory. A change reaches them over server-sent events,
   or at the next poll.
@@ -595,7 +596,8 @@ realm client delete -r /prod/        # delete a chamber and every chamber below 
 > [!NOTE]
 > `realm client put -f` replaces the whole chamber. The file is validated
 > first: an unknown field anywhere (a misspelled `schedule`, say) is an error,
-> as it is for every write to the server.
+> as is a name written twice in one object (a flag key, or a rule's
+> `schedule`), as it is for every write to the server.
 
 ### Sealed flags
 
