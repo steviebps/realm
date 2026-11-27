@@ -140,6 +140,8 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		// a removed field is refused only when spelled exactly, so a stored
 		// chamber that spells one otherwise still reads (writes refuse it as
 		// an unknown field)
+		// reads are lenient: a repeated name keeps the last (ParseChamber refuses it)
+		{"duplicate value read", `{"type":"boolean","value":true,"value":false}`, ""},
 		{"legacy overrides in another case read", `{"type":"boolean","value":false,"Overrides":[]}`, ""},
 		{"legacy rollout in another case read", `{"type":"boolean","value":false,"ROLLOUT":{"percentage":5}}`, ""},
 	}

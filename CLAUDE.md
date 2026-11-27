@@ -211,7 +211,7 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
 - **Writes are strict, reads are lenient.** The server parses chamber writes
   with `realm.ParseChamber`, which rejects unknown fields, operators, and flag
   types at every level (add a new field to its `shape` tables in
-  `pkg/chamber.go`); plain `json.Unmarshal`, which the SDKs and the server's
+  `pkg/chamber.go`), and names repeated within any object; plain `json.Unmarshal`, which the SDKs and the server's
   reads use, accepts them so older SDKs survive newer servers: an unknown
   operator never matches, and an unknown-type flag cannot be served. Unknown
   operators and types round-trip byte for byte.

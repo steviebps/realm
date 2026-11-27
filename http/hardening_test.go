@@ -15,7 +15,8 @@ import (
 )
 
 // TestChamberWritesRejectUnknownFields verifies that a misspelled field
-// anywhere in a chamber is refused rather than silently dropped.
+// anywhere in a chamber, or a name repeated in an object, is refused rather
+// than silently dropped.
 func TestChamberWritesRejectUnknownFields(t *testing.T) {
 	srv := newInheritableTestServer(t)
 
@@ -30,6 +31,9 @@ func TestChamberWritesRejectUnknownFields(t *testing.T) {
 		{"clause field", `{"rules":{"f":{"type":"boolean","value":false,"targeting":[{"value":true,"clauses":[{"attribute":"tenant","op":"in","values":["a"],"negate":true}]}]}}}`, http.StatusBadRequest},
 		{"rollout field", `{"rules":{"f":{"type":"boolean","value":false,"targeting":[{"value":true,"rollout":{"percentage":5,"bucket":"tenant"}}]}}}`, http.StatusBadRequest},
 		{"custom values are opaque", `{"rules":{"f":{"type":"custom","value":{"anything":{"goes":1}}}}}`, http.StatusCreated},
+		{"duplicate flag", `{"rules":{"f":{"type":"boolean","value":true},"f":{"type":"boolean","value":false}}}`, http.StatusBadRequest},
+		{"duplicate rule field", `{"rules":{"f":{"type":"boolean","value":false,"targeting":[{"value":true,"schedule":{"start":"2030-01-01T00:00:00Z"},"schedule":{"end":"2031-01-01T00:00:00Z"}}]}}}`, http.StatusBadRequest},
+		{"duplicate in a custom value", `{"rules":{"f":{"type":"custom","value":{"a":1,"a":2}}}}`, http.StatusBadRequest},
 		{"empty", ``, http.StatusBadRequest},
 	}
 	for _, test := range tests {
