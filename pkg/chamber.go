@@ -3,9 +3,11 @@ package realm
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -254,7 +256,7 @@ func ParseChamber(b []byte) (*Chamber, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, err
 	}
-	if err := checkFields(b, chamberShape, ""); err != nil {
+	if err := checkFields(b, chamberShape); err != nil {
 		return nil, err
 	}
 	if err := c.checkDefined(); err != nil {
@@ -396,53 +398,97 @@ var (
 	chamberShape = &shape{fields: []string{"rules"}, nested: map[string]*shape{"rules": {each: flagShape}}}
 )
 
-// checkFields reports the first field of the JSON value b that s does not
-// allow. b has already been decoded successfully, so it is well formed. Field
-// names match case-insensitively, as encoding/json matches them.
-func checkFields(b []byte, s *shape, at string) error {
-	b = bytes.TrimSpace(b)
-	if len(b) == 0 || bytes.Equal(b, []byte("null")) {
-		return nil
-	}
-	if b[0] == '[' {
-		var items []json.RawMessage
-		if err := json.Unmarshal(b, &items); err != nil {
+// checkFields reports the first field, in document order, of the JSON value
+// b that s does not allow. b has already been decoded successfully, so it is
+// well formed. Field names match case-insensitively, as encoding/json matches
+// them. It reads b once, as a stream of tokens, copying no part of it.
+func checkFields(b []byte, s *shape) error {
+	// read as json.Unmarshal reads: duplicate names and invalid UTF-8 allowed
+	dec := jsontext.NewDecoder(bytes.NewReader(b), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+	return checkValueFields(dec, s)
+}
+
+// checkValueFields checks the next value dec holds against s, and consumes it.
+func checkValueFields(dec *jsontext.Decoder, s *shape) error {
+	switch dec.PeekKind() {
+	case '[':
+		if _, err := dec.ReadToken(); err != nil {
 			return err
 		}
-		for i, item := range items {
-			if err := checkFields(item, s, fmt.Sprintf("%s[%d]", at, i)); err != nil {
-				return err
+		for i := 0; dec.PeekKind() != ']'; i++ {
+			if err := checkValueFields(dec, s); err != nil {
+				return within(err, pathStep{index: i})
 			}
 		}
-		return nil
-	}
-	if b[0] != '{' {
-		return nil
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
+		_, err := dec.ReadToken()
+		return err
+	case '{':
+		if _, err := dec.ReadToken(); err != nil {
+			return err
+		}
+		for dec.PeekKind() != '}' {
+			tok, err := dec.ReadToken()
+			if err != nil {
+				return err
+			}
+			name := tok.String()
+			next := s.each
+			if next == nil {
+				i := slices.IndexFunc(s.fields, func(f string) bool { return strings.EqualFold(f, name) })
+				if i < 0 {
+					return &unknownFieldError{path: []pathStep{{name: name, index: -1}}}
+				}
+				next = s.nested[s.fields[i]]
+			}
+			if next == nil {
+				if err := dec.SkipValue(); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := checkValueFields(dec, next); err != nil {
+				return within(err, pathStep{name: name, index: -1})
+			}
+		}
+		_, err := dec.ReadToken()
 		return err
 	}
-	for name, v := range m {
-		where := name
-		if at != "" {
-			where = at + "." + name
-		}
-		if s.each != nil {
-			if err := checkFields(v, s.each, where); err != nil {
-				return err
-			}
-			continue
-		}
-		i := slices.IndexFunc(s.fields, func(f string) bool { return strings.EqualFold(f, name) })
-		if i < 0 {
-			return fmt.Errorf("unknown field %q", where)
-		}
-		if n := s.nested[s.fields[i]]; n != nil {
-			if err := checkFields(v, n, where); err != nil {
-				return err
-			}
+	return dec.SkipValue()
+}
+
+// unknownFieldError is a field checkFields refuses.
+type unknownFieldError struct {
+	// path leads to the field, innermost step first, as it is built while
+	// the walk unwinds.
+	path []pathStep
+}
+
+// pathStep is a step of an unknownFieldError's path: an array index when
+// index >= 0, else an object member's name (which may be empty).
+type pathStep struct {
+	name  string
+	index int
+}
+
+// within adds step to the path of err when err is an unknownFieldError.
+func within(err error, step pathStep) error {
+	if e, ok := err.(*unknownFieldError); ok {
+		e.path = append(e.path, step)
+	}
+	return err
+}
+
+func (e *unknownFieldError) Error() string {
+	var where strings.Builder
+	for _, step := range slices.Backward(e.path) {
+		switch {
+		case step.index >= 0:
+			where.WriteString("[" + strconv.Itoa(step.index) + "]")
+		case where.Len() > 0:
+			where.WriteString("." + step.name)
+		default:
+			where.WriteString(step.name)
 		}
 	}
-	return nil
+	return fmt.Sprintf("unknown field %q", where.String())
 }

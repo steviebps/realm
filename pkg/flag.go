@@ -93,6 +93,16 @@ type flagFields struct {
 	PausedTargeting json.RawMessage `json:"pausedTargeting"`
 }
 
+// flagJSON is a flag as it is read, in one pass: its Rule, its other
+// fields, and the fields earlier releases removed (non-nil when a field of
+// that name, in any case, is present).
+type flagJSON struct {
+	ruleAlias
+	flagFields
+	Overrides json.RawMessage `json:"overrides"`
+	Rollout   json.RawMessage `json:"rollout"`
+}
+
 // removedFlagFields maps fields from earlier releases to migration guidance.
 var removedFlagFields = map[string]string{
 	"overrides": "version overrides were replaced by targeting rules with semverGte/semverLte clauses on the \"version\" attribute",
@@ -106,20 +116,23 @@ var removedFlagFields = map[string]string{
 // type is kept as it is, unvalidated, though its seal and description are
 // still read, so that a newer realm's sealed flag still seals.
 func (f *Flag) UnmarshalJSON(b []byte) error {
-	var rule Rule
-	if err := json.Unmarshal(b, &rule); err != nil {
-		return err
-	}
-	// decoded as encoding/json matches fields (case-insensitively), as
-	// ParseChamber's field check does, so no spelling of one is ignored
-	var meta flagFields
-	if err := json.Unmarshal(b, &meta); err != nil {
+	// One decode reads the rule, the other fields, and any removed field.
+	// Fields match case-insensitively, as encoding/json matches them and as
+	// ParseChamber's field check does, so no spelling of one is ignored.
+	var raw json.RawMessage
+	in := flagJSON{ruleAlias: ruleAlias{Value: &raw}}
+	if err := json.Unmarshal(b, &in); err != nil {
 		var te *json.UnmarshalTypeError
 		if errors.As(err, &te) && te.Field != "" {
 			return fmt.Errorf("%s: %w", te.Field, err)
 		}
 		return err
 	}
+	rule := Rule(in.ruleAlias)
+	if err := rule.check(raw); err != nil {
+		return err
+	}
+	meta := in.flagFields
 	f.Rule = &rule
 	f.Description = meta.Description
 	f.Owner = meta.Owner
@@ -138,14 +151,18 @@ func (f *Flag) UnmarshalJSON(b []byte) error {
 		return nil
 	}
 
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(b, &m); err != nil {
-		return err
-	}
-
-	for field, guidance := range removedFlagFields {
-		if _, ok := m[field]; ok {
-			return fmt.Errorf("%q is no longer supported: %s", field, guidance)
+	// A removed field is refused only when spelled exactly, as it always
+	// was, so that a stored chamber that reads today still reads. The
+	// decode above matched one in some case: look again at the exact names.
+	if in.Overrides != nil || in.Rollout != nil {
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			return err
+		}
+		for field, guidance := range removedFlagFields {
+			if _, ok := m[field]; ok {
+				return fmt.Errorf("%q is no longer supported: %s", field, guidance)
+			}
 		}
 	}
 

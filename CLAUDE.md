@@ -215,6 +215,12 @@ reads `$REALM_ADDRESS` / `$REALM_TOKEN`.
   reads use, accepts them so older SDKs survive newer servers: an unknown
   operator never matches, and an unknown-type flag cannot be served. Unknown
   operators and types round-trip byte for byte.
+- **JSON runs on Go's v2 engine.** Code uses the `encoding/json` API, which
+  Go 1.27 implements on `encoding/json/v2`; `pkg` also streams with
+  `encoding/json/jsontext` (`checkFields`), so `GOEXPERIMENT=nojsonv2` is not
+  supported. Decode each value once: every `json.Unmarshal` a custom
+  `UnmarshalJSON` makes of its input rescans it (`Flag.UnmarshalJSON` reads
+  a flag in one pass; `BenchmarkChamberUnmarshal`, `BenchmarkParseChamber`).
 - **Wire types live in the TypeScript SDK.** `sdk/typescript/src/types.ts`
   declares the JSON the API serves (`Chamber`, `Flag`, `TargetingRule`, …);
   the UI's `http/realm-ui/src/models/response.ts` re-exports them (type-only,

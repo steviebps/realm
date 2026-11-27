@@ -135,6 +135,13 @@ func TestFlagUnmarshalValidation(t *testing.T) {
 		{"rules in both", `{"type":"boolean","value":false,"targeting":[{"value":true}],"pausedTargeting":[{"value":true}]}`, ""},
 		{"legacy overrides rejected", `{"type":"boolean","value":false,"overrides":[]}`, "no longer supported"},
 		{"legacy rollout rejected", `{"type":"boolean","value":false,"rollout":{"type":"boolean","value":true,"percentage":5}}`, "no longer supported"},
+		{"legacy overrides rejected when null", `{"type":"boolean","value":false,"overrides":null}`, "no longer supported"},
+		{"legacy overrides rejected when escaped", `{"type":"boolean","value":false,"overr\u0069des":[]}`, "no longer supported"},
+		// a removed field is refused only when spelled exactly, so a stored
+		// chamber that spells one otherwise still reads (writes refuse it as
+		// an unknown field)
+		{"legacy overrides in another case read", `{"type":"boolean","value":false,"Overrides":[]}`, ""},
+		{"legacy rollout in another case read", `{"type":"boolean","value":false,"ROLLOUT":{"percentage":5}}`, ""},
 	}
 
 	for _, test := range tests {
